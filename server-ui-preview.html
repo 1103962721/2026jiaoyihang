@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DF_PlayClick 服务端行内按钮预览</title>
+<style>
+  :root {
+    --blue: #1e3a8a;
+    --blue-soft: #dbeafe;
+    --bg: #f8fafc;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --text: #1f2937;
+    --muted: #64748b;
+    --green-bg: #dcfce7;
+    --green: #166534;
+    --yellow-bg: #fef9c3;
+    --yellow: #854d0e;
+    --red-bg: #fee2e2;
+    --red: #991b1b;
+    --button: #2563eb;
+    --button-hover: #1d4ed8;
+    --disabled-bg: #e5e7eb;
+    --disabled: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 22px;
+    background: #e5e7eb;
+    color: var(--text);
+    font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+  }
+  .preview-title {
+    width: 1180px;
+    margin: 0 auto 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .preview-note {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .window {
+    width: 1180px;
+    height: 700px;
+    margin: 0 auto;
+    background: var(--bg);
+    border: 1px solid #94a3b8;
+    box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18);
+    overflow: hidden;
+  }
+  .header {
+    height: 104px;
+    padding: 20px 28px;
+    background: var(--blue);
+    color: white;
+  }
+  .title {
+    font-size: 28px;
+    line-height: 36px;
+    font-weight: 800;
+  }
+  .subtitle {
+    margin-top: 4px;
+    font-size: 15px;
+    color: var(--blue-soft);
+  }
+  .card {
+    margin: 20px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+  }
+  .control-card {
+    height: 104px;
+    padding: 16px 22px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 18px;
+  }
+  .section-title {
+    font-size: 20px;
+    font-weight: 800;
+    margin-bottom: 12px;
+  }
+  .control-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--muted);
+  }
+  .input {
+    height: 34px;
+    padding: 0 10px;
+    background: white;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    min-width: 84px;
+    display: inline-flex;
+    align-items: center;
+    color: var(--text);
+    font-weight: 600;
+  }
+  .primary {
+    height: 34px;
+    padding: 0 18px;
+    border: 0;
+    border-radius: 9px;
+    color: white;
+    background: var(--button);
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .primary:hover { background: var(--button-hover); }
+  .status-pill {
+    padding: 10px 16px;
+    border-radius: 12px;
+    background: var(--green-bg);
+    color: var(--green);
+    font-weight: 700;
+  }
+  .list-card {
+    height: 432px;
+    padding: 16px 22px 22px;
+  }
+  .list-head {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+  .hint { color: var(--muted); font-size: 14px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    background: white;
+    border: 1px solid var(--border);
+    font-size: 14px;
+  }
+  th, td {
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    height: 42px;
+    padding: 0 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: left;
+  }
+  th {
+    height: 38px;
+    background: #f1f5f9;
+    color: #334155;
+    font-weight: 800;
+  }
+  tr:last-child td { border-bottom: 0; }
+  th:last-child, td:last-child { border-right: 0; }
+  .ip { width: 180px; }
+  .state { width: 88px; }
+  .remark { width: 170px; }
+  .code { width: 120px; }
+  .go { width: 78px; }
+  .fetch { width: 124px; }
+  .thunder { width: 78px; }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 54px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .ready { background: var(--green-bg); color: var(--green); }
+  .online { background: #e0f2fe; color: #075985; }
+  .pending { background: var(--yellow-bg); color: var(--yellow); }
+  .off { background: var(--red-bg); color: var(--red); }
+  .action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 28px;
+    border-radius: 8px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    font-weight: 800;
+    cursor: pointer;
+    user-select: none;
+  }
+  .action:hover { background: #dbeafe; }
+  .action.disabled {
+    background: var(--disabled-bg);
+    color: var(--disabled);
+    cursor: not-allowed;
+  }
+  .code-box {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    min-width: 84px;
+    padding: 0 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 7px;
+    background: #fff;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    cursor: text;
+  }
+  .footer {
+    margin: 0 20px;
+    height: 54px;
+    padding: 0 18px;
+    display: flex;
+    align-items: center;
+    border-radius: 12px;
+    background: #e5e7eb;
+    color: #374151;
+    font-weight: 700;
+  }
+  .popover {
+    position: fixed;
+    left: 50%;
+    bottom: 34px;
+    transform: translateX(-50%);
+    min-width: 260px;
+    padding: 12px 16px;
+    border-radius: 12px;
+    color: white;
+    background: rgba(15, 23, 42, 0.92);
+    text-align: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .18s ease;
+  }
+  .popover.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <div class="preview-title">
+    <span>服务端 UI 预览：表格按钮列方案</span>
+    <span class="preview-note">自雷仅占位，点击提示暂未实现</span>
+  </div>
+
+  <div class="window">
+    <div class="header">
+      <div class="title">DF_PlayClick 服务端</div>
+      <div class="subtitle">PC-PC 触发控制 · 客户端准备状态 · 备注与踢出管理 · 单客户端指令</div>
+    </div>
+
+    <div class="card control-card">
+      <div>
+        <div class="section-title">监听与触发</div>
+        <div class="control-row">
+          <span>端口</span><span class="input">50505</span>
+          <button class="primary">开始监听</button>
+          <span>倒计时</span><span class="input">5 秒</span>
+          <button class="primary">全局出发</button>
+        </div>
+      </div>
+      <div class="status-pill">监听中 · 2 个客户端在线</div>
+    </div>
+
+    <div class="card list-card">
+      <div class="list-head">
+        <div class="section-title" style="margin:0">客户端列表</div>
+        <div class="hint">右键可备注 / 踢出 / 复制组队码；点击行内按钮可单独控制指定客户端</div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th class="ip">客户端 IP</th>
+            <th class="state">状态</th>
+            <th class="remark">备注</th>
+            <th class="code">组队码</th>
+            <th class="go">出发</th>
+            <th class="fetch">获取组队码</th>
+            <th class="thunder">自雷</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>192.168.1.8</td>
+            <td><span class="tag ready">已准备</span></td>
+            <td>一号机</td>
+            <td><span class="code-box" contenteditable="true">ABC1234</span></td>
+            <td><span class="action" data-tip="只向 192.168.1.8 发送出发指令">出发</span></td>
+            <td><span class="action" data-tip="请求 192.168.1.8 执行获取组队码流程">获取组队码</span></td>
+            <td><span class="action disabled" data-tip="自雷功能暂未实现，仅保留按钮位置">自雷</span></td>
+          </tr>
+          <tr>
+            <td>192.168.1.9</td>
+            <td><span class="tag off">未准备</span></td>
+            <td>二号机</td>
+            <td><span class="code-box" contenteditable="true"></span></td>
+            <td><span class="action" data-tip="只向 192.168.1.9 发送出发指令">出发</span></td>
+            <td><span class="action" data-tip="请求 192.168.1.9 执行获取组队码流程">获取组队码</span></td>
+            <td><span class="action disabled" data-tip="自雷功能暂未实现，仅保留按钮位置">自雷</span></td>
+          </tr>
+          <tr>
+            <td>192.168.1.10</td>
+            <td><span class="tag ready">已准备</span></td>
+            <td>三号机</td>
+            <td><span class="code-box" contenteditable="true">获取中...</span></td>
+            <td><span class="action" data-tip="只向 192.168.1.10 发送出发指令">出发</span></td>
+            <td><span class="action" data-tip="正在等待客户端返回组队码">获取组队码</span></td>
+            <td><span class="action disabled" data-tip="自雷功能暂未实现，仅保留按钮位置">自雷</span></td>
+          </tr>
+          <tr>
+            <td>192.168.1.11</td>
+            <td><span class="tag off">未准备</span></td>
+            <td>备用机</td>
+            <td><span class="code-box" contenteditable="true">失败</span></td>
+            <td><span class="action" data-tip="只向 192.168.1.11 发送出发指令">出发</span></td>
+            <td><span class="action" data-tip="请求 192.168.1.11 执行获取组队码流程">获取组队码</span></td>
+            <td><span class="action disabled" data-tip="自雷功能暂未实现，仅保留按钮位置">自雷</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="footer" id="status">状态：预览模式。实际程序中“组队码”支持复制/编辑；“自雷”先只显示按钮。</div>
+  </div>
+
+  <div class="popover" id="popover"></div>
+
+<script>
+  const popover = document.getElementById('popover');
+  const status = document.getElementById('status');
+  let timer = null;
+
+  function showTip(text) {
+    status.textContent = '状态：' + text;
+    popover.textContent = text;
+    popover.classList.add('show');
+    clearTimeout(timer);
+    timer = setTimeout(() => popover.classList.remove('show'), 1600);
+  }
+
+  document.querySelectorAll('[data-tip]').forEach(el => {
+    el.addEventListener('click', () => showTip(el.dataset.tip));
+  });
+
+  document.querySelectorAll('.code-box').forEach(el => {
+    el.addEventListener('focus', () => showTip('组队码文本框：可编辑、可选中复制'));
+  });
+</script>
+</body>
+</html>

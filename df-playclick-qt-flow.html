@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DF_PlayClick 当前分支流程图</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 28px;
+      background: #eef2f7;
+      color: #172033;
+      font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      line-height: 1.65;
+    }
+    .page {
+      max-width: 1480px;
+      margin: 0 auto;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      color: #0f172a;
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 22px;
+      color: #0f172a;
+    }
+    h3 {
+      margin: 0 0 8px;
+      font-size: 17px;
+    }
+    p { margin: 0 0 10px; }
+    ul { margin: 8px 0 0 20px; padding: 0; }
+    li { margin: 4px 0; }
+    .subtitle {
+      color: #475569;
+      margin-bottom: 22px;
+      font-size: 15px;
+    }
+    .section, .panel {
+      background: #ffffff;
+      border: 1px solid #dbe3ef;
+      border-radius: 18px;
+      padding: 18px;
+      margin: 18px 0;
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.07);
+    }
+    .panel-header {
+      margin: -18px -18px 16px;
+      padding: 14px 18px;
+      border-radius: 18px 18px 0 0;
+      background: #1e3a8a;
+      color: #ffffff;
+      font-weight: 800;
+      font-size: 17px;
+    }
+    .legend {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .tag {
+      padding: 6px 10px;
+      border-radius: 8px;
+      font-weight: 800;
+      font-size: 13px;
+    }
+    .server-tag, .server-box { background: #dbeafe; color: #1e40af; border-color: #60a5fa; }
+    .client-tag, .client-box { background: #dcfce7; color: #166534; border-color: #4ade80; }
+    .decision-tag, .decision-box { background: #fef3c7; color: #92400e; border-color: #fbbf24; }
+    .fail-tag, .fail-box { background: #fee2e2; color: #991b1b; border-color: #f87171; }
+    .protocol-tag { background: #ede9fe; color: #5b21b6; }
+    .swimlane {
+      display: grid;
+      grid-template-columns: 1fr 120px 1fr;
+      gap: 14px;
+      align-items: start;
+    }
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .four-col {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+    }
+    .label {
+      display: inline-block;
+      margin-bottom: 6px;
+      color: #64748b;
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .box {
+      border: 2px solid;
+      border-radius: 14px;
+      padding: 12px;
+      margin: 9px 0;
+    }
+    .box strong { display: block; color: inherit; margin-bottom: 4px; }
+    .arrow-col {
+      padding-top: 50px;
+      text-align: center;
+      color: #5b21b6;
+      font-weight: 900;
+      font-size: 13px;
+    }
+    .arrow { margin: 34px 0; }
+    .note {
+      background: #f8fafc;
+      border: 1px dashed #94a3b8;
+      border-radius: 12px;
+      padding: 12px;
+      color: #334155;
+    }
+    .route-title { margin-top: 0; }
+    @media (max-width: 980px) {
+      body { padding: 14px; }
+      .swimlane, .two-col, .four-col { grid-template-columns: 1fr; }
+      .arrow-col { padding-top: 0; }
+      .arrow { margin: 10px 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>DF_PlayClick 当前分支流程图（Qt 服务端 / Qt 客户端）</h1>
+    <p class="subtitle">静态版流程图：按当前分支最新逻辑整理，从打开软件开始，到连接、准备/未准备、手动出发、自动开始 OCR、自雷与回到下一轮。</p>
+
+    <section class="section">
+      <h2>图例</h2>
+      <div class="legend">
+        <span class="tag server-tag">服务端动作</span>
+        <span class="tag client-tag">客户端动作</span>
+        <span class="tag decision-tag">状态判断</span>
+        <span class="tag fail-tag">失败/未满足路线</span>
+        <span class="tag protocol-tag">协议消息</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">总流程：打开软件 → 连接 → 准备/未准备 → 出发/自动开始 → OCR/自雷</div>
+      <div class="swimlane">
+        <div>
+          <span class="label">服务端 Qt</span>
+          <div class="box server-box"><strong>1. 打开服务端</strong>显示主界面；端口默认来自协议默认端口；客户端列表为空。</div>
+          <div class="box server-box"><strong>2. 点击“开始监听”</strong>创建监听 socket；进入“监听中”；等待客户端连接。</div>
+          <div class="box server-box"><strong>3. 收到客户端 HELLO</strong>列表新增客户端：IP、状态、备注、队伍准备状态、组队码、操作列。</div>
+          <div class="box decision-box"><strong>4. 按 READY 显示状态</strong>READY 0 = 未准备；READY 1 = 已准备。只有已准备客户端会进入全局出发/自动开始目标集合。</div>
+        </div>
+        <div class="arrow-col">
+          <div class="arrow">←→<br>TCP</div>
+          <div class="arrow">HELLO →</div>
+          <div class="arrow">READY 0/1 →</div>
+        </div>
+        <div>
+          <span class="label">客户端 Qt</span>
+          <div class="box client-box"><strong>1. 打开客户端</strong>自动加载配置；刷新窗口列表；尝试自动绑定“三角洲行动”游戏本体窗口。</div>
+          <div class="box client-box"><strong>2. 连接服务端</strong>输入/读取服务端 IP，连接 TCP；连接成功后发送 HELLO；开始心跳。</div>
+          <div class="box client-box"><strong>3. 添加/绑定点击任务</strong>选择游戏窗口；设置客户区点击坐标；任务启用后可被 TRIGGER 触发。</div>
+          <div class="box decision-box"><strong>4. 用户切换准备</strong>点击准备按钮：发送 READY 1；取消准备：发送 READY 0。断线时本地清回未准备。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">准备 / 未准备分支</div>
+      <div class="two-col">
+        <div class="box fail-box">
+          <h3 class="route-title">未准备路线（READY 0）</h3>
+          <ul>
+            <li>服务端列表显示“未准备”。</li>
+            <li>全局出发不会触发该客户端。</li>
+            <li>自动开始不会把它加入 targets。</li>
+            <li>仍然可以右键/行内执行部分单客户端操作：获取组队码、识别队伍状态、自雷、备注、踢出等。</li>
+            <li>如果客户端断线或任务窗口失效，客户端本地会清回未准备。</li>
+          </ul>
+        </div>
+        <div class="box client-box">
+          <h3 class="route-title">已准备路线（READY 1）</h3>
+          <ul>
+            <li>服务端列表显示“已准备”。</li>
+            <li>手动“全局出发”会发送 TRIGGER 到所有已准备客户端。</li>
+            <li>自动开始开启后，服务端会周期性识别队伍状态。</li>
+            <li>识别到队伍满员（例如 2/2）后，服务端触发全局出发。</li>
+            <li>出发后进入匹配/加载/进对局 OCR 阶段，最后发自雷请求。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">手动出发路线</div>
+      <div class="swimlane" style="align-items:center">
+        <div class="box server-box"><strong>服务端：全局出发</strong>点击“全局出发”，只向 ready=true 的客户端发送 TRIGGER 秒数。</div>
+        <div class="arrow-col" style="padding-top:0">TRIGGER<br>seconds →</div>
+        <div class="box client-box"><strong>客户端：倒计时点击</strong>收到 TRIGGER 后倒计时；到 0 后按启用任务列表顺序点击绑定窗口客户区坐标。</div>
+      </div>
+      <div class="box decision-box"><strong>注意</strong>单客户端“出发”可以右键/行内触发指定客户端；全局出发只触发已准备客户端。</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">自动开始路线（当前最新：100ms tick，单请求不堆积）</div>
+      <div class="swimlane">
+        <div>
+          <span class="label">服务端 Qt</span>
+          <div class="box server-box"><strong>1. 勾选“自动开始”</strong>启动 autoStartTimer；当前最新 tick = 100ms。</div>
+          <div class="box server-box"><strong>2. 仅扫描已准备客户端</strong>connected && ready 才进入 targets；未准备客户端跳过。</div>
+          <div class="box server-box"><strong>3. 请求队伍状态</strong>客户端空闲时发 TEAM_READY_REQUEST；忙碌/actionRunning 时等待下一轮。</div>
+          <div class="box decision-box"><strong>4. 判断满员</strong>所有等待目标 teamReadyState == 1 → 全局出发；否则继续识别。</div>
+          <div class="box server-box"><strong>5. 满员后全局出发</strong>发送 TRIGGER；每个已准备客户端进入 AfterTriggerDelay，等待 1 秒。</div>
+          <div class="box server-box"><strong>6. 匹配阶段 OCR</strong>识别右下角 (1945,1261,500×60)：看到“取消行动” → 显示“匹配中”。</div>
+          <div class="box server-box"><strong>7. 加载阶段 OCR</strong>右下角不再有“配装/出发/取消行动”，或已见取消行动后 No text found → 显示“正在加载”。</div>
+          <div class="box server-box"><strong>8. 对局阶段 OCR</strong>识别左上角 (0,0,300×60)：看到“机密/普通/绝密” → 显示“进入对局”。</div>
+          <div class="box server-box"><strong>9. 发送自雷请求</strong>显示“自雷中”；等待 SELF_THUNDER_RESPONSE。</div>
+        </div>
+        <div class="arrow-col">
+          <div class="arrow">TEAM_READY_REQUEST →</div>
+          <div class="arrow">← TEAM_READY<br>state/current/total</div>
+          <div class="arrow">TRIGGER →</div>
+          <div class="arrow">OCR_REQUEST →</div>
+          <div class="arrow">← OCR_RESPONSE</div>
+          <div class="arrow">SELF_THUNDER_REQUEST →</div>
+          <div class="arrow">← SELF_THUNDER_RESPONSE</div>
+        </div>
+        <div>
+          <span class="label">客户端 Qt</span>
+          <div class="box client-box"><strong>1. 收到队伍状态请求</strong>执行一次队伍状态 OCR；解析 [x/n] 或失败。</div>
+          <div class="box client-box"><strong>2. 回传 TEAM_READY</strong>满员 state=1；未满 state=0；失败/无效 state=-1。</div>
+          <div class="box client-box"><strong>3. 收到 TRIGGER</strong>倒计时结束后点击启用任务窗口。</div>
+          <div class="box client-box"><strong>4. 收到通用 OCR 请求</strong>按服务端下发区域截图 → UmiOCR → 回传文本或错误。</div>
+          <div class="box client-box"><strong>5. 收到自雷请求</strong>绑定窗口有效时执行自雷流程：等 8s → 贝塞尔/相对下拉 → G/G → ESC → 点击 → 空格/空格/TAB。</div>
+          <div class="box client-box"><strong>6. 回传自雷结果</strong>成功：SELF_THUNDER_RESPONSE OK；失败：ERROR + 原因。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">单客户端操作与动作锁</div>
+      <div class="four-col">
+        <div class="box server-box"><strong>出发</strong>发送单客户端 TRIGGER。当前动作列只在“出发”列显示执行中。</div>
+        <div class="box server-box"><strong>获取组队码</strong>客户端点击固定流程并读剪贴板，回传组队码。</div>
+        <div class="box server-box"><strong>识别队伍状态</strong>客户端按配置区域 OCR，回传 [x/n]。</div>
+        <div class="box server-box"><strong>自雷</strong>服务端发送 SELF_THUNDER_REQUEST，客户端执行完整自雷。</div>
+      </div>
+      <div class="box decision-box"><strong>动作锁</strong>客户端/服务端都有“正在执行”的保护。任一自动化动作进行中时，新动作会被拒绝或等待下一轮，避免 OCR、点击、自雷互相抢鼠标/窗口。</div>
+    </section>
+
+    <section class="section">
+      <h2>关键状态路线摘要</h2>
+      <ul>
+        <li><strong>未准备：</strong>不参与全局出发与自动开始；可手动执行单客户端操作。</li>
+        <li><strong>已准备：</strong>进入全局出发目标；自动开始时参与 [x/n] 队伍状态判断。</li>
+        <li><strong>队伍未满：</strong>继续 TEAM_READY_REQUEST → TEAM_READY 循环。</li>
+        <li><strong>队伍满员：</strong>触发 TRIGGER → 等 1 秒 → 匹配阶段 OCR。</li>
+        <li><strong>匹配中：</strong>看到“取消行动”显示匹配中；按钮区消失后显示正在加载。</li>
+        <li><strong>进入对局：</strong>左上角 OCR 识别到“机密/普通/绝密”后发送自雷请求。</li>
+        <li><strong>自雷完成：</strong>服务端显示自雷完成，清除该客户端本轮自动开始状态，单客户端回到下一轮 [x/n] 判断。</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
