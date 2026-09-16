@@ -110,6 +110,34 @@ bool Win32WindowBinder::isValid(HWND hwnd) const
     return hwnd && IsWindow(hwnd);
 }
 
+bool Win32WindowBinder::prepareForBinding(HWND hwnd, int& width, int& height) const
+{
+    if (!isValid(hwnd))
+    {
+        return false;
+    }
+
+    bool needsActivation = IsIconic(hwnd) != FALSE;
+    if (!clientSize(hwnd, width, height) || width <= 0 || height <= 0)
+    {
+        needsActivation = true;
+    }
+
+    if (needsActivation)
+    {
+        ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+        UpdateWindow(hwnd);
+        Sleep(100);
+    }
+
+    if (!clientSize(hwnd, width, height) || width <= 0 || height <= 0)
+    {
+        return false;
+    }
+    return true;
+}
+
 bool Win32WindowBinder::clientSize(HWND hwnd, int& width, int& height) const
 {
     RECT rect{};

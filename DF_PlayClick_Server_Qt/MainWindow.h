@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QCheckBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
@@ -9,6 +8,7 @@
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QTextEdit>
+#include <QTimer>
 
 #include "ServerController.h"
 #include "ServerModels.h"
@@ -43,16 +43,21 @@ private:
     QLabel* listenBadge_ = nullptr;
     QLabel* clientCountBadge_ = nullptr;
     QLabel* statusLabel_ = nullptr;
+    QLabel* serverTimeLabel_ = nullptr;
     QLabel* flowPreviewLabel_ = nullptr;
     QLineEdit* portEdit_ = nullptr;
     QLineEdit* countdownEdit_ = nullptr;
     QLineEdit* groupDelayEdit_ = nullptr;
+    QLineEdit* compensationLeadEdit_ = nullptr;
     QLineEdit* listingTextEdit_ = nullptr;
     QLineEdit* listingPriceEdit_ = nullptr;
     QSpinBox* listingPurchaseCountSpin_ = nullptr;
-    QCheckBox* listingExchangeCheck_ = nullptr;
+    QLabel* listingQuantityTotalLabel_ = nullptr;
+    QLabel* listingSuccessClientsLabel_ = nullptr;
     QRadioButton* coinFirstRadio_ = nullptr;
     QRadioButton* bossFirstRadio_ = nullptr;
+    QRadioButton* normalTriggerRadio_ = nullptr;
+    QRadioButton* compensationTriggerRadio_ = nullptr;
     QPushButton* listenButton_ = nullptr;
     QPushButton* stopButton_ = nullptr;
     QPushButton* triggerAllButton_ = nullptr;
@@ -63,4 +68,5 @@ private:
     QPushButton* clientStatusButton_ = nullptr;
     QTableWidget* clientTable_ = nullptr;
     QTextEdit* connectionLogEdit_ = nullptr;
+    QTimer serverTimeTimer_;
 };

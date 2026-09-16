@@ -37,9 +37,15 @@ ClientController::ClientController(QObject* parent)
     unitPrice_ = config_.loadUnitPrice();
     bulletTotal_ = config_.loadBulletTotal();
     countdownTimer_.setInterval(1000);
+    scheduledTriggerTimer_.setSingleShot(true);
+    scheduledTriggerTimer_.setTimerType(Qt::PreciseTimer);
+    serverTimeTimer_.setInterval(50);
     bulletOcrActionTimer_.setSingleShot(true);
     bulletOcrNextRoundTimer_.setSingleShot(true);
     connect(&countdownTimer_, &QTimer::timeout, this, &ClientController::tickCountdown);
+    connect(&scheduledTriggerTimer_, &QTimer::timeout, this, &ClientController::fireScheduledTrigger);
+    connect(&serverTimeTimer_, &QTimer::timeout, this, &ClientController::updateServerTimeDisplay);
+    serverTimeTimer_.start();
     connect(&bulletOcrActionTimer_, &QTimer::timeout, this, [this]() {
         if (!bulletOcrRunning_)
         {
@@ -57,12 +63,17 @@ ClientController::ClientController(QObject* parent)
     connect(&connection_, &ClientConnection::connectedChanged, this, [this](bool connected) {
         if (connected)
         {
+            // 等待服务端完成首次校时，避免把本机时间误显示为服务器时间。
+            serverTimeSynchronized_ = false;
+            serverClockOffsetMs_ = 0;
             // READY 1 已在连接层发送成功，此处同步本地状态供控制器查询。
             ready_ = true;
             emit readyChanged(true);
         }
         else if (!connection_.isReconnecting())
         {
+            serverTimeSynchronized_ = false;
+            serverClockOffsetMs_ = 0;
             clearLocalReadyState();
             teamReadyOcrRunning_ = false;
             lastTeamReadyState_ = -2;
@@ -79,6 +90,15 @@ ClientController::ClientController(QObject* parent)
         emit connectionLogAppended(text);
     });
     connect(&connection_, &ClientConnection::triggerReceived, this, &ClientController::startCountdown);
+    connect(&connection_, &ClientConnection::scheduledTriggerReceived, this, &ClientController::startScheduledTrigger);
+    connect(&connection_, &ClientConnection::serverTimeReceived, this, [this](qint64 serverTimeMs, qint64 clientOffsetMs) {
+        Q_UNUSED(serverTimeMs);
+        // clientOffsetMs 是服务端基于四时间戳计算出的“客户端时钟 - 服务端时钟”偏移，
+        // 即使偏移恰好为 0 也必须保留，不能再用 0 作为未同步哨兵值。
+        serverClockOffsetMs_ = clientOffsetMs;
+        serverTimeSynchronized_ = true;
+        updateServerTimeDisplay();
+    });
     connect(&connection_, &ClientConnection::roleReceived, this, [this](ClientRole role) {
         currentRole_ = role;
         emit clientRoleChanged(currentRole_);
@@ -240,6 +260,7 @@ void ClientController::forceStopCurrentAction()
 {
     automationCancelRequested_ = true;
     countdownTimer_.stop();
+    scheduledTriggerTimer_.stop();
     countdown_ = 0;
     if (bulletOcrRunning_)
     {
@@ -263,6 +284,14 @@ void ClientController::bindWindow(int index, bool bringToFront)
         return;
     }
 
+    int clientWidth = 0;
+    int clientHeight = 0;
+    if (!binder_.prepareForBinding(item.hwnd, clientWidth, clientHeight))
+    {
+        setStatus(QStringLiteral("绑定失败：窗口客户区仍为 0×0"));
+        return;
+    }
+
     boundHwnd_ = item.hwnd;
     boundWindowIndex_ = index;
     if (bringToFront)
@@ -272,8 +301,8 @@ void ClientController::bindWindow(int index, bool bringToFront)
 
     emit boundWindowChanged(QStringLiteral("已绑定：%1 · %2 · %3×%4")
         .arg(item.title, item.processName)
-        .arg(item.clientWidth)
-        .arg(item.clientHeight));
+        .arg(clientWidth)
+        .arg(clientHeight));
     emit windowsChanged();
     setStatus(QStringLiteral("已绑定目标窗口"));
 }
@@ -292,13 +321,21 @@ void ClientController::addTaskFromWindow(int index, bool bringToFront)
         return;
     }
 
+    int clientWidth = 0;
+    int clientHeight = 0;
+    if (!binder_.prepareForBinding(item.hwnd, clientWidth, clientHeight))
+    {
+        setStatus(QStringLiteral("添加任务失败：窗口客户区仍为 0×0"));
+        return;
+    }
+
     ClickTask task;
     task.hwnd = item.hwnd;
     task.title = item.title;
     task.processName = item.processName;
     task.hwndText = item.hwndText;
-    task.clientWidth = item.clientWidth;
-    task.clientHeight = item.clientHeight;
+    task.clientWidth = clientWidth;
+    task.clientHeight = clientHeight;
     task.x = clickX_;
     task.y = clickY_;
     POINT point{};
@@ -734,6 +771,7 @@ void ClientController::setStatus(const QString& text)
 
 void ClientController::startCountdown(int seconds)
 {
+    scheduledTriggerTimer_.stop();
     countdownTimer_.stop();
     countdown_ = seconds;
     if (ShouldClickImmediatelyForCountdown(seconds))
@@ -745,6 +783,54 @@ void ClientController::startCountdown(int seconds)
 
     emit countdownChanged(QStringLiteral("倒计时：%1").arg(countdown_));
     countdownTimer_.start();
+}
+
+void ClientController::startScheduledTrigger(int seconds, qint64 targetClientMs)
+{
+    countdownTimer_.stop();
+    scheduledTriggerTimer_.stop();
+    scheduledTriggerSeconds_ = seconds;
+    scheduledTriggerTargetMs_ = targetClientMs;
+    const qint64 remainingMs = targetClientMs - QDateTime::currentMSecsSinceEpoch();
+    if (remainingMs <= 0)
+    {
+        setStatus(QStringLiteral("定时出发目标已到期，立即执行"));
+        fireScheduledTrigger();
+        return;
+    }
+    setStatus(QStringLiteral("定时出发：目标时间 %1").arg(
+        QDateTime::fromMSecsSinceEpoch(targetClientMs).toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))));
+    scheduledTriggerTimer_.start(static_cast<int>(qMin<qint64>(remainingMs, INT_MAX)));
+}
+
+void ClientController::fireScheduledTrigger()
+{
+    const qint64 remainingMs = scheduledTriggerTargetMs_ - QDateTime::currentMSecsSinceEpoch();
+    if (remainingMs > 2)
+    {
+        scheduledTriggerTimer_.start(static_cast<int>(qMin<qint64>(remainingMs, INT_MAX)));
+        return;
+    }
+    if (automationCancelRequested_.load())
+    {
+        return;
+    }
+    emit countdownChanged(QStringLiteral("定时出发：点击"));
+    clickEnabledTasks();
+}
+
+void ClientController::updateServerTimeDisplay()
+{
+    if (!serverTimeSynchronized_)
+    {
+        emit serverTimeChanged(QStringLiteral("未同步"));
+        return;
+    }
+    // 服务端计算的偏移定义为“客户端时间 - 服务器时间”，
+    // 因此从客户端本机时间换算服务器时间时必须减去该偏移。
+    const qint64 serverNowMs = QDateTime::currentMSecsSinceEpoch() - serverClockOffsetMs_;
+    emit serverTimeChanged(QDateTime::fromMSecsSinceEpoch(serverNowMs).toString(
+        QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")));
 }
 
 void ClientController::tickCountdown()
@@ -1130,14 +1216,14 @@ void ClientController::handleListingRequest(int requestId, bool hasExchange, int
         return;
     }
 
-    if (usageResult != QStringLiteral("使用量核对成功"))
+    if (!usageResult.startsWith(QStringLiteral("使用量核对成功")))
     {
         connection_.sendListingResponse(requestId, false, usageResult);
         setStatus(usageResult);
         return;
     }
 
-    connection_.sendListingResponse(requestId, true, QStringLiteral("OCR识别到上架，使用量核对成功"));
+    connection_.sendListingResponse(requestId, true, QStringLiteral("OCR识别到上架，%1").arg(usageResult));
     setStatus(QStringLiteral("上架成功，使用量核对成功"));
 }
 
@@ -1444,6 +1530,7 @@ bool ClientController::executeListingSequence(bool hasExchange, int purchaseCoun
     const POINT firstPriceClick{ 1880, 934 };
     const POINT pricePanelClick{ 1939, 745 };
     const POINT priceInput{ 1827, 858 };
+    const POINT captchaConfirm{ 662, 1033 };
 
     Win32InputSequenceLock inputSequenceLock;
     if (!inputSequenceLock.acquire(errorText, 120000))
@@ -1553,7 +1640,16 @@ bool ClientController::executeListingSequence(bool hasExchange, int purchaseCoun
         return false;
     }
     const POINT purchasePoint = detectedExchange ? exchangeOption : noExchangeOption;
-    for (int clickIndex = 0; clickIndex < purchaseCount; ++clickIndex)
+    OcrRegionConfig captchaRegion;
+    captchaRegion.enabled = true;
+    captchaRegion.x = 1221;
+    captchaRegion.y = 491;
+    captchaRegion.width = 100;
+    captchaRegion.height = 55;
+    captchaRegion.referenceWidth = ReferenceWidth;
+    captchaRegion.referenceHeight = ReferenceHeight;
+    int completedPurchaseCount = 0;
+    while (completedPurchaseCount < purchaseCount)
     {
         if (automationCancelRequested_)
         {
@@ -1564,23 +1660,40 @@ bool ClientController::executeListingSequence(bool hasExchange, int purchaseCoun
         {
             return false;
         }
-        if (clickIndex + 1 < purchaseCount)
+        if (!waitForAutomation(1500, errorText)) return false;
+
+        QString captchaOcrError;
+        const QString captchaImagePath = captureOcrRegion(captchaRegion, QStringLiteral("listing_captcha"), captchaOcrError);
+        if (captchaImagePath.isEmpty())
         {
-            // 购买按钮响应较慢，连续点击之间固定等待 1500ms，避免点击过密导致漏购。
-            constexpr int clickIntervalMs = 1500;
-            QElapsedTimer waitTimer;
-            waitTimer.start();
-            while (waitTimer.elapsed() < clickIntervalMs)
-            {
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-                if (automationCancelRequested_)
-                {
-                    errorText = QStringLiteral("用户或服务端已强制停止当前动作");
-                    return false;
-                }
-                QThread::msleep(25);
-            }
+            errorText = captchaOcrError;
+            return false;
         }
+        const QString captchaText = umiOcrRunner_.recognizeImage(
+            captchaImagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), captchaOcrError);
+        QFile::remove(captchaImagePath);
+        // 验证码区域在正常购买时通常完全空白；UmiOCR 会把这种情况作为 No text 错误返回。
+        // 此处仅将“无文字”解释为“未出现验证码”，其他 OCR 故障仍中止流程。
+        const bool captchaRegionHasNoText = captchaOcrError.contains(
+            QStringLiteral("No text found in image"), Qt::CaseInsensitive);
+        if (!captchaOcrError.isEmpty() && !captchaRegionHasNoText)
+        {
+            errorText = captchaOcrError;
+            return false;
+        }
+        const bool hasCaptcha = !captchaRegionHasNoText
+            && captchaText.contains(QStringLiteral("验证码"), Qt::CaseInsensitive);
+        if (hasCaptcha)
+        {
+            if (!click(captchaConfirm))
+            {
+                return false;
+            }
+            // 验证码确认后界面恢复较快，按要求仅等待约 600ms，再重新购买。
+            if (!waitForAutomation(600, errorText)) return false;
+            continue;
+        }
+        ++completedPurchaseCount;
     }
     if (!waitForAutomation(1500, errorText)) return false;
     if (stopIfRequested())
@@ -1761,13 +1874,13 @@ bool ClientController::executeListingSequence(bool hasExchange, int purchaseCoun
         return false;
     }
 
-    // 最后核对使用量区域，参考客户区坐标为 (1851,655)，大小 190×70。
+    // 最后核对出售数量区域，参考客户区坐标为 (1477,664)，大小 323×55。
     OcrRegionConfig usageRegion;
     usageRegion.enabled = true;
-    usageRegion.x = 1851;
-    usageRegion.y = 655;
-    usageRegion.width = 190;
-    usageRegion.height = 70;
+    usageRegion.x = 1477;
+    usageRegion.y = 664;
+    usageRegion.width = 323;
+    usageRegion.height = 55;
     usageRegion.referenceWidth = ReferenceWidth;
     usageRegion.referenceHeight = ReferenceHeight;
     const QString usageImagePath = captureOcrRegion(usageRegion, QStringLiteral("listing_usage"), errorText);
@@ -1796,18 +1909,19 @@ bool ClientController::executeListingSequence(bool hasExchange, int purchaseCoun
     }
     const int usedCount = usageMatch.captured(1).toInt();
     const int totalCount = usageMatch.captured(2).toInt();
-    // 只有 X>N 才属于超出；相等为成功，其余有效的 X<N 结果显示为“少”，不再当作通用失败。
-    if (usedCount > totalCount)
+    const int expectedCount = purchaseCount * 200;
+    // 本轮期望值只由购买次数决定，X/N 中只核对 X；N 仅原样记录，便于排查 OCR 结果。
+    if (usedCount > expectedCount)
     {
-        usageResult = QStringLiteral("使用量超出：%1/%2").arg(usedCount).arg(totalCount);
+        usageResult = QStringLiteral("使用量超出：%1/%2，期望 %3").arg(usedCount).arg(totalCount).arg(expectedCount);
     }
-    else if (usedCount == totalCount)
+    else if (usedCount == expectedCount)
     {
-        usageResult = QStringLiteral("使用量核对成功");
+        usageResult = QStringLiteral("使用量核对成功：%1/%2").arg(usedCount).arg(totalCount);
     }
     else
     {
-        usageResult = QStringLiteral("使用量少：%1/%2").arg(usedCount).arg(totalCount);
+        usageResult = QStringLiteral("使用量少：%1/%2，期望 %3").arg(usedCount).arg(totalCount).arg(expectedCount);
     }
     return true;
 }

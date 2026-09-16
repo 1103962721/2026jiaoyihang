@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <QObject>
+#include <QHash>
 #include <QString>
 #include <QVector>
 
@@ -28,6 +29,9 @@ public:
     void stopListening();
     int triggerReadyClients(int seconds);
     int triggerReadyClientsByRole(int seconds, ClientRole role);
+    bool requestTimeSync(quint64 clientId, int requestId, qint64 serverSendMs, QString& errorText);
+    bool sendServerTime(quint64 clientId, qint64 serverTimeMs, qint64 clientOffsetMs, QString& errorText);
+    bool sendScheduledTrigger(quint64 clientId, int seconds, qint64 targetClientMs, QString& errorText);
     bool triggerSingleClient(quint64 clientId, int seconds, QString& errorText);
     bool requestTeamCode(quint64 clientId, QString& errorText);
     bool requestTeamReady(quint64 clientId, QString& errorText);
@@ -47,6 +51,7 @@ public:
     bool setClientRemark(quint64 clientId, const QString& remark);
     bool setClientRole(quint64 clientId, ClientRole role);
     bool setClientListingStatus(quint64 clientId, const QString& status);
+    void resetListingQuantities();
     int coinClientCount(bool readyOnly) const;
     bool kickClient(quint64 clientId);
     QVector<ClientListItem> clients() const;
@@ -60,6 +65,8 @@ signals:
     void loadoutResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void listingResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void mailResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
+    void timeSyncResponseReceived(quint64 clientId, int requestId, qint64 clientReceiveMs, qint64 clientSendMs,
+        qint64 serverSendMs, qint64 serverReceiveMs);
 
 private:
     struct ClientEntry
@@ -77,9 +84,11 @@ private:
         QString teamCode;
         QString runningAction;
         QString listingStatus = QStringLiteral("???");
+        int listingQuantityX = -1;
         bool actionRunning = false;
         bool ready = false;
         bool connected = true;
+        QHash<int, qint64> timeSyncSendTimesMs;
         std::thread receiveThread;
     };
 

@@ -41,6 +41,7 @@ private:
     bool initialized_ = false;
     QLabel* connectionBadge_ = nullptr;
     QLabel* connectionDetailLabel_ = nullptr;
+    QLabel* serverTimeLabel_ = nullptr;
     QLineEdit* ipEdit_ = nullptr;
     QLineEdit* portEdit_ = nullptr;
     QPushButton* connectButton_ = nullptr;

@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QVector>
 #include <QAbstractNativeEventFilter>
+#include <QDateTime>
 
 #include "ClientConfig.h"
 #include "ClientConnection.h"
@@ -83,6 +84,7 @@ signals:
     void reconnectingChanged(bool reconnecting);
     void readyChanged(bool ready);
     void countdownChanged(const QString& text);
+    void serverTimeChanged(const QString& text);
     void clickQueueDelayChanged(int delayMs);
     void ocrParametersChanged(double unitPrice, int bulletTotal);
     void bulletOcrRunningChanged(bool running);
@@ -99,6 +101,9 @@ private:
     void clearLocalReadyState();
     void setStatus(const QString& text);
     void startCountdown(int seconds);
+    void startScheduledTrigger(int seconds, qint64 targetClientMs);
+    void fireScheduledTrigger();
+    void updateServerTimeDisplay();
     void tickCountdown();
     void clickEnabledTasks();
     void reloadSharedClickQueueDelay();
@@ -136,6 +141,8 @@ private:
     UmiOcrRunner umiOcrRunner_;
     TeamReadyParser teamReadyParser_;
     QTimer countdownTimer_;
+    QTimer scheduledTriggerTimer_;
+    QTimer serverTimeTimer_;
     QTimer bulletOcrActionTimer_;
     QTimer bulletOcrNextRoundTimer_;
     QVector<TargetWindowInfo> windows_;
@@ -152,6 +159,10 @@ private:
     BulletOcrConfig bulletOcrConfig_;
     int bulletOcrRoundIndex_ = 0;
     int countdown_ = 0;
+    int scheduledTriggerSeconds_ = 0;
+    qint64 scheduledTriggerTargetMs_ = 0;
+    qint64 serverClockOffsetMs_ = 0;
+    bool serverTimeSynchronized_ = false;
     int lastTeamReadyState_ = -2;
     int lastTeamReadyCurrent_ = -1;
     int lastTeamReadyTotal_ = -1;

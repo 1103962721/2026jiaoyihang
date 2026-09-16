@@ -8,6 +8,8 @@
 namespace Protocol
 {
     constexpr int DefaultPort = 50505;
+    // 每个客户端连接建立后的首次校时使用此保留编号；补偿任务使用更高的动态编号。
+    constexpr int InitialTimeSyncRequestId = 1;
 
     enum class MessageType
     {
@@ -18,6 +20,10 @@ namespace Protocol
         Role,
         Ping,
         Pong,
+        TimeSyncRequest,
+        TimeSyncResponse,
+        ServerTime,
+        ScheduledTrigger,
         TeamCodeRequest,
         TeamCodeResponse,
         TeamReadyRequest,
@@ -56,6 +62,8 @@ namespace Protocol
         int height = 0;
         int referenceWidth = 0;
         int referenceHeight = 0;
+        long long timestampMs = 0;
+        long long timestampMs2 = 0;
         bool success = false;
         ClientRole role = ClientRoleUtil::DefaultRole;
         std::string payload;
@@ -90,6 +98,26 @@ namespace Protocol
     inline std::string BuildPongMessage()
     {
         return "PONG\n";
+    }
+
+    inline std::string BuildTimeSyncRequestMessage(int requestId, long long serverSendMs)
+    {
+        return "TIME_SYNC_REQUEST " + std::to_string(requestId) + " " + std::to_string(serverSendMs) + "\n";
+    }
+
+    inline std::string BuildTimeSyncResponseMessage(int requestId, long long clientReceiveMs, long long clientSendMs)
+    {
+        return "TIME_SYNC_RESPONSE " + std::to_string(requestId) + " " + std::to_string(clientReceiveMs) + " " + std::to_string(clientSendMs) + "\n";
+    }
+
+    inline std::string BuildScheduledTriggerMessage(int seconds, long long targetClientMs)
+    {
+        return "SCHEDULED_TRIGGER " + std::to_string(seconds) + " " + std::to_string(targetClientMs) + "\n";
+    }
+
+    inline std::string BuildServerTimeMessage(long long serverTimeMs, long long clientOffsetMs)
+    {
+        return "SERVER_TIME " + std::to_string(serverTimeMs) + " " + std::to_string(clientOffsetMs) + "\n";
     }
 
     inline bool IsValidTeamCodePayload(const std::string& text)
@@ -283,6 +311,56 @@ namespace Protocol
         if (stream.fail())
         {
             return false;
+        }
+
+        if (command == "TIME_SYNC_REQUEST")
+        {
+            int requestId = 0;
+            long long serverSendMs = 0;
+            std::string extra;
+            stream >> requestId >> serverSendMs;
+            if (stream.fail() || requestId <= 0 || serverSendMs <= 0 || (stream >> extra))
+            {
+                return false;
+            }
+            message.type = MessageType::TimeSyncRequest;
+            message.requestId = requestId;
+            message.timestampMs = serverSendMs;
+            return true;
+        }
+
+        if (command == "TIME_SYNC_RESPONSE")
+        {
+            int requestId = 0;
+            long long clientReceiveMs = 0;
+            long long clientSendMs = 0;
+            std::string extra;
+            stream >> requestId >> clientReceiveMs >> clientSendMs;
+            if (stream.fail() || requestId <= 0 || clientReceiveMs <= 0 || clientSendMs < clientReceiveMs || (stream >> extra))
+            {
+                return false;
+            }
+            message.type = MessageType::TimeSyncResponse;
+            message.requestId = requestId;
+            message.timestampMs = clientReceiveMs;
+            message.timestampMs2 = clientSendMs;
+            return true;
+        }
+
+        if (command == "SERVER_TIME")
+        {
+            long long serverTimeMs = 0;
+            long long clientOffsetMs = 0;
+            std::string extra;
+            stream >> serverTimeMs >> clientOffsetMs;
+            if (stream.fail() || serverTimeMs <= 0 || (stream >> extra))
+            {
+                return false;
+            }
+            message.type = MessageType::ServerTime;
+            message.timestampMs = serverTimeMs;
+            message.timestampMs2 = clientOffsetMs;
+            return true;
         }
 
         if (command == "ROLE")
@@ -573,6 +651,22 @@ namespace Protocol
             message.requestId = requestId;
             message.success = status == "OK";
             message.payload = payload;
+            return true;
+        }
+
+        if (command == "SCHEDULED_TRIGGER")
+        {
+            int seconds = 0;
+            long long targetClientMs = 0;
+            std::string extra;
+            stream >> seconds >> targetClientMs;
+            if (stream.fail() || seconds < 0 || targetClientMs <= 0 || (stream >> extra))
+            {
+                return false;
+            }
+            message.type = MessageType::ScheduledTrigger;
+            message.value = seconds;
+            message.timestampMs = targetClientMs;
             return true;
         }
 

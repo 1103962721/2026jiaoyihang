@@ -23,6 +23,7 @@ public:
     QVector<TargetWindowInfo> enumerateWindows(HWND excludeHwnd) const;
     int findGameBodyIndex(const QVector<TargetWindowInfo>& windows) const;
     bool isValid(HWND hwnd) const;
+    bool prepareForBinding(HWND hwnd, int& width, int& height) const;
     bool clientSize(HWND hwnd, int& width, int& height) const;
     bool pointInsideClient(HWND hwnd, POINT point) const;
     bool screenToClientPoint(HWND hwnd, POINT& point) const;

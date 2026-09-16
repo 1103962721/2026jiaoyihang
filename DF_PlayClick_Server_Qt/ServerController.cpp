@@ -23,7 +23,9 @@ ServerController::ServerController(QObject* parent)
     : QObject(parent)
 {
     autoStartTimer_.setInterval(100);
+    compensationSyncTimer_.setInterval(25);
     connect(&autoStartTimer_, &QTimer::timeout, this, &ServerController::processAutoStartTick);
+    connect(&compensationSyncTimer_, &QTimer::timeout, this, &ServerController::processCompensationSync);
     connect(&connectionManager_, &ServerConnectionManager::ocrResponseReceived, this, &ServerController::handleAutoStartOcrResponse);
     connect(&connectionManager_, &ServerConnectionManager::selfThunderResponseReceived, this, &ServerController::handleSelfThunderResponse);
     connect(&connectionManager_, &ServerConnectionManager::loadoutResponseReceived, this, &ServerController::handleLoadoutResponse);
@@ -43,6 +45,29 @@ ServerController::ServerController(QObject* parent)
             Q_UNUSED(requestId);
             emit connectionLogAppended(QStringLiteral("客户端 %1 领取邮件%2：%3")
                 .arg(clientId).arg(success ? QStringLiteral("完成") : QStringLiteral("失败"), text));
+        });
+    connect(&connectionManager_, &ServerConnectionManager::timeSyncResponseReceived, this,
+        [this](quint64 clientId, int requestId, qint64 clientReceiveMs, qint64 clientSendMs,
+            qint64 serverSendMs, qint64 serverReceiveMs) {
+            if (requestId == Protocol::InitialTimeSyncRequestId)
+            {
+                // 初次连接校时只用于客户端显示，不参与补偿任务。
+                const qint64 offsetMs = ((clientReceiveMs - serverSendMs) + (clientSendMs - serverReceiveMs)) / 2;
+                QString timeError;
+                connectionManager_.sendServerTime(clientId, serverReceiveMs, offsetMs, timeError);
+                return;
+            }
+            if (!compensationRound_.active)
+                return;
+            if (compensationRound_.requestIds.value(clientId, 0) != requestId)
+                return;
+            // NTP 四时间戳偏移估计：client - server。
+            const qint64 offsetMs = ((clientReceiveMs - serverSendMs) + (clientSendMs - serverReceiveMs)) / 2;
+            compensationRound_.offsetsMs.insert(clientId, offsetMs);
+            QString timeError;
+            connectionManager_.sendServerTime(clientId, serverReceiveMs, offsetMs, timeError);
+            if (compensationRound_.offsetsMs.size() == compensationRound_.requestIds.size())
+                finishCompensationSync(false);
         });
     connect(&connectionManager_, &ServerConnectionManager::clientsChanged, this, [this]() {
         emit clientsChanged(connectionManager_.clients());
@@ -96,7 +121,7 @@ void ServerController::stopListening()
     emit statusChanged(QStringLiteral("已停止监听"), ServerStatusTone::Neutral);
 }
 
-void ServerController::triggerClients(const QString& countdownText, const QString& groupDelayText, bool coinFirst)
+void ServerController::triggerClients(const QString& countdownText, const QString& groupDelayText, bool coinFirst, bool compensationEnabled, const QString& compensationLeadText)
 {
     const std::wstring countdown = countdownText.toStdWString();
     const int seconds = ParseCountdownSeconds(countdown.c_str());
@@ -116,8 +141,60 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
         return;
     }
 
+    bool leadOk = false;
+    const int leadMs = compensationEnabled ? compensationLeadText.toInt(&leadOk) : 0;
+    if (compensationEnabled && (!leadOk || leadMs < 0 || leadMs > 600000))
+    {
+        emit statusChanged(QStringLiteral("提前准备时间无效"), ServerStatusTone::Error);
+        emit messageRequested(QStringLiteral("错误"), QStringLiteral("提前准备时间必须是 0-600000 ms 的整数"), true);
+        return;
+    }
+
     const ClientRole firstRole = coinFirst ? ClientRole::Coin : ClientRole::Boss;
     const ClientRole secondRole = coinFirst ? ClientRole::Boss : ClientRole::Coin;
+    if (compensationEnabled)
+    {
+        if (compensationRound_.active)
+        {
+            emit statusChanged(QStringLiteral("上一轮时间同步尚未完成"), ServerStatusTone::Error);
+            return;
+        }
+        const QVector<ClientListItem> currentClients = connectionManager_.clients();
+        compensationRound_ = CompensationRound{};
+        compensationRound_.active = true;
+        compensationRound_.seconds = seconds;
+        compensationRound_.leadMs = leadMs;
+        compensationRound_.groupDelayMs = groupDelayMs;
+        compensationRound_.firstRole = firstRole;
+        compensationRound_.secondRole = secondRole;
+        compensationRound_.deadlineMs = QDateTime::currentMSecsSinceEpoch() + 10000;
+        for (const ClientListItem& client : currentClients)
+        {
+            if (!client.connected || !client.ready)
+                continue;
+            const int requestId = nextTimeSyncRequestId_++;
+            QString errorText;
+            const qint64 sendMs = QDateTime::currentMSecsSinceEpoch();
+            compensationRound_.requestIds.insert(client.id, requestId);
+            compensationRound_.sendTimesMs.insert(client.id, sendMs);
+            if (connectionManager_.requestTimeSync(client.id, requestId, sendMs, errorText))
+            {
+                continue;
+            }
+            compensationRound_.requestIds.remove(client.id);
+            compensationRound_.sendTimesMs.remove(client.id);
+        }
+        if (compensationRound_.requestIds.isEmpty())
+        {
+            compensationRound_ = CompensationRound{};
+            emit statusChanged(QStringLiteral("没有可同步的已准备客户端"), ServerStatusTone::Error);
+            return;
+        }
+        compensationSyncTimer_.start();
+        emit statusChanged(QStringLiteral("正在同步客户端时间：0/%1，超时上限 10 秒")
+            .arg(compensationRound_.requestIds.size()), ServerStatusTone::Neutral);
+        return;
+    }
     const int firstCount = connectionManager_.triggerReadyClientsByRole(seconds, firstRole);
     const QString firstText = QString::fromStdWString(ClientRoleUtil::ToDisplayText(firstRole));
     const QString secondText = QString::fromStdWString(ClientRoleUtil::ToDisplayText(secondRole));
@@ -138,6 +215,51 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
     QTimer::singleShot(groupDelayMs, Qt::PreciseTimer, this, triggerSecondGroup);
     emit statusChanged(QStringLiteral("已触发%1 %2 个，%3 ms 后触发%4")
         .arg(firstText).arg(firstCount).arg(groupDelayMs).arg(secondText), ServerStatusTone::Neutral);
+}
+
+void ServerController::processCompensationSync()
+{
+    if (!compensationRound_.active)
+    {
+        compensationSyncTimer_.stop();
+        return;
+    }
+    if (QDateTime::currentMSecsSinceEpoch() >= compensationRound_.deadlineMs)
+        finishCompensationSync(true);
+}
+
+void ServerController::finishCompensationSync(bool timedOut)
+{
+    if (!compensationRound_.active)
+        return;
+    compensationSyncTimer_.stop();
+    if (timedOut || compensationRound_.offsetsMs.size() != compensationRound_.requestIds.size())
+    {
+        emit statusChanged(QStringLiteral("时间同步超时：已同步 %1/%2，未执行补偿任务")
+            .arg(compensationRound_.offsetsMs.size()).arg(compensationRound_.requestIds.size()), ServerStatusTone::Error);
+        compensationRound_ = CompensationRound{};
+        return;
+    }
+
+    const qint64 targetServerA = QDateTime::currentMSecsSinceEpoch()
+        + compensationRound_.leadMs + static_cast<qint64>(compensationRound_.seconds) * 1000;
+    const qint64 targetServerB = targetServerA + compensationRound_.groupDelayMs;
+    int sentCount = 0;
+    for (const ClientListItem& client : connectionManager_.clients())
+    {
+        if (!compensationRound_.offsetsMs.contains(client.id))
+            continue;
+        const qint64 targetServer = client.role == compensationRound_.firstRole ? targetServerA : targetServerB;
+        QString errorText;
+        if (connectionManager_.sendScheduledTrigger(client.id, compensationRound_.seconds,
+            targetServer + compensationRound_.offsetsMs.value(client.id), errorText))
+            ++sentCount;
+    }
+    emit statusChanged(QStringLiteral("延迟补偿已下发：%1 个客户端，A 目标 %2，B 目标 %3")
+        .arg(sentCount)
+        .arg(QDateTime::fromMSecsSinceEpoch(targetServerA).toString(QStringLiteral("HH:mm:ss.zzz")))
+        .arg(QDateTime::fromMSecsSinceEpoch(targetServerB).toString(QStringLiteral("HH:mm:ss.zzz"))), ServerStatusTone::Success);
+    compensationRound_ = CompensationRound{};
 }
 
 void ServerController::triggerClient(quint64 clientId)
@@ -911,6 +1033,8 @@ void ServerController::startListing(const QString& listingText, const QString& l
     }
 
     const QVector<ClientListItem> currentClients = connectionManager_.clients();
+    // 每轮全体上架开始前清零上一轮各客户端的出售数量 X。
+    connectionManager_.resetListingQuantities();
     // 服务端点击“上架”后先留出 1 秒，让界面和任务参数稳定，再向客户端下发任务。
     QThread::msleep(1000);
     int coinCount = 0;

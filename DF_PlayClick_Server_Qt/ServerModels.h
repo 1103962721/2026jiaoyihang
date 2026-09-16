@@ -31,6 +31,7 @@ struct ClientListItem
     QString teamCode;
     QString runningAction;
     QString listingStatus = QStringLiteral("待执行");
+    int listingQuantityX = -1;
     bool actionRunning = false;
     bool connected = true;
 };

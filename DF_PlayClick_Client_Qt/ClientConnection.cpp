@@ -3,6 +3,7 @@
 #include <ws2tcpip.h>
 
 #include <QMetaObject>
+#include <QDateTime>
 
 #include "../Shared/ConnectionLifecyclePolicy.h"
 #include "../Shared/Protocol.h"
@@ -388,6 +389,17 @@ bool ClientConnection::sendMailResponse(int requestId, bool success, const QStri
     }
     return true;
 }
+
+bool ClientConnection::sendTimeSyncResponse(int requestId, qint64 clientReceiveMs, qint64 clientSendMs)
+{
+    if (!connected_ || socket_ == INVALID_SOCKET)
+    {
+        return false;
+    }
+    return SocketUtil::SendLine(socket_, Protocol::BuildTimeSyncResponseMessage(
+        requestId, static_cast<long long>(clientReceiveMs), static_cast<long long>(clientSendMs)));
+}
+
 void ClientConnection::receiveLoop()
 {
     std::string buffer;
@@ -432,6 +444,28 @@ void ClientConnection::receiveLoop()
             {
                 QMetaObject::invokeMethod(this, [this, seconds = message.value]() {
                     emit triggerReceived(seconds);
+                }, Qt::QueuedConnection);
+            }
+            else if (message.type == Protocol::MessageType::ScheduledTrigger)
+            {
+                QMetaObject::invokeMethod(this, [this, seconds = message.value,
+                    targetClientMs = static_cast<qint64>(message.timestampMs)]() {
+                    emit scheduledTriggerReceived(seconds, targetClientMs);
+                }, Qt::QueuedConnection);
+            }
+            else if (message.type == Protocol::MessageType::TimeSyncRequest)
+            {
+                const qint64 clientReceiveMs = QDateTime::currentMSecsSinceEpoch();
+                const bool sent = sendTimeSyncResponse(message.requestId, clientReceiveMs,
+                    QDateTime::currentMSecsSinceEpoch());
+                Q_UNUSED(sent);
+            }
+            else if (message.type == Protocol::MessageType::ServerTime)
+            {
+                QMetaObject::invokeMethod(this, [this,
+                    serverTimeMs = static_cast<qint64>(message.timestampMs),
+                    clientOffsetMs = static_cast<qint64>(message.timestampMs2)]() {
+                    emit serverTimeReceived(serverTimeMs, clientOffsetMs);
                 }, Qt::QueuedConnection);
             }
             else if (message.type == Protocol::MessageType::Role)

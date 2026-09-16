@@ -23,7 +23,8 @@ public:
 public slots:
     void startListening(const QString& portText);
     void stopListening();
-    void triggerClients(const QString& countdownText, const QString& groupDelayText, bool coinFirst);
+    void triggerClients(const QString& countdownText, const QString& groupDelayText, bool coinFirst,
+        bool compensationEnabled = false, const QString& compensationLeadText = QStringLiteral("1500"));
     void triggerClient(quint64 clientId);
     void requestTeamCode(quint64 clientId);
     void requestTeamReady(quint64 clientId);
@@ -56,6 +57,8 @@ signals:
 private:
     int parsePort(const QString& portText) const;
     void processAutoStartTick();
+    void processCompensationSync();
+    void finishCompensationSync(bool timedOut);
 
     enum class AutoStartStage
     {
@@ -94,6 +97,7 @@ private:
 
     ServerConnectionManager connectionManager_;
     QTimer autoStartTimer_;
+    QTimer compensationSyncTimer_;
     QString autoStartCountdownText_;
     QHash<quint64, AutoStartClientState> autoStartClientStates_;
     QHash<int, quint64> pendingOcrRequests_;
@@ -103,6 +107,20 @@ private:
     int nextOcrRequestId_ = 1;
     int nextListingRequestId_ = 1;
     int nextMailRequestId_ = 1;
+    int nextTimeSyncRequestId_ = 1000;
+    struct CompensationRound
+    {
+        bool active = false;
+        int seconds = 0;
+        int leadMs = 1500;
+        int groupDelayMs = 0;
+        ClientRole firstRole = ClientRole::Coin;
+        ClientRole secondRole = ClientRole::Boss;
+        qint64 deadlineMs = 0;
+        QHash<quint64, int> requestIds;
+        QHash<quint64, qint64> sendTimesMs;
+        QHash<quint64, qint64> offsetsMs;
+    } compensationRound_;
     bool autoStartEnabled_ = false;
     bool autoStartCanTrigger_ = true;
 };

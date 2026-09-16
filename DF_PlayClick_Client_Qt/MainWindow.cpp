@@ -176,6 +176,9 @@ void MainWindow::buildUi()
     connectionDetailLabel_->setObjectName(QStringLiteral("connectionDetail"));
     connectionStatusRow->addWidget(connectionProtocolLabel);
     connectionStatusRow->addStretch();
+    serverTimeLabel_ = new QLabel(QStringLiteral("服务器时间：未同步"), this);
+    serverTimeLabel_->setObjectName(QStringLiteral("serverTimeLabel"));
+    connectionStatusRow->addWidget(serverTimeLabel_);
     connectionStatusRow->addWidget(connectionDetailLabel_);
     connectionLayout->addLayout(connectionStatusRow);
     bodyLayout->addWidget(createCard(QStringLiteral("连接服务器"), connectionLayout));
@@ -323,6 +326,10 @@ void MainWindow::connectSignals()
         clickStrategyLabel_->setText(QStringLiteral("%1固定坐标 · 已适配").arg(roleText));
     });
     connect(&controller_, &ClientController::connectionLogAppended, this, &MainWindow::appendConnectionLog);
+    connect(&controller_, &ClientController::serverTimeChanged, this, [this](const QString& text) {
+        if (serverTimeLabel_)
+            serverTimeLabel_->setText(QStringLiteral("服务器时间：%1").arg(text));
+    });
     connect(&controller_, &ClientController::ocrParametersChanged, this, [this](double unitPrice, int bulletTotal) {
         unitPriceEdit_->setText(QString::number(unitPrice, 'g', 17));
         bulletTotalEdit_->setText(QString::number(bulletTotal));

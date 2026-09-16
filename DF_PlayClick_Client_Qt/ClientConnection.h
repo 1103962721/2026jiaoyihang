@@ -32,6 +32,7 @@ public:
     bool sendLoadoutResponse(int requestId, bool success, const QString& payload);
     bool sendListingResponse(int requestId, bool success, const QString& payload);
     bool sendMailResponse(int requestId, bool success, const QString& payload);
+    bool sendTimeSyncResponse(int requestId, qint64 clientReceiveMs, qint64 clientSendMs);
 
 signals:
     void connectedChanged(bool connected);
@@ -39,6 +40,8 @@ signals:
     void statusChanged(const QString& text);
     void connectionLogAppended(const QString& text);
     void triggerReceived(int seconds);
+    void scheduledTriggerReceived(int seconds, qint64 targetClientMs);
+    void serverTimeReceived(qint64 serverTimeMs, qint64 clientOffsetMs);
     void roleReceived(ClientRole role);
     void teamCodeRequestReceived();
     void teamReadyRequestReceived();

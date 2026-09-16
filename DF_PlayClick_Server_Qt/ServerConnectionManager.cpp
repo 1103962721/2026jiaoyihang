@@ -6,6 +6,7 @@
 #include <string>
 
 #include <QDateTime>
+#include <QRegularExpression>
 
 #include "../Shared/Protocol.h"
 
@@ -152,6 +153,71 @@ int ServerConnectionManager::triggerReadyClientsByRole(int seconds, ClientRole r
         markClientDisconnected(client->id);
     }
     return sentCount;
+}
+
+bool ServerConnectionManager::requestTimeSync(quint64 clientId, int requestId, qint64 serverSendMs, QString& errorText)
+{
+    std::shared_ptr<ClientEntry> client;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        client = findClientLocked(clientId);
+        if (!client || !client->connected)
+        {
+            errorText = QStringLiteral("客户端已断开");
+            return false;
+        }
+        client->timeSyncSendTimesMs.insert(requestId, serverSendMs);
+    }
+    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildTimeSyncRequestMessage(requestId, serverSendMs)))
+    {
+        errorText = QStringLiteral("发送时间同步请求失败，错误码：%1").arg(WSAGetLastError());
+        markClientDisconnected(clientId);
+        return false;
+    }
+    return true;
+}
+
+bool ServerConnectionManager::sendServerTime(quint64 clientId, qint64 serverTimeMs, qint64 clientOffsetMs, QString& errorText)
+{
+    std::shared_ptr<ClientEntry> client;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        client = findClientLocked(clientId);
+        if (!client || !client->connected)
+        {
+            errorText = QStringLiteral("客户端已断开");
+            return false;
+        }
+    }
+    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildServerTimeMessage(
+        static_cast<long long>(serverTimeMs), static_cast<long long>(clientOffsetMs))))
+    {
+        errorText = QStringLiteral("发送服务器时间失败，错误码：%1").arg(WSAGetLastError());
+        markClientDisconnected(clientId);
+        return false;
+    }
+    return true;
+}
+
+bool ServerConnectionManager::sendScheduledTrigger(quint64 clientId, int seconds, qint64 targetClientMs, QString& errorText)
+{
+    std::shared_ptr<ClientEntry> client;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        client = findClientLocked(clientId);
+        if (!client || !client->connected)
+        {
+            errorText = QStringLiteral("客户端已断开");
+            return false;
+        }
+    }
+    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildScheduledTriggerMessage(seconds, targetClientMs)))
+    {
+        errorText = QStringLiteral("发送定时出发指令失败，错误码：%1").arg(WSAGetLastError());
+        markClientDisconnected(clientId);
+        return false;
+    }
+    return true;
 }
 
 bool ServerConnectionManager::triggerSingleClient(quint64 clientId, int seconds, QString& errorText)
@@ -628,6 +694,22 @@ bool ServerConnectionManager::setClientListingStatus(quint64 clientId, const QSt
     emit clientsChanged();
     return true;
 }
+
+void ServerConnectionManager::resetListingQuantities()
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& client : clients_)
+        {
+            client->listingQuantityX = -1;
+            if (client->role == ClientRole::Coin && client->connected)
+            {
+                client->listingStatus = QStringLiteral("待执行");
+            }
+        }
+    }
+    emit clientsChanged();
+}
 int ServerConnectionManager::coinClientCount(bool readyOnly) const
 {
     int count = 0;
@@ -684,6 +766,7 @@ QVector<ClientListItem> ServerConnectionManager::clients() const
         item.teamCode = client->teamCode;
         item.runningAction = client->runningAction;
         item.listingStatus = client->listingStatus;
+        item.listingQuantityX = client->listingQuantityX;
         item.actionRunning = client->actionRunning;
         item.connected = client->connected;
         result.push_back(item);
@@ -730,6 +813,14 @@ void ServerConnectionManager::acceptLoop()
 
         // 每个客户端独立接收 READY 状态，避免单个连接阻塞影响其他客户端。
         client->receiveThread = std::thread(&ServerConnectionManager::receiveLoop, this, client);
+        // 连接建立后立即校准一次时间；使用协议允许的保留编号，
+        // 延迟补偿任务使用控制器分配的更高编号。
+        QString syncError;
+        const qint64 initialSyncSendMs = QDateTime::currentMSecsSinceEpoch();
+        if (!requestTimeSync(client->id, Protocol::InitialTimeSyncRequestId, initialSyncSendMs, syncError))
+        {
+            recordDisconnectReason(client, syncError);
+        }
         emit clientsChanged();
     }
 }
@@ -777,6 +868,19 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
                     client->ready = message.value == 1;
                 }
                 emit clientsChanged();
+            }
+            else if (message.type == Protocol::MessageType::TimeSyncResponse)
+            {
+                qint64 serverSendMs = 0;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    serverSendMs = client->timeSyncSendTimesMs.take(message.requestId);
+                }
+                if (serverSendMs <= 0)
+                    serverSendMs = QDateTime::currentMSecsSinceEpoch();
+                emit timeSyncResponseReceived(client->id, message.requestId,
+                    static_cast<qint64>(message.timestampMs), static_cast<qint64>(message.timestampMs2),
+                    serverSendMs, QDateTime::currentMSecsSinceEpoch());
             }
             else if (message.type == Protocol::MessageType::TeamCodeResponse)
             {
@@ -871,6 +975,9 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
                     // 上架回包后释放动作锁，并将 OCR 最终判断直接显示在对应币号行。
                     client->actionRunning = false;
                     client->runningAction.clear();
+                    const QRegularExpression quantityPattern(QStringLiteral(R"((\d+)\s*/\s*(\d+))"));
+                    const QRegularExpressionMatch quantityMatch = quantityPattern.match(responseText);
+                    client->listingQuantityX = quantityMatch.hasMatch() ? quantityMatch.captured(1).toInt() : -1;
                     if (message.success)
                     {
                         client->listingStatus = QStringLiteral("成功");
