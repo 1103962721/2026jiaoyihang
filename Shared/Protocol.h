@@ -68,7 +68,10 @@ namespace Protocol
         ClientRole role = ClientRoleUtil::DefaultRole;
         std::string payload;
         std::string price;
+        std::string bossPrice;
     };
+
+    inline std::string NormalizeLinePayload(std::string text);
 
     inline std::string BuildHelloMessage()
     {
@@ -80,9 +83,11 @@ namespace Protocol
         return ready ? "READY 1\n" : "READY 0\n";
     }
 
-    inline std::string BuildTriggerMessage(int seconds)
+    inline std::string BuildTriggerMessage(int seconds, const std::string& bossPrice = {})
     {
-        return "TRIGGER " + std::to_string(seconds) + "\n";
+        const std::string normalizedPrice = NormalizeLinePayload(bossPrice);
+        return "TRIGGER " + std::to_string(seconds)
+            + (normalizedPrice.empty() ? "" : " " + normalizedPrice) + "\n";
     }
 
     inline std::string BuildRoleMessage(ClientRole role)
@@ -110,9 +115,12 @@ namespace Protocol
         return "TIME_SYNC_RESPONSE " + std::to_string(requestId) + " " + std::to_string(clientReceiveMs) + " " + std::to_string(clientSendMs) + "\n";
     }
 
-    inline std::string BuildScheduledTriggerMessage(int seconds, long long targetClientMs)
+    inline std::string BuildScheduledTriggerMessage(int seconds, long long targetClientMs,
+        const std::string& bossPrice = {})
     {
-        return "SCHEDULED_TRIGGER " + std::to_string(seconds) + " " + std::to_string(targetClientMs) + "\n";
+        const std::string normalizedPrice = NormalizeLinePayload(bossPrice);
+        return "SCHEDULED_TRIGGER " + std::to_string(seconds) + " " + std::to_string(targetClientMs)
+            + (normalizedPrice.empty() ? "" : " " + normalizedPrice) + "\n";
     }
 
     inline std::string BuildServerTimeMessage(long long serverTimeMs, long long clientOffsetMs)
@@ -660,7 +668,12 @@ namespace Protocol
             long long targetClientMs = 0;
             std::string extra;
             stream >> seconds >> targetClientMs;
-            if (stream.fail() || seconds < 0 || targetClientMs <= 0 || (stream >> extra))
+            if (stream.fail() || seconds < 0 || targetClientMs <= 0)
+            {
+                return false;
+            }
+            stream >> message.bossPrice;
+            if (stream >> extra)
             {
                 return false;
             }
@@ -673,12 +686,17 @@ namespace Protocol
         int value = 0;
         std::string extra;
         stream >> value;
-        if (stream.fail() || (stream >> extra))
+        if (stream.fail())
+        {
+            return false;
+        }
+        stream >> message.bossPrice;
+        if (stream >> extra)
         {
             return false;
         }
 
-        if (command == "READY" && (value == 0 || value == 1))
+        if (command == "READY" && message.bossPrice.empty() && (value == 0 || value == 1))
         {
             message.type = MessageType::Ready;
             message.value = value;

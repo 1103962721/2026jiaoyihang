@@ -27,12 +27,13 @@ public:
     bool isListening() const;
     bool startListening(int port, QString& errorText);
     void stopListening();
-    int triggerReadyClients(int seconds);
-    int triggerReadyClientsByRole(int seconds, ClientRole role);
+    int triggerReadyClients(int seconds, const QString& bossPrice = QString());
+    int triggerReadyClientsByRole(int seconds, ClientRole role, const QString& bossPrice = QString());
     bool requestTimeSync(quint64 clientId, int requestId, qint64 serverSendMs, QString& errorText);
     bool sendServerTime(quint64 clientId, qint64 serverTimeMs, qint64 clientOffsetMs, QString& errorText);
-    bool sendScheduledTrigger(quint64 clientId, int seconds, qint64 targetClientMs, QString& errorText);
+    bool sendScheduledTrigger(quint64 clientId, int seconds, qint64 targetClientMs, const QString& bossPrice, QString& errorText);
     bool triggerSingleClient(quint64 clientId, int seconds, QString& errorText);
+    bool triggerSingleClient(quint64 clientId, int seconds, const QString& bossPrice, QString& errorText);
     bool requestTeamCode(quint64 clientId, QString& errorText);
     bool requestTeamReady(quint64 clientId, QString& errorText);
     bool requestRebindWindow(quint64 clientId, QString& errorText);

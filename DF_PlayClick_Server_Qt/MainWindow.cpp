@@ -7,6 +7,9 @@
 #include <QDateTime>
 #include <QDoubleValidator>
 #include <QDialog>
+#include <QDialogButtonBox>
+#include <QGroupBox>
+#include <QGridLayout>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QIntValidator>
@@ -151,6 +154,8 @@ void MainWindow::buildUi()
     forceStopAllButton_ = new QPushButton(QStringLiteral("停止所有动作"), this);
     forceStopAllButton_->setObjectName(QStringLiteral("forceStopAllButton"));
     mailAllButton_ = new QPushButton(QStringLiteral("全部领取邮件"), this);
+    settingsButton_ = new QPushButton(QStringLiteral("设置"), this);
+    settingsButton_->setToolTip(QStringLiteral("设置发送顺序、执行模式、验证码方式和购买方式"));
     actionRow->addLayout(countdownBox, 1);
     actionRow->addLayout(delayBox, 1);
     actionRow->addLayout(compensationLeadBox, 1);
@@ -190,33 +195,19 @@ void MainWindow::buildUi()
     listingOptionRow->addWidget(listingPurchaseCountSpin_);
     dispatchLayout->addLayout(listingOptionRow);
 
-    // 发送顺序按确认稿使用平铺单选，避免下拉框隐藏当前流程。
-    auto* orderRow = new QHBoxLayout();
-    orderRow->setSpacing(12);
-    coinFirstRadio_ = new QRadioButton(QStringLiteral("币号 → 老板"), this);
-    bossFirstRadio_ = new QRadioButton(QStringLiteral("老板 → 币号"), this);
-    auto* orderButtonGroup = new QButtonGroup(this);
-    orderButtonGroup->setExclusive(true);
-    orderButtonGroup->addButton(coinFirstRadio_);
-    orderButtonGroup->addButton(bossFirstRadio_);
-    coinFirstRadio_->setChecked(true);
-    coinFirstRadio_->setToolTip(QStringLiteral("币号优先：币号 → 延迟 → 老板，同组币号近同时触发"));
-    bossFirstRadio_->setToolTip(QStringLiteral("老板优先：老板触发后，再按设定延迟近同时触发币号客户端"));
-    orderRow->addWidget(coinFirstRadio_);
-    orderRow->addWidget(bossFirstRadio_);
-    normalTriggerRadio_ = new QRadioButton(QStringLiteral("普通模式"), this);
-    compensationTriggerRadio_ = new QRadioButton(QStringLiteral("延迟补偿"), this);
-    auto* triggerModeButtonGroup = new QButtonGroup(this);
-    triggerModeButtonGroup->setExclusive(true);
-    triggerModeButtonGroup->addButton(normalTriggerRadio_);
-    triggerModeButtonGroup->addButton(compensationTriggerRadio_);
-    // 明确设置两个独立单选组的默认状态：币号 → 老板 + 普通模式。
-    normalTriggerRadio_->setChecked(true);
-    compensationTriggerRadio_->setToolTip(QStringLiteral("先同步客户端时间，再按统一目标时间执行两组指令"));
-    orderRow->addWidget(normalTriggerRadio_);
-    orderRow->addWidget(compensationTriggerRadio_);
-    orderRow->addStretch();
-    dispatchLayout->addLayout(orderRow);
+    auto* bossPriceRow = new QHBoxLayout();
+    bossPriceRow->setSpacing(8);
+    auto* bossPriceLabel = new QLabel(QStringLiteral("老板上架价格"), this);
+    bossPriceLabel->setObjectName(QStringLiteral("fieldLabel"));
+    bossPriceEdit_ = new QLineEdit(this);
+    bossPriceEdit_->setPlaceholderText(QStringLiteral("执行时下发给老板客户端的价格"));
+    auto* bossPriceValidator = new QDoubleValidator(0.01, 999999999.0, 4, bossPriceEdit_);
+    bossPriceValidator->setNotation(QDoubleValidator::StandardNotation);
+    bossPriceEdit_->setValidator(bossPriceValidator);
+    bossPriceRow->addWidget(bossPriceLabel);
+    bossPriceRow->addWidget(bossPriceEdit_, 1);
+    dispatchLayout->addLayout(bossPriceRow);
+
     auto* bulkActionRow = new QHBoxLayout();
     bulkActionRow->setSpacing(7);
     bulkActionRow->addStretch();
@@ -225,6 +216,7 @@ void MainWindow::buildUi()
     bulkActionRow->addWidget(rebindAllButton_);
     bulkActionRow->addWidget(forceStopAllButton_);
     bulkActionRow->addWidget(mailAllButton_);
+    bulkActionRow->addWidget(settingsButton_);
     dispatchLayout->addLayout(bulkActionRow);
     topRow->addWidget(createCard(QStringLiteral("全部出发"), dispatchLayout), 7);
     bodyLayout->addLayout(topRow);
@@ -284,8 +276,8 @@ void MainWindow::connectSignals()
     });
     connect(stopButton_, &QPushButton::clicked, &controller_, &ServerController::stopListening);
     connect(triggerAllButton_, &QPushButton::clicked, this, [this]() {
-        controller_.triggerClients(countdownEdit_->text(), groupDelayEdit_->text(), coinFirstRadio_->isChecked(),
-            compensationTriggerRadio_->isChecked(), compensationLeadEdit_->text());
+        controller_.triggerClients(countdownEdit_->text(), groupDelayEdit_->text(), coinFirst_,
+            compensationEnabled_, compensationLeadEdit_->text(), bossPriceEdit_->text());
         appendConnectionLog(QStringLiteral("已提交全部出发指令。"));
     });
     connect(listingButton_, &QPushButton::clicked, this, [this]() {
@@ -295,6 +287,7 @@ void MainWindow::connectSignals()
     connect(forceStopAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestForceStopAllActions);
     connect(mailAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestMailAll);
     connect(rebindAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestRebindAllWindows);
+    connect(settingsButton_, &QPushButton::clicked, this, &MainWindow::showSettingsDialog);
     connect(clientStatusButton_, &QPushButton::clicked, this, [this]() {
         auto* dialog = new QDialog(this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -390,31 +383,12 @@ void MainWindow::connectSignals()
         refreshDetailTable(controller_.clients());
         dialog->show();
     });
-    connect(coinFirstRadio_, &QRadioButton::toggled, this, [this](bool checked) {
-        if (checked)
-        {
-            updateFlowPreview();
-        }
-    });
-    connect(bossFirstRadio_, &QRadioButton::toggled, this, [this](bool checked) {
-        if (checked)
-        {
-            updateFlowPreview();
-        }
-    });
     connect(groupDelayEdit_, &QLineEdit::textChanged, this, [this](const QString&) {
         updateFlowPreview();
     });
     connect(compensationLeadEdit_, &QLineEdit::textChanged, this, [this](const QString&) {
         updateFlowPreview();
     });
-    connect(normalTriggerRadio_, &QRadioButton::toggled, this, [this](bool) {
-        updateFlowPreview();
-    });
-    connect(compensationTriggerRadio_, &QRadioButton::toggled, this, [this](bool) {
-        updateFlowPreview();
-    });
-
     connect(&controller_, &ServerController::clientsChanged, this, &MainWindow::refreshClients);
     connect(&controller_, &ServerController::listeningChanged, this, &MainWindow::updateListeningState);
     connect(&controller_, &ServerController::statusChanged, this, &MainWindow::updateStatus);
@@ -429,7 +403,98 @@ void MainWindow::connectSignals()
                 {
                     QMessageBox::information(this, title, text);
                 }
-            });
+    });
+}
+
+void MainWindow::showSettingsDialog()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("调度设置"));
+    dialog.setModal(true);
+    dialog.resize(560, 360);
+
+    auto* root = new QVBoxLayout(&dialog);
+    root->setContentsMargins(18, 16, 18, 16);
+    root->setSpacing(12);
+    auto* optionsGrid = new QGridLayout();
+    optionsGrid->setHorizontalSpacing(12);
+    optionsGrid->setVerticalSpacing(12);
+
+    auto* orderBox = new QGroupBox(QStringLiteral("发送顺序"), &dialog);
+    auto* orderLayout = new QVBoxLayout(orderBox);
+    auto* coinFirstRadio = new QRadioButton(QStringLiteral("币号 → 老板"), orderBox);
+    auto* bossFirstRadio = new QRadioButton(QStringLiteral("老板 → 币号"), orderBox);
+    auto* orderGroup = new QButtonGroup(orderBox);
+    orderGroup->setExclusive(true);
+    orderGroup->addButton(coinFirstRadio);
+    orderGroup->addButton(bossFirstRadio);
+    coinFirstRadio->setChecked(coinFirst_);
+    bossFirstRadio->setChecked(!coinFirst_);
+    orderLayout->addWidget(coinFirstRadio);
+    orderLayout->addWidget(bossFirstRadio);
+    optionsGrid->addWidget(orderBox, 0, 0);
+
+    auto* modeBox = new QGroupBox(QStringLiteral("模式选择"), &dialog);
+    auto* modeLayout = new QVBoxLayout(modeBox);
+    auto* normalRadio = new QRadioButton(QStringLiteral("普通模式"), modeBox);
+    auto* compensationRadio = new QRadioButton(QStringLiteral("延迟补偿"), modeBox);
+    auto* modeGroup = new QButtonGroup(modeBox);
+    modeGroup->setExclusive(true);
+    modeGroup->addButton(normalRadio);
+    modeGroup->addButton(compensationRadio);
+    normalRadio->setChecked(!compensationEnabled_);
+    compensationRadio->setChecked(compensationEnabled_);
+    modeLayout->addWidget(normalRadio);
+    modeLayout->addWidget(compensationRadio);
+    optionsGrid->addWidget(modeBox, 0, 1);
+
+    auto* captchaBox = new QGroupBox(QStringLiteral("验证码"), &dialog);
+    auto* captchaLayout = new QVBoxLayout(captchaBox);
+    auto* bruteRadio = new QRadioButton(QStringLiteral("暴力"), captchaBox);
+    auto* aiRadio = new QRadioButton(QStringLiteral("AI"), captchaBox);
+    auto* captchaGroup = new QButtonGroup(captchaBox);
+    captchaGroup->setExclusive(true);
+    captchaGroup->addButton(bruteRadio);
+    captchaGroup->addButton(aiRadio);
+    bruteRadio->setChecked(bruteCaptcha_);
+    aiRadio->setChecked(!bruteCaptcha_);
+    captchaLayout->addWidget(bruteRadio);
+    captchaLayout->addWidget(aiRadio);
+    optionsGrid->addWidget(captchaBox, 1, 0);
+
+    auto* purchaseBox = new QGroupBox(QStringLiteral("购买方式"), &dialog);
+    auto* purchaseLayout = new QVBoxLayout(purchaseBox);
+    auto* marketRadio = new QRadioButton(QStringLiteral("交易行"), purchaseBox);
+    auto* loadoutRadio = new QRadioButton(QStringLiteral("配装"), purchaseBox);
+    auto* purchaseGroup = new QButtonGroup(purchaseBox);
+    purchaseGroup->setExclusive(true);
+    purchaseGroup->addButton(marketRadio);
+    purchaseGroup->addButton(loadoutRadio);
+    marketRadio->setChecked(tradePurchase_);
+    loadoutRadio->setChecked(!tradePurchase_);
+    purchaseLayout->addWidget(marketRadio);
+    purchaseLayout->addWidget(loadoutRadio);
+    optionsGrid->addWidget(purchaseBox, 1, 1);
+    root->addLayout(optionsGrid, 1);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("确定"));
+    buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    root->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return;
+    }
+
+    coinFirst_ = coinFirstRadio->isChecked();
+    compensationEnabled_ = compensationRadio->isChecked();
+    bruteCaptcha_ = bruteRadio->isChecked();
+    tradePurchase_ = marketRadio->isChecked();
+    updateFlowPreview();
 }
 
 QWidget* MainWindow::createAppHeader()
@@ -485,6 +550,9 @@ void MainWindow::applyStyle()
 {
     setStyleSheet(QStringLiteral(R"(
         QMainWindow, #windowRoot { background:#eef3fb; color:#15233b; font-family:"Microsoft YaHei UI"; font-size:12px; }
+        QDialog { background:#eef3fb; color:#15233b; font-family:"Microsoft YaHei UI"; font-size:12px; }
+        QGroupBox { border:1px solid #d5dfec; border-radius:8px; margin-top:9px; padding:12px 10px 8px 10px; background:#ffffff; color:#334155; font-weight:800; }
+        QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 5px; background:#eef3fb; }
         #framelessTitleBar { background:#f8fafc; border-bottom:1px solid #dce4ef; }
         #windowTitleText { color:#172033; font-size:12px; font-weight:700; }
         #windowMinimizeDot, #windowMaximizeDot, #windowCloseDot { border:0; border-radius:4px; min-width:9px; min-height:9px; max-width:9px; max-height:9px; padding:0; }
@@ -691,20 +759,26 @@ void MainWindow::updateStatus(const QString& text, ServerStatusTone tone)
 void MainWindow::updateFlowPreview()
 {
     const QString delay = groupDelayEdit_->text().isEmpty() ? QStringLiteral("0") : groupDelayEdit_->text();
-    if (compensationTriggerRadio_ && compensationTriggerRadio_->isChecked())
+    const QString captchaMode = bruteCaptcha_ ? QStringLiteral("暴力") : QStringLiteral("AI");
+    const QString purchaseMode = tradePurchase_ ? QStringLiteral("交易行") : QStringLiteral("配装");
+    const QString optionSummary = QStringLiteral(" · 验证码：%1 · 购买方式：%2")
+        .arg(captchaMode, purchaseMode);
+    if (compensationEnabled_)
     {
         const QString lead = compensationLeadEdit_->text().isEmpty() ? QStringLiteral("1500") : compensationLeadEdit_->text();
-        flowPreviewLabel_->setText(QStringLiteral("延迟补偿：先同步时间（最多 10 秒）→ 提前准备 %1 ms → %2 ms 后执行第二组")
-            .arg(lead, delay));
+        flowPreviewLabel_->setText(QStringLiteral("延迟补偿：先同步时间（最多 10 秒）→ 提前准备 %1 ms → %2 ms 后执行第二组%3")
+            .arg(lead, delay, optionSummary));
         return;
     }
-    if (coinFirstRadio_->isChecked())
+    if (coinFirst_)
     {
-        flowPreviewLabel_->setText(QStringLiteral("流程预览：币号客户端近同时触发 → 精确延迟 %1 ms → 老板触发").arg(delay));
+        flowPreviewLabel_->setText(QStringLiteral("流程预览：币号客户端近同时触发 → 精确延迟 %1 ms → 老板触发%2")
+            .arg(delay, optionSummary));
     }
     else
     {
-        flowPreviewLabel_->setText(QStringLiteral("流程预览：老板触发 → 精确延迟 %1 ms → 币号客户端近同时触发").arg(delay));
+        flowPreviewLabel_->setText(QStringLiteral("流程预览：老板触发 → 精确延迟 %1 ms → 币号客户端近同时触发%2")
+            .arg(delay, optionSummary));
     }
 }
 

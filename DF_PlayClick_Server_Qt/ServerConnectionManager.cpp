@@ -118,13 +118,13 @@ void ServerConnectionManager::stopListening()
     emit clientsChanged();
 }
 
-int ServerConnectionManager::triggerReadyClients(int seconds)
+int ServerConnectionManager::triggerReadyClients(int seconds, const QString& bossPrice)
 {
-    return triggerReadyClientsByRole(seconds, ClientRole::Coin)
-        + triggerReadyClientsByRole(seconds, ClientRole::Boss);
+    return triggerReadyClientsByRole(seconds, ClientRole::Coin, bossPrice)
+        + triggerReadyClientsByRole(seconds, ClientRole::Boss, bossPrice);
 }
 
-int ServerConnectionManager::triggerReadyClientsByRole(int seconds, ClientRole role)
+int ServerConnectionManager::triggerReadyClientsByRole(int seconds, ClientRole role, const QString& bossPrice)
 {
     std::vector<std::shared_ptr<ClientEntry>> readyClients;
     {
@@ -139,7 +139,7 @@ int ServerConnectionManager::triggerReadyClientsByRole(int seconds, ClientRole r
     }
 
     int sentCount = 0;
-    const std::string triggerMessage = Protocol::BuildTriggerMessage(seconds);
+    const std::string triggerMessage = Protocol::BuildTriggerMessage(seconds, bossPrice.toUtf8().toStdString());
     // 同一角色组不主动插入延迟，连续写入 socket 以尽量让多客户端同时开始倒计时。
     for (const auto& client : readyClients)
     {
@@ -199,7 +199,8 @@ bool ServerConnectionManager::sendServerTime(quint64 clientId, qint64 serverTime
     return true;
 }
 
-bool ServerConnectionManager::sendScheduledTrigger(quint64 clientId, int seconds, qint64 targetClientMs, QString& errorText)
+bool ServerConnectionManager::sendScheduledTrigger(quint64 clientId, int seconds, qint64 targetClientMs,
+    const QString& bossPrice, QString& errorText)
 {
     std::shared_ptr<ClientEntry> client;
     {
@@ -211,7 +212,8 @@ bool ServerConnectionManager::sendScheduledTrigger(quint64 clientId, int seconds
             return false;
         }
     }
-    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildScheduledTriggerMessage(seconds, targetClientMs)))
+    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildScheduledTriggerMessage(
+        seconds, targetClientMs, bossPrice.toUtf8().toStdString())))
     {
         errorText = QStringLiteral("发送定时出发指令失败，错误码：%1").arg(WSAGetLastError());
         markClientDisconnected(clientId);
@@ -221,6 +223,11 @@ bool ServerConnectionManager::sendScheduledTrigger(quint64 clientId, int seconds
 }
 
 bool ServerConnectionManager::triggerSingleClient(quint64 clientId, int seconds, QString& errorText)
+{
+    return triggerSingleClient(clientId, seconds, QString(), errorText);
+}
+
+bool ServerConnectionManager::triggerSingleClient(quint64 clientId, int seconds, const QString& bossPrice, QString& errorText)
 {
     std::shared_ptr<ClientEntry> client;
     {
@@ -240,7 +247,8 @@ bool ServerConnectionManager::triggerSingleClient(quint64 clientId, int seconds,
         client->runningAction = QStringLiteral("出发");
     }
 
-    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildTriggerMessage(seconds)))
+    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildTriggerMessage(
+        seconds, bossPrice.toUtf8().toStdString())))
     {
         recordDisconnectReason(client, QStringLiteral("发送单客户端 TRIGGER 失败，错误码：%1").arg(WSAGetLastError()));
         markClientDisconnected(client->id);

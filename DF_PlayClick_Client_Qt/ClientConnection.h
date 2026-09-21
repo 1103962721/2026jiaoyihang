@@ -39,8 +39,8 @@ signals:
     void reconnectingChanged(bool reconnecting);
     void statusChanged(const QString& text);
     void connectionLogAppended(const QString& text);
-    void triggerReceived(int seconds);
-    void scheduledTriggerReceived(int seconds, qint64 targetClientMs);
+    void triggerReceived(int seconds, const QString& bossPrice);
+    void scheduledTriggerReceived(int seconds, qint64 targetClientMs, const QString& bossPrice);
     void serverTimeReceived(qint64 serverTimeMs, qint64 clientOffsetMs);
     void roleReceived(ClientRole role);
     void teamCodeRequestReceived();

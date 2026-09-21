@@ -442,15 +442,17 @@ void ClientConnection::receiveLoop()
 
             if (message.type == Protocol::MessageType::Trigger)
             {
-                QMetaObject::invokeMethod(this, [this, seconds = message.value]() {
-                    emit triggerReceived(seconds);
+                QMetaObject::invokeMethod(this, [this, seconds = message.value,
+                    bossPrice = QString::fromUtf8(message.bossPrice.data(), static_cast<int>(message.bossPrice.size()))]() {
+                    emit triggerReceived(seconds, bossPrice);
                 }, Qt::QueuedConnection);
             }
             else if (message.type == Protocol::MessageType::ScheduledTrigger)
             {
                 QMetaObject::invokeMethod(this, [this, seconds = message.value,
-                    targetClientMs = static_cast<qint64>(message.timestampMs)]() {
-                    emit scheduledTriggerReceived(seconds, targetClientMs);
+                    targetClientMs = static_cast<qint64>(message.timestampMs),
+                    bossPrice = QString::fromUtf8(message.bossPrice.data(), static_cast<int>(message.bossPrice.size()))]() {
+                    emit scheduledTriggerReceived(seconds, targetClientMs, bossPrice);
                 }, Qt::QueuedConnection);
             }
             else if (message.type == Protocol::MessageType::TimeSyncRequest)

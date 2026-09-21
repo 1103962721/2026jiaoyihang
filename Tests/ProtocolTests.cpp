@@ -10,6 +10,8 @@ int main()
     assert(Protocol::BuildReadyMessage(true) == "READY 1\n");
     assert(Protocol::BuildReadyMessage(false) == "READY 0\n");
     assert(Protocol::BuildTriggerMessage(5) == "TRIGGER 5\n");
+    assert(Protocol::BuildTriggerMessage(5, "123.50") == "TRIGGER 5 123.50\n");
+    assert(Protocol::BuildScheduledTriggerMessage(2, 123456789, "88") == "SCHEDULED_TRIGGER 2 123456789 88\n");
     assert(Protocol::BuildRoleMessage(ClientRole::Coin) == "ROLE COIN\n");
     assert(Protocol::BuildRoleMessage(ClientRole::Boss) == "ROLE BOSS\n");
     assert(Protocol::BuildPingMessage() == "PING\n");
@@ -65,6 +67,17 @@ int main()
     assert(Protocol::ParseLine("TRIGGER 0", parsed));
     assert(parsed.type == Protocol::MessageType::Trigger);
     assert(parsed.value == 0);
+
+    assert(Protocol::ParseLine("TRIGGER 3 123.50", parsed));
+    assert(parsed.type == Protocol::MessageType::Trigger);
+    assert(parsed.value == 3);
+    assert(parsed.bossPrice == "123.50");
+
+    assert(Protocol::ParseLine("SCHEDULED_TRIGGER 2 123456789 88", parsed));
+    assert(parsed.type == Protocol::MessageType::ScheduledTrigger);
+    assert(parsed.value == 2);
+    assert(parsed.timestampMs == 123456789);
+    assert(parsed.bossPrice == "88");
 
     assert(Protocol::ParseLine("ROLE COIN", parsed));
     assert(parsed.type == Protocol::MessageType::Role);
@@ -208,6 +221,7 @@ int main()
 
     assert(!Protocol::ParseLine("READY 2", parsed));
     assert(!Protocol::ParseLine("TRIGGER -1", parsed));
+    assert(!Protocol::ParseLine("TRIGGER 1 99 extra", parsed));
     assert(!Protocol::ParseLine("TEAM_CODE_RESPONSE", parsed));
     assert(!Protocol::ParseLine("TEAM_CODE_RESPONSE abc1234", parsed));
     assert(!Protocol::ParseLine("TEAM_CODE_RESPONSE AB12345", parsed));

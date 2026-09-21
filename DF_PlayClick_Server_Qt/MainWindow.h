@@ -36,6 +36,7 @@ private:
     void updateListeningState(bool listening);
     void updateStatus(const QString& text, ServerStatusTone tone);
     void updateFlowPreview();
+    void showSettingsDialog();
     void appendConnectionLog(const QString& text);
     quint64 clientIdForRow(int row) const;
 
@@ -51,13 +52,14 @@ private:
     QLineEdit* compensationLeadEdit_ = nullptr;
     QLineEdit* listingTextEdit_ = nullptr;
     QLineEdit* listingPriceEdit_ = nullptr;
+    QLineEdit* bossPriceEdit_ = nullptr;
     QSpinBox* listingPurchaseCountSpin_ = nullptr;
     QLabel* listingQuantityTotalLabel_ = nullptr;
     QLabel* listingSuccessClientsLabel_ = nullptr;
-    QRadioButton* coinFirstRadio_ = nullptr;
-    QRadioButton* bossFirstRadio_ = nullptr;
-    QRadioButton* normalTriggerRadio_ = nullptr;
-    QRadioButton* compensationTriggerRadio_ = nullptr;
+    bool coinFirst_ = true;
+    bool compensationEnabled_ = true;
+    bool bruteCaptcha_ = true;
+    bool tradePurchase_ = true;
     QPushButton* listenButton_ = nullptr;
     QPushButton* stopButton_ = nullptr;
     QPushButton* triggerAllButton_ = nullptr;
@@ -65,6 +67,7 @@ private:
     QPushButton* rebindAllButton_ = nullptr;
     QPushButton* forceStopAllButton_ = nullptr;
     QPushButton* mailAllButton_ = nullptr;
+    QPushButton* settingsButton_ = nullptr;
     QPushButton* clientStatusButton_ = nullptr;
     QTableWidget* clientTable_ = nullptr;
     QTextEdit* connectionLogEdit_ = nullptr;

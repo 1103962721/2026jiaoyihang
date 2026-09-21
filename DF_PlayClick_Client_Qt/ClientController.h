@@ -100,8 +100,8 @@ private:
     void setReady(bool ready);
     void clearLocalReadyState();
     void setStatus(const QString& text);
-    void startCountdown(int seconds);
-    void startScheduledTrigger(int seconds, qint64 targetClientMs);
+    void startCountdown(int seconds, const QString& bossPrice);
+    void startScheduledTrigger(int seconds, qint64 targetClientMs, const QString& bossPrice);
     void fireScheduledTrigger();
     void updateServerTimeDisplay();
     void tickCountdown();
@@ -126,6 +126,8 @@ private:
     bool executeListingSequence(bool hasExchange, int purchaseCount, const QString& listingPrice, const QString& listingText,
         QString& ocrText, QString& usageResult, QString& errorText);
     bool executeMailSequence(QString& errorText);
+    bool executeCoinRevenueClaimSequence(bool& noRevenue, QString& errorText);
+    bool executeBossListingSequence(const QString& listingPrice, QString& errorText);
     bool waitForAutomation(int milliseconds, QString& errorText);
     bool beginAutomationAction(const QString& actionName);
     void finishAutomationAction();
@@ -161,6 +163,7 @@ private:
     int countdown_ = 0;
     int scheduledTriggerSeconds_ = 0;
     qint64 scheduledTriggerTargetMs_ = 0;
+    QString triggerBossPrice_;
     qint64 serverClockOffsetMs_ = 0;
     bool serverTimeSynchronized_ = false;
     int lastTeamReadyState_ = -2;

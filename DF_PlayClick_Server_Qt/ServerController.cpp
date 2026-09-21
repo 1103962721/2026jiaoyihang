@@ -121,7 +121,8 @@ void ServerController::stopListening()
     emit statusChanged(QStringLiteral("已停止监听"), ServerStatusTone::Neutral);
 }
 
-void ServerController::triggerClients(const QString& countdownText, const QString& groupDelayText, bool coinFirst, bool compensationEnabled, const QString& compensationLeadText)
+void ServerController::triggerClients(const QString& countdownText, const QString& groupDelayText, bool coinFirst,
+    bool compensationEnabled, const QString& compensationLeadText, const QString& bossPriceText)
 {
     const std::wstring countdown = countdownText.toStdWString();
     const int seconds = ParseCountdownSeconds(countdown.c_str());
@@ -152,6 +153,28 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
 
     const ClientRole firstRole = coinFirst ? ClientRole::Coin : ClientRole::Boss;
     const ClientRole secondRole = coinFirst ? ClientRole::Boss : ClientRole::Coin;
+    const QString normalizedBossPrice = bossPriceText.trimmed();
+    if (!normalizedBossPrice.isEmpty())
+    {
+        bossListingPrice_ = normalizedBossPrice;
+    }
+    bool bossPriceOk = false;
+    const double bossPriceValue = normalizedBossPrice.toDouble(&bossPriceOk);
+    bool hasReadyBoss = false;
+    for (const ClientListItem& client : connectionManager_.clients())
+    {
+        if (client.connected && client.ready && client.role == ClientRole::Boss)
+        {
+            hasReadyBoss = true;
+            break;
+        }
+    }
+    if (hasReadyBoss && (!bossPriceOk || bossPriceValue <= 0.0))
+    {
+        emit statusChanged(QStringLiteral("老板上架价格无效"), ServerStatusTone::Error);
+        emit messageRequested(QStringLiteral("错误"), QStringLiteral("请填写有效的老板上架价格后再执行"), true);
+        return;
+    }
     if (compensationEnabled)
     {
         if (compensationRound_.active)
@@ -165,6 +188,7 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
         compensationRound_.seconds = seconds;
         compensationRound_.leadMs = leadMs;
         compensationRound_.groupDelayMs = groupDelayMs;
+        compensationRound_.bossPrice = normalizedBossPrice;
         compensationRound_.firstRole = firstRole;
         compensationRound_.secondRole = secondRole;
         compensationRound_.deadlineMs = QDateTime::currentMSecsSinceEpoch() + 10000;
@@ -195,12 +219,12 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
             .arg(compensationRound_.requestIds.size()), ServerStatusTone::Neutral);
         return;
     }
-    const int firstCount = connectionManager_.triggerReadyClientsByRole(seconds, firstRole);
+    const int firstCount = connectionManager_.triggerReadyClientsByRole(seconds, firstRole, normalizedBossPrice);
     const QString firstText = QString::fromStdWString(ClientRoleUtil::ToDisplayText(firstRole));
     const QString secondText = QString::fromStdWString(ClientRoleUtil::ToDisplayText(secondRole));
 
-    const auto triggerSecondGroup = [this, seconds, secondRole, firstCount, firstText, secondText, groupDelayMs]() {
-        const int secondCount = connectionManager_.triggerReadyClientsByRole(seconds, secondRole);
+    const auto triggerSecondGroup = [this, seconds, secondRole, firstCount, firstText, secondText, groupDelayMs, normalizedBossPrice]() {
+        const int secondCount = connectionManager_.triggerReadyClientsByRole(seconds, secondRole, normalizedBossPrice);
         emit statusChanged(QStringLiteral("全部出发：%1 %2 个 -> 延迟 %3 ms -> %4 %5 个")
             .arg(firstText).arg(firstCount).arg(groupDelayMs).arg(secondText).arg(secondCount), ServerStatusTone::Success);
     };
@@ -252,7 +276,7 @@ void ServerController::finishCompensationSync(bool timedOut)
         const qint64 targetServer = client.role == compensationRound_.firstRole ? targetServerA : targetServerB;
         QString errorText;
         if (connectionManager_.sendScheduledTrigger(client.id, compensationRound_.seconds,
-            targetServer + compensationRound_.offsetsMs.value(client.id), errorText))
+            targetServer + compensationRound_.offsetsMs.value(client.id), compensationRound_.bossPrice, errorText))
             ++sentCount;
     }
     emit statusChanged(QStringLiteral("延迟补偿已下发：%1 个客户端，A 目标 %2，B 目标 %3")
@@ -262,10 +286,12 @@ void ServerController::finishCompensationSync(bool timedOut)
     compensationRound_ = CompensationRound{};
 }
 
-void ServerController::triggerClient(quint64 clientId)
+void ServerController::triggerClient(quint64 clientId, const QString& bossPriceText)
 {
     QString errorText;
-    if (!connectionManager_.triggerSingleClient(clientId, 0, errorText))
+    const QString normalizedBossPrice = bossPriceText.trimmed().isEmpty()
+        ? bossListingPrice_ : bossPriceText.trimmed();
+    if (!connectionManager_.triggerSingleClient(clientId, 0, normalizedBossPrice, errorText))
     {
         emit statusChanged(errorText, ServerStatusTone::Error);
         return;
@@ -760,7 +786,7 @@ void ServerController::processMatchingRescue(const QVector<ClientListItem>& clie
 
     const quint64 clientId = rescueClientId;
     QString errorText;
-    if (!connectionManager_.triggerSingleClient(clientId, 0, errorText))
+    if (!connectionManager_.triggerSingleClient(clientId, 0, bossListingPrice_, errorText))
     {
         emit statusChanged(errorText, ServerStatusTone::Error);
         return;
@@ -863,7 +889,8 @@ void ServerController::processAutoStartTick()
             return;
         }
 
-        triggerClients(autoStartCountdownText_, QStringLiteral("0"), true);
+        triggerClients(autoStartCountdownText_, QStringLiteral("0"), true,
+            false, QStringLiteral("1500"), bossListingPrice_);
         for (auto iterator = autoStartClientStates_.begin(); iterator != autoStartClientStates_.end(); ++iterator)
         {
             if (iterator->stage == AutoStartStage::Loadout)

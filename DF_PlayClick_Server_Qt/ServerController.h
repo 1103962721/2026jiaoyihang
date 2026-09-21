@@ -24,8 +24,9 @@ public slots:
     void startListening(const QString& portText);
     void stopListening();
     void triggerClients(const QString& countdownText, const QString& groupDelayText, bool coinFirst,
-        bool compensationEnabled = false, const QString& compensationLeadText = QStringLiteral("1500"));
-    void triggerClient(quint64 clientId);
+        bool compensationEnabled = false, const QString& compensationLeadText = QStringLiteral("1500"),
+        const QString& bossPriceText = QString());
+    void triggerClient(quint64 clientId, const QString& bossPriceText = QString());
     void requestTeamCode(quint64 clientId);
     void requestTeamReady(quint64 clientId);
     void requestRebindWindow(quint64 clientId);
@@ -114,6 +115,7 @@ private:
         int seconds = 0;
         int leadMs = 1500;
         int groupDelayMs = 0;
+        QString bossPrice;
         ClientRole firstRole = ClientRole::Coin;
         ClientRole secondRole = ClientRole::Boss;
         qint64 deadlineMs = 0;
@@ -123,4 +125,5 @@ private:
     } compensationRound_;
     bool autoStartEnabled_ = false;
     bool autoStartCanTrigger_ = true;
+    QString bossListingPrice_;
 };
