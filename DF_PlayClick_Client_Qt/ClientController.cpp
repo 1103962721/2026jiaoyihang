@@ -29,6 +29,36 @@
 namespace
 {
 const UINT WM_DF_PLAYCLICK_DELAY_CHANGED = RegisterWindowMessageW(L"DF_PlayClick_ClickQueueDelayChanged");
+
+QString NormalizeAmountOcrText(QString text)
+{
+    text.replace(QChar(0xFF0C), QChar(','));
+    text.replace(QChar(0x3002), QChar('.'));
+    text.replace(QChar(0xFF0E), QChar('.'));
+    // 资金 OCR 结果可能包含中文说明，只保留金额解析需要的字符。
+    text.remove(QRegularExpression(QStringLiteral("[^0-9,\.KkMm]")));
+    return text;
+}
+
+QString NormalizeAmountNumericToken(QString value)
+{
+    value.remove(QChar(','));
+    const int dotCount = value.count(QChar('.'));
+    if (dotCount > 1)
+    {
+        value.remove(QChar('.'));
+    }
+    else if (dotCount == 1)
+    {
+        const int dotIndex = value.indexOf(QChar('.'));
+        const int fractionalDigits = value.size() - dotIndex - 1;
+        // OCR 常把千位分隔符识别为点，例如 76.103.271 或 76.103。
+        // 只有三位分组才按千位点处理，1.5 等小数仍保留小数点。
+        if (fractionalDigits == 3 && dotIndex > 0)
+            value.remove(QChar('.'));
+    }
+    return value;
+}
 }
 
 ClientController::ClientController(QObject* parent)
@@ -772,6 +802,13 @@ void ClientController::setStatus(const QString& text)
 
 void ClientController::startCountdown(int seconds, const QString& bossPrice)
 {
+    // 服务端同一轮可能因自动状态切换重复投递 TRIGGER；客户端已有动作或倒计时
+    // 时直接丢弃重复指令，不能重置倒计时并重新进入整套流程。
+    if (automationActionRunning_ || countdownTimer_.isActive() || scheduledTriggerTimer_.isActive())
+    {
+        emit connectionLogAppended(QStringLiteral("忽略重复 TRIGGER：当前已有自动化流程或倒计时正在执行"));
+        return;
+    }
     // 新一轮服务端指令开始时清除上一轮强制停止状态。
     automationCancelRequested_.store(false);
     scheduledTriggerTimer_.stop();
@@ -791,6 +828,11 @@ void ClientController::startCountdown(int seconds, const QString& bossPrice)
 
 void ClientController::startScheduledTrigger(int seconds, qint64 targetClientMs, const QString& bossPrice)
 {
+    if (automationActionRunning_ || countdownTimer_.isActive() || scheduledTriggerTimer_.isActive())
+    {
+        emit connectionLogAppended(QStringLiteral("忽略重复定时 TRIGGER：当前已有自动化流程或倒计时正在执行"));
+        return;
+    }
     // 新一轮定时指令开始时清除上一轮强制停止状态，否则到点会被直接跳过。
     automationCancelRequested_.store(false);
     countdownTimer_.stop();
@@ -865,6 +907,122 @@ void ClientController::clickEnabledTasks()
     const QPoint referencePoint = DispatchReferencePoint(currentRole_);
     POINT point{ referencePoint.x(), referencePoint.y() };
     QString errorText;
+    const QString actionName = currentRole_ == ClientRole::Boss
+        ? QStringLiteral("老板上架") : QStringLiteral("领取交易收益");
+    // 先占用自动化锁，再执行首个固定点击，避免重复 TRIGGER 在入口处重入。
+    if (!beginAutomationAction(actionName))
+    {
+        setStatus(QStringLiteral("%1点击完成，已有自动化流程正在执行").arg(actionName));
+        return;
+    }
+    struct ActionGuard
+    {
+        ClientController* controller = nullptr;
+        ~ActionGuard() { if (controller) controller->finishAutomationAction(); }
+    } guard{ this };
+
+    const auto sendAutomaticListingResponse = [this](bool success, const QString& text) {
+        if (!hasLastListingRequest_ || lastListingRequestId_ <= 0)
+        {
+            emit connectionLogAppended(QStringLiteral("自动上架回报跳过：没有可关联的上架请求，结果=%1，%2")
+                .arg(success ? QStringLiteral("成功") : QStringLiteral("失败"), text));
+            return;
+        }
+        const bool sent = connection_.sendListingResponse(lastListingRequestId_, success, text);
+        emit connectionLogAppended(QStringLiteral("自动上架回报：requestId=%1，结果=%2，发送=%3，%4")
+            .arg(lastListingRequestId_)
+            .arg(success ? QStringLiteral("成功") : QStringLiteral("失败"))
+            .arg(sent ? QStringLiteral("成功") : QStringLiteral("失败"), text));
+    };
+    const auto reportStableAmount = [this, &errorText](POINT movePoint, int x, int y, int width, int height,
+        const QString& prefix, bool reportToServer) {
+        QRegularExpression amountPattern(QStringLiteral(R"((\d[\d,.]*\d|\d)[\s]*([KkMm])?)"));
+        QString previous;
+        int stableCount = 0;
+        QElapsedTimer timer;
+        timer.start();
+        // 只在进入金额区域时等待一次；后续识别按 100ms 轮询，避免每次 OCR 都额外等待 1 秒。
+        if (!input_.moveReferencePoint(boundHwnd_, movePoint, 2560, 1440, errorText))
+            return false;
+        if (!waitForAutomation(1000, errorText))
+            return false;
+        while (timer.elapsed() < 5000)
+        {
+            OcrRegionConfig region;
+            region.enabled = true;
+            region.x = x; region.y = y; region.width = width; region.height = height;
+            region.referenceWidth = 2560; region.referenceHeight = 1440;
+            QString ocrError;
+            const QString imagePath = captureOcrRegion(region, prefix, ocrError);
+            QString text;
+            if (!imagePath.isEmpty())
+            {
+                text = umiOcrRunner_.recognizeImage(
+                    imagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), ocrError).simplified();
+                QFile::remove(imagePath);
+            }
+            emit connectionLogAppended(QStringLiteral("金额OCR[%1]：原始文本“%2”").arg(prefix, text));
+            const QString normalizedOcrText = NormalizeAmountOcrText(text);
+            QRegularExpressionMatch match;
+            double largestValue = -1.0;
+            auto iterator = amountPattern.globalMatch(normalizedOcrText);
+            while (iterator.hasNext())
+            {
+                const auto candidate = iterator.next();
+                const QString candidateValue = NormalizeAmountNumericToken(candidate.captured(1));
+                bool candidateOk = false;
+                const double numericValue = candidateValue.toDouble(&candidateOk);
+                if (!candidateOk)
+                    continue;
+                if (candidate.captured(2).isEmpty() && candidateValue.size() <= 1)
+                    continue;
+                if (!match.hasMatch()
+                    || (!candidate.captured(2).isEmpty() && match.captured(2).isEmpty())
+                    || (candidate.captured(2).isEmpty() == match.captured(2).isEmpty()
+                        && numericValue > largestValue))
+                {
+                    match = candidate;
+                    largestValue = numericValue;
+                }
+            }
+            if (match.hasMatch())
+            {
+                const QString normalized = NormalizeAmountNumericToken(match.captured(1));
+                bool ok = false;
+                double value = normalized.toDouble(&ok);
+                if (ok)
+                {
+                    const QString suffix = match.captured(2).toUpper();
+                    if (suffix == QStringLiteral("K")) value *= 1000.0;
+                    else if (suffix == QStringLiteral("M")) value *= 1000000.0;
+                    const QString sample = QString::number(static_cast<qint64>(value));
+                    stableCount = sample == previous ? stableCount + 1 : 1;
+                    previous = sample;
+                    emit connectionLogAppended(QStringLiteral("金额OCR[%1]：识别到 %2，连续稳定 %3/3")
+                        .arg(prefix, sample).arg(stableCount));
+                    if (stableCount >= 3)
+                    {
+                        if (connection_.sendAmountReport(sample.toLongLong()))
+                        {
+                            emit connectionLogAppended(QStringLiteral("金额OCR[%1]：已回报确认金额 %2（%3）")
+                                .arg(prefix, sample, reportToServer ? QStringLiteral("老板") : QStringLiteral("币号")));
+                            return true;
+                        }
+                        emit connectionLogAppended(QStringLiteral("金额OCR[%1]：金额 %2 回报服务端失败")
+                            .arg(prefix, sample));
+                        return false;
+                    }
+                }
+            }
+            else
+            {
+                emit connectionLogAppended(QStringLiteral("金额OCR[%1]：未识别到金额，OCR文本“%2”错误“%3”")
+                    .arg(prefix, text, ocrError));
+            }
+            if (!waitForAutomation(100, errorText)) return false;
+        }
+        return false;
+    };
     // 出发点不接受用户取点，只按角色使用 2560x1440 固定坐标并适配当前客户区。
     if (!input_.clickReferencePoint(boundHwnd_, point, 2560, 1440, clickQueueDelayMs_, errorText))
     {
@@ -875,19 +1033,6 @@ void ClientController::clickEnabledTasks()
 
     const QString roleText = QString::fromStdWString(ClientRoleUtil::ToDisplayText(currentRole_));
     setStatus(QStringLiteral("%1固定坐标点击完成").arg(roleText));
-
-    const QString actionName = currentRole_ == ClientRole::Boss
-        ? QStringLiteral("老板上架") : QStringLiteral("领取交易收益");
-    if (!beginAutomationAction(actionName))
-    {
-        setStatus(QStringLiteral("%1点击完成，已有自动化流程正在执行").arg(roleText));
-        return;
-    }
-    struct ActionGuard
-    {
-        ClientController* controller = nullptr;
-        ~ActionGuard() { if (controller) controller->finishAutomationAction(); }
-    } guard{ this };
 
     if (currentRole_ == ClientRole::Boss)
     {
@@ -905,7 +1050,16 @@ void ClientController::clickEnabledTasks()
     bool noRevenue = false;
     if (!executeCoinRevenueClaimSequence(noRevenue, errorText))
     {
+        sendAutomaticListingResponse(false, QStringLiteral("币号交易收益领取失败：%1").arg(errorText));
         setStatus(QStringLiteral("币号交易收益领取失败：%1").arg(errorText));
+        return;
+    }
+    // 币号资金区域包含货币名称和说明文字，金额解析器只提取数字及分隔符，忽略中文。
+    if (!reportStableAmount(POINT{ 1992, 70 }, 1887, 320, 450, 95,
+        QStringLiteral("coin_amount"), false))
+    {
+        sendAutomaticListingResponse(false, QStringLiteral("币号金额识别失败：%1").arg(errorText));
+        setStatus(QStringLiteral("币号金额识别失败：%1").arg(errorText));
         return;
     }
     // 执行完成后复用同一套上架函数，形成“执行 -> 上架 -> 回报”的闭环。
@@ -918,6 +1072,7 @@ void ClientController::clickEnabledTasks()
         if (!executeListingSequence(lastListingHasExchange_, lastListingPurchaseCount_, lastListingLoadoutMode_,
             lastListingPrice_, lastListingText_, listingOcrText, listingUsageResult, errorText))
         {
+            sendAutomaticListingResponse(false, QStringLiteral("自动上架失败：%1").arg(errorText));
             setStatus(QStringLiteral("币号执行完成，但自动上架失败：%1").arg(errorText));
             return;
         }
@@ -929,11 +1084,11 @@ void ClientController::clickEnabledTasks()
             : (usageOk
                 ? QStringLiteral("OCR识别到上架，%1").arg(listingUsageResult)
                 : listingUsageResult);
-        const int internalRequestId = lastListingRequestId_ > 0 ? lastListingRequestId_ : 1;
-        connection_.sendListingResponse(internalRequestId, usageOk, responseText);
+        sendAutomaticListingResponse(usageOk, responseText);
         setStatus(QStringLiteral("币号执行完成，已自动重新上架"));
         return;
     }
+    sendAutomaticListingResponse(false, QStringLiteral("币号执行完成，但没有可复用的上架配置"));
     setStatus(noRevenue
         ? QStringLiteral("币号执行完成，当前没有交易收益")
         : QStringLiteral("币号执行完成，交易收益已领取"));
@@ -1540,7 +1695,7 @@ bool ClientController::waitForListingQuantityReady(QString& errorText, const QSt
                     }
                 }
             }
-            if (!waitForAutomation(PollIntervalMs, errorText)) return false;
+            if (!waitForAutomation(300, errorText)) return false;
         }
         log(QStringLiteral("%1：下架后仍未归零，继续下一轮下架").arg(prefix));
     }
@@ -1589,6 +1744,7 @@ bool ClientController::executeCoinRevenueClaimSequence(bool& noRevenue, QString&
         }
         return true;
     };
+
     if (!waitForAutomation(2000, errorText))
         return false;
 
@@ -1817,6 +1973,95 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
         return true;
     };
 
+    // 首次准备状态确认后，读取老板当前金额作为本轮收益统计的初始基准。
+    // 金额支持无单位、K、M，并要求连续三次 OCR 结果一致后才回报。
+    const auto reportBossAmountBeforeReady = [this, &errorText]() {
+        const QRegularExpression amountPattern(
+            QStringLiteral(R"((\d[\d,.]*\d|\d)[\s]*([KkMm])?)"));
+        QString previous;
+        int stableCount = 0;
+        QElapsedTimer timer;
+        timer.start();
+        // 移动到金额区域后只等待一次，随后每 100ms 重新截图识别。
+        if (!input_.moveReferencePoint(boundHwnd_, POINT{ 2128, 67 }, 2560, 1440, errorText))
+            return false;
+        if (!waitForAutomation(1000, errorText))
+            return false;
+        while (timer.elapsed() < 5000)
+        {
+            OcrRegionConfig region;
+            region.enabled = true;
+            // 老板资金区域同样包含中文说明，金额解析器只提取数字及分隔符，忽略中文。
+            region.x = 2015; region.y = 325; region.width = 450; region.height = 95;
+            region.referenceWidth = 2560; region.referenceHeight = 1440;
+            QString ocrError;
+            const QString imagePath = captureOcrRegion(
+                region, QStringLiteral("boss_return_amount"), ocrError);
+            QString text;
+            if (!imagePath.isEmpty())
+            {
+                text = umiOcrRunner_.recognizeImage(
+                    imagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), ocrError).simplified();
+                QFile::remove(imagePath);
+            }
+            emit connectionLogAppended(QStringLiteral("金额OCR[boss_return_amount]：原始文本“%1”").arg(text));
+            const QString normalizedOcrText = NormalizeAmountOcrText(text);
+            QRegularExpressionMatch match;
+            double largestValue = -1.0;
+            auto iterator = amountPattern.globalMatch(normalizedOcrText);
+            while (iterator.hasNext())
+            {
+                const auto candidate = iterator.next();
+                const QString candidateValue = NormalizeAmountNumericToken(candidate.captured(1));
+                bool candidateOk = false;
+                const double numericValue = candidateValue.toDouble(&candidateOk);
+                if (!candidateOk)
+                    continue;
+                if (candidate.captured(2).isEmpty() && candidateValue.size() <= 1)
+                    continue;
+                if (!match.hasMatch()
+                    || (!candidate.captured(2).isEmpty() && match.captured(2).isEmpty())
+                    || (candidate.captured(2).isEmpty() == match.captured(2).isEmpty()
+                        && numericValue > largestValue))
+                {
+                    match = candidate;
+                    largestValue = numericValue;
+                }
+            }
+            if (match.hasMatch())
+            {
+                const QString valueText = NormalizeAmountNumericToken(match.captured(1));
+                bool ok = false;
+                double value = valueText.toDouble(&ok);
+                if (ok)
+                {
+                    const QString suffix = match.captured(2).toUpper();
+                    if (suffix == QStringLiteral("K")) value *= 1000.0;
+                    else if (suffix == QStringLiteral("M")) value *= 1000000.0;
+                    const QString sample = QString::number(static_cast<qint64>(value));
+                    stableCount = sample == previous ? stableCount + 1 : 1;
+                    previous = sample;
+                    emit connectionLogAppended(QStringLiteral(
+                        "金额OCR[boss_return_amount]：%1，稳定 %2/3").arg(sample).arg(stableCount));
+                    if (stableCount >= 3)
+                    {
+                        if (connection_.sendAmountReport(sample.toLongLong()))
+                        {
+                            emit connectionLogAppended(QStringLiteral(
+                                "金额OCR[boss_return_amount]：已回报老板金额 %1").arg(sample));
+                            return true;
+                        }
+                        errorText = QStringLiteral("初始老板金额回报服务端失败");
+                        return false;
+                    }
+                }
+            }
+            if (!waitForAutomation(100, errorText))
+                return false;
+        }
+        return false;
+    };
+
     // 执行入口点击后，先清理可能残留的价格提示/确认方案弹窗，再进行初始化数字检测。
     {
         OcrRegionConfig promptRegion;
@@ -1870,6 +2115,7 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
         emit connectionLogAppended(QStringLiteral("老板执行：价格提示清理阶段结束"));
     }
 
+    // 首次执行准备数字 OCR 前，先读取老板当前金额作为本轮初始基准。
     // 首轮初始化检测：执行流程开始前先确认老板当前界面是否已有准备数字。
     // 该结果只作为本轮配对的初始化依据，服务端已将本轮客户端标记为“执行中”，
     // 因此不会提前触发下一轮自动执行；流程末尾仍会再次确认并回报准备成功。
@@ -1974,8 +2220,8 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
                 if (!click(panelPoint) || !waitForAutomation(300, errorText))
                     return false;
             }
-            if (!click(inputPoint) || !waitForAutomation(800, errorText)
-                || !click(inputPoint) || !waitForAutomation(1500, errorText)
+            if (!click(inputPoint) || !waitForAutomation(500, errorText)
+                || !click(inputPoint)
                 || !input_.pressKeyRepeated(VK_BACK, 5, 20, errorText)
                 || !waitForAutomation(500, errorText)
                 || !input_.pasteText(boundHwnd_, currentBossPrice, errorText)
@@ -2007,7 +2253,76 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
     };
 
     SetForegroundWindow(boundHwnd_);
-    if (!findAndClick(173, 44, 1217, 60, QStringLiteral("仓库"), QStringLiteral("boss_warehouse"))
+    const auto clearBossPricePrompt = [&]() {
+        OcrRegionConfig promptRegion;
+        promptRegion.enabled = true;
+        promptRegion.x = 538;
+        promptRegion.y = 313;
+        promptRegion.width = 275;
+        promptRegion.height = 60;
+        promptRegion.referenceWidth = ReferenceWidth;
+        promptRegion.referenceHeight = ReferenceHeight;
+        QElapsedTimer promptTimer;
+        promptTimer.start();
+        int promptAttempt = 0;
+        bool foundAny = false;
+        while (promptTimer.elapsed() < TimeoutMs)
+        {
+            if (automationCancelRequested_.load())
+            {
+                errorText = QStringLiteral("用户或服务端已强制停止当前动作");
+                return false;
+            }
+            QString ocrError;
+            const QString imagePath = captureOcrRegion(
+                promptRegion, QStringLiteral("boss_warehouse_prompt_%1").arg(++promptAttempt), ocrError);
+            QString recognized;
+            if (!imagePath.isEmpty())
+            {
+                recognized = umiOcrRunner_.recognizeImage(
+                    imagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), ocrError);
+                QFile::remove(imagePath);
+            }
+            const bool emptyOcr = ocrError.contains(QStringLiteral("No text found in image"), Qt::CaseInsensitive);
+            if (!ocrError.isEmpty() && !emptyOcr)
+            {
+                errorText = ocrError;
+                return false;
+            }
+            const bool promptFound = recognized.contains(QStringLiteral("价格变动提醒"), Qt::CaseInsensitive)
+                || recognized.contains(QStringLiteral("确认实现方案"), Qt::CaseInsensitive);
+            emit connectionLogAppended(QStringLiteral("老板仓库回调：第 %1 次检查价格提示，结果=%2")
+                .arg(promptAttempt)
+                .arg(promptFound ? QStringLiteral("发现") : QStringLiteral("未发现")));
+            if (promptFound)
+            {
+                foundAny = true;
+                if (!input_.pressKey(VK_ESCAPE, errorText)
+                    || !waitForAutomation(1500, errorText))
+                    return false;
+            }
+            else if (foundAny)
+            {
+                return true;
+            }
+            else if (!waitForAutomation(100, errorText))
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    bool warehouseFound = findAndClick(173, 44, 1217, 60, QStringLiteral("仓库"), QStringLiteral("boss_warehouse"));
+    if (!warehouseFound)
+    {
+        emit connectionLogAppended(QStringLiteral("老板执行：仓库识别失败，开始回调清理价格提示"));
+        if (!clearBossPricePrompt())
+            return false;
+        emit connectionLogAppended(QStringLiteral("老板执行：价格提示回调结束，重新识别仓库"));
+        warehouseFound = findAndClick(173, 44, 1217, 60, QStringLiteral("仓库"), QStringLiteral("boss_warehouse_retry"));
+    }
+    if (!warehouseFound
         || !findAndClick(394, 1380, 80, 45, QStringLiteral("转移全部"), QStringLiteral("boss_transfer_all"))
         || !findAndClick(173, 44, 1217, 60, QStringLiteral("交易行"), QStringLiteral("boss_market"))
         || !findAndClick(195, 125, 495, 46, QStringLiteral("出售"), QStringLiteral("boss_sell")))
@@ -2177,6 +2492,13 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
         || !waitForAutomation(1500, errorText)
         || !click(finalSelection))
     {
+        return false;
+    }
+
+    // 老板领取完成返回后，先识别金额；金额确认成功后再识别右下角准备数字。
+    if (!reportBossAmountBeforeReady())
+    {
+        errorText = QStringLiteral("返回准备状态前未识别到稳定老板金额");
         return false;
     }
 
@@ -2905,8 +3227,8 @@ bool ClientController::executeListingSequence(bool hasExchange, int purchaseCoun
         {
             if (stopIfRequested()) return false;
             if (!click(panelPoint) || !waitForAutomation(1500, errorText)
-                || !click(inputPoint) || !waitForAutomation(800, errorText)
-                || !click(inputPoint) || !waitForAutomation(1500, errorText)
+                || !click(inputPoint) || !waitForAutomation(500, errorText)
+                || !click(inputPoint)
                 || !input_.pressKeyRepeated(VK_BACK, 5, 20, errorText)
                 || !waitForAutomation(500, errorText)
                 || !input_.pasteText(boundHwnd_, price.trimmed(), errorText)

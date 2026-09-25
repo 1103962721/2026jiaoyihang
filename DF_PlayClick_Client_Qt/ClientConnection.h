@@ -33,6 +33,7 @@ public:
     bool sendSaveLoadoutResponse(int requestId, bool success, const QString& payload);
     bool sendListingResponse(int requestId, bool success, const QString& payload);
     bool sendMailResponse(int requestId, bool success, const QString& payload);
+    bool sendAmountReport(qint64 amount);
     bool sendTimeSyncResponse(int requestId, qint64 clientReceiveMs, qint64 clientSendMs);
 
 signals:

@@ -56,6 +56,8 @@ public:
     bool setClientRemark(quint64 clientId, const QString& remark);
     bool setClientRole(quint64 clientId, ClientRole role);
     bool setClientListingStatus(quint64 clientId, const QString& status);
+    bool updateBossAmount(quint64 clientId, qint64 amount, QString& errorText);
+    bool setBossExpectedAmount(quint64 clientId, qint64 amount, QString& errorText);
     void resetListingQuantities();
     int coinClientCount(bool readyOnly) const;
     bool kickClient(quint64 clientId);
@@ -71,6 +73,7 @@ signals:
     void saveLoadoutResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void listingResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void mailResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
+    void amountReportReceived(quint64 clientId, qint64 amount);
     void timeSyncResponseReceived(quint64 clientId, int requestId, qint64 clientReceiveMs, qint64 clientSendMs,
         qint64 serverSendMs, qint64 serverReceiveMs);
 
@@ -91,6 +94,13 @@ private:
         QString runningAction;
         QString listingStatus = QStringLiteral("???");
         int listingQuantityX = -1;
+        QString currentAmount = QStringLiteral("-");
+        QString expectedAmount = QStringLiteral("-");
+        qint64 cumulativeIncome = 0;
+        int lowPriceCount = 0;
+        int highPriceCount = 0;
+        int consecutiveHighPriceCount = 0;
+        bool hasAmountBaseline = false;
         bool actionRunning = false;
         bool ready = false;
         bool connected = true;

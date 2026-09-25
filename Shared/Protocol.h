@@ -42,7 +42,8 @@ namespace Protocol
         ListingRequest,
         ListingResponse,
         MailRequest,
-        MailResponse
+        MailResponse,
+        AmountReport
     };
 
     enum class LoadoutType
@@ -292,6 +293,11 @@ namespace Protocol
     inline std::string BuildMailResponseMessage(int requestId, bool success, const std::string& payload)
     {
         return "MAIL_RESPONSE " + std::to_string(requestId) + (success ? " OK " : " ERROR ") + NormalizeLinePayload(payload) + "\n";
+    }
+
+    inline std::string BuildAmountReportMessage(long long amount)
+    {
+        return "AMOUNT_REPORT " + std::to_string(amount) + "\n";
     }
 
     inline bool ParseLine(const std::string& line, ParsedMessage& message)
@@ -748,6 +754,18 @@ namespace Protocol
             message.requestId = requestId;
             message.success = status == "OK";
             message.payload = payload;
+            return true;
+        }
+
+        if (command == "AMOUNT_REPORT")
+        {
+            long long amount = 0;
+            std::string extra;
+            stream >> amount;
+            if (stream.fail() || amount < 0 || (stream >> extra))
+                return false;
+            message.type = MessageType::AmountReport;
+            message.timestampMs = amount;
             return true;
         }
 

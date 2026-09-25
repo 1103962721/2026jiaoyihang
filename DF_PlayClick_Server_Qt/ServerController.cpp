@@ -119,6 +119,35 @@ ServerController::ServerController(QObject* parent)
     connect(&connectionManager_, &ServerConnectionManager::clientsChanged, this, [this]() {
         emit clientsChanged(connectionManager_.clients());
     });
+    connect(&connectionManager_, &ServerConnectionManager::amountReportReceived, this,
+        [this](quint64 clientId, qint64 amount) {
+            QString errorText;
+            if (!connectionManager_.updateBossAmount(clientId, amount, errorText))
+                return;
+            const auto current = connectionManager_.clients();
+            for (const auto& client : current)
+            {
+                if (client.id != clientId)
+                    continue;
+                const QString roleText = client.role == ClientRole::Boss
+                    ? QStringLiteral("老板") : QStringLiteral("币号");
+                emit connectionLogAppended(QStringLiteral("%1客户端 %2 金额更新：%3")
+                    .arg(roleText).arg(clientId).arg(amount));
+                if (client.role == ClientRole::Boss
+                    && client.expectedAmount != QStringLiteral("-")
+                    && amount >= client.expectedAmount.toLongLong())
+                {
+                    requestForceStopAction(clientId);
+                    emit connectionLogAppended(QStringLiteral("老板客户端 %1 已达到期望金额，停止该客户端").arg(clientId));
+                }
+                if (client.consecutiveHighPriceCount >= 3)
+                {
+                    requestForceStopAllActions();
+                    emit connectionLogAppended(QStringLiteral("老板客户端 %1 连续三次高价，停止所有客户端").arg(clientId));
+                }
+                break;
+            }
+        });
     connect(&connectionManager_, &ServerConnectionManager::listeningChanged, this, &ServerController::listeningChanged);
     connect(&connectionManager_, &ServerConnectionManager::networkError, this, [this](const QString& text) {
         emit statusChanged(text, ServerStatusTone::Error);
@@ -467,6 +496,30 @@ void ServerController::requestForceStopAction(quint64 clientId)
     resetAutoStartClient(clientId);
     connectionManager_.forceResetClientAction(clientId);
     emit statusChanged(QStringLiteral("已向客户端发送强制停止指令"), ServerStatusTone::Success);
+}
+
+void ServerController::setBossExpectedAmount(quint64 clientId, const QString& amountText)
+{
+    if (amountText.trimmed().isEmpty())
+    {
+        QString errorText;
+        if (connectionManager_.setBossExpectedAmount(clientId, -1, errorText))
+        {
+            emit statusChanged(QStringLiteral("已清除老板期望金额，将持续执行"), ServerStatusTone::Success);
+            return;
+        }
+        emit statusChanged(errorText, ServerStatusTone::Error);
+        return;
+    }
+    bool ok = false;
+    const qint64 amount = amountText.trimmed().toLongLong(&ok);
+    QString errorText;
+    if (!ok || amount < 0 || !connectionManager_.setBossExpectedAmount(clientId, amount, errorText))
+    {
+        emit statusChanged(ok ? errorText : QStringLiteral("期望金额必须是非负整数"), ServerStatusTone::Error);
+        return;
+    }
+    emit statusChanged(QStringLiteral("已设置老板期望金额"), ServerStatusTone::Success);
 }
 
 void ServerController::requestForceStopAllActions()

@@ -83,7 +83,6 @@ private:
     QPushButton* triggerAllButton_ = nullptr;
     QPushButton* listingButton_ = nullptr;
     QPushButton* saveLoadoutButton_ = nullptr;
-    QPushButton* saveBossLoadoutButton_ = nullptr;
     QPushButton* coinSemiAutoButton_ = nullptr;
     QPushButton* rebindAllButton_ = nullptr;
     QPushButton* forceStopAllButton_ = nullptr;

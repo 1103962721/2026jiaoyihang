@@ -55,6 +55,7 @@ public slots:
     void setAutoExecuteThresholds(int bossCount, int coinCount);
     void setAutoExecuteEnabled(bool enabled);
     void kickClient(quint64 clientId);
+    void setBossExpectedAmount(quint64 clientId, const QString& amountText);
 
 signals:
     void clientsChanged(const QVector<ClientListItem>& clients);

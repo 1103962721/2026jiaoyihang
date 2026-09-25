@@ -405,6 +405,13 @@ bool ClientConnection::sendMailResponse(int requestId, bool success, const QStri
     return true;
 }
 
+bool ClientConnection::sendAmountReport(qint64 amount)
+{
+    if (!connected_ || socket_ == INVALID_SOCKET)
+        return false;
+    return SocketUtil::SendLine(socket_, Protocol::BuildAmountReportMessage(amount));
+}
+
 bool ClientConnection::sendTimeSyncResponse(int requestId, qint64 clientReceiveMs, qint64 clientSendMs)
 {
     if (!connected_ || socket_ == INVALID_SOCKET)

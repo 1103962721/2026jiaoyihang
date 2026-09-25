@@ -32,6 +32,13 @@ struct ClientListItem
     QString runningAction;
     QString listingStatus = QStringLiteral("待执行");
     int listingQuantityX = -1;
+    QString currentAmount = QStringLiteral("-");
+    QString expectedAmount = QStringLiteral("-");
+    qint64 cumulativeIncome = 0;
+    int lowPriceCount = 0;
+    int highPriceCount = 0;
+    int consecutiveHighPriceCount = 0;
+    bool hasAmountBaseline = false;
     bool actionRunning = false;
     bool connected = true;
 };

@@ -167,7 +167,12 @@ int ServerConnectionManager::triggerClientsByIds(int seconds, const QVector<quin
         {
             const auto client = findClientLocked(clientId);
             if (client && client->connected && client->ready)
+            {
+                // “执行”后币号会自动复用上架流程，先持有动作锁，确保 ListingResponse 不会被过滤。
+                client->actionRunning = true;
+                client->runningAction = QStringLiteral("执行中");
                 selectedClients.push_back(client);
+            }
         }
     }
 
@@ -181,8 +186,14 @@ int ServerConnectionManager::triggerClientsByIds(int seconds, const QVector<quin
             continue;
         }
         recordDisconnectReason(client, QStringLiteral("发送指定客户端 TRIGGER 失败，错误码：%1").arg(WSAGetLastError()));
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            client->actionRunning = false;
+            client->runningAction.clear();
+        }
         markClientDisconnected(client->id);
     }
+    emit clientsChanged();
     return sentCount;
 }
 
@@ -242,14 +253,27 @@ bool ServerConnectionManager::sendScheduledTrigger(quint64 clientId, int seconds
             errorText = QStringLiteral("客户端已断开");
             return false;
         }
+        if (client->actionRunning)
+        {
+            errorText = QStringLiteral("该客户端正在执行：%1").arg(client->runningAction);
+            return false;
+        }
+        client->actionRunning = true;
+        client->runningAction = QStringLiteral("执行中");
     }
     if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildScheduledTriggerMessage(
         seconds, targetClientMs, bossPrice.toUtf8().toStdString())))
     {
         errorText = QStringLiteral("发送定时出发指令失败，错误码：%1").arg(WSAGetLastError());
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            client->actionRunning = false;
+            client->runningAction.clear();
+        }
         markClientDisconnected(clientId);
         return false;
     }
+    emit clientsChanged();
     return true;
 }
 
@@ -690,22 +714,18 @@ bool ServerConnectionManager::forceResetClientAction(quint64 clientId)
         }
         client->actionRunning = false;
         client->runningAction.clear();
+        // 单客户端停止与“停止所有动作”保持相同的业务状态重置范围，
+        // 但不影响其他客户端的任务和金额统计。
+        client->listingStatus = client->role == ClientRole::Coin
+            ? QStringLiteral("待执行") : QStringLiteral("不适用");
+        client->listingQuantityX = -1;
+        client->teamReadyText = QStringLiteral("未识别");
+        client->teamReadyState = -1;
+        client->teamReadyCurrent = 0;
+        client->teamReadyTotal = 0;
+        client->teamReadyUpdatedAtMs = 0;
         if (client->teamCode == QStringLiteral("获取中..."))
-        {
             client->teamCode.clear();
-        }
-        if (client->teamReadyText == QStringLiteral("识别中...")
-            || client->teamReadyText == QStringLiteral("匹配中")
-            || client->teamReadyText == QStringLiteral("正在加载")
-            || client->teamReadyText == QStringLiteral("进入对局")
-            || client->teamReadyText == QStringLiteral("配装中"))
-        {
-            client->teamReadyText = QStringLiteral("未识别");
-            client->teamReadyState = -1;
-            client->teamReadyCurrent = 0;
-            client->teamReadyTotal = 0;
-            client->teamReadyUpdatedAtMs = 0;
-        }
     }
 
     emit clientsChanged();
@@ -794,6 +814,59 @@ bool ServerConnectionManager::setClientListingStatus(quint64 clientId, const QSt
     return true;
 }
 
+bool ServerConnectionManager::setBossExpectedAmount(quint64 clientId, qint64 amount, QString& errorText)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto client = findClientLocked(clientId);
+    if (!client || client->role != ClientRole::Boss)
+    {
+        errorText = QStringLiteral("客户端不是老板或已断开");
+        return false;
+    }
+    client->expectedAmount = amount < 0 ? QStringLiteral("-") : QString::number(amount);
+    return true;
+}
+
+bool ServerConnectionManager::updateBossAmount(quint64 clientId, qint64 amount, QString& errorText)
+{
+    bool reachedExpected = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto client = findClientLocked(clientId);
+        if (!client)
+        {
+            errorText = QStringLiteral("客户端已断开");
+            return false;
+        }
+        const bool hasPrevious = client->hasAmountBaseline;
+        if (client->role == ClientRole::Boss && hasPrevious)
+        {
+            const qint64 previous = client->currentAmount.toLongLong();
+            const qint64 delta = amount - previous;
+            client->cumulativeIncome += delta;
+            if (amount > previous)
+            {
+                ++client->lowPriceCount;
+                client->consecutiveHighPriceCount = 0;
+            }
+            else if (amount < previous)
+            {
+                ++client->highPriceCount;
+                ++client->consecutiveHighPriceCount;
+            }
+        }
+        client->currentAmount = QString::number(amount);
+        client->hasAmountBaseline = true;
+        reachedExpected = client->role == ClientRole::Boss
+            && client->expectedAmount != QStringLiteral("-")
+            && amount >= client->expectedAmount.toLongLong();
+    }
+    emit clientsChanged();
+    if (reachedExpected)
+        errorText = QStringLiteral("期望金额已达到");
+    return true;
+}
+
 void ServerConnectionManager::resetListingQuantities()
 {
     {
@@ -864,8 +937,15 @@ QVector<ClientListItem> ServerConnectionManager::clients() const
         item.teamReadyUpdatedAtMs = client->teamReadyUpdatedAtMs;
         item.teamCode = client->teamCode;
         item.runningAction = client->runningAction;
-        item.listingStatus = client->listingStatus;
-        item.listingQuantityX = client->listingQuantityX;
+    item.listingStatus = client->listingStatus;
+    item.listingQuantityX = client->listingQuantityX;
+    item.currentAmount = client->currentAmount;
+    item.expectedAmount = client->expectedAmount;
+    item.cumulativeIncome = client->cumulativeIncome;
+    item.lowPriceCount = client->lowPriceCount;
+    item.highPriceCount = client->highPriceCount;
+    item.consecutiveHighPriceCount = client->consecutiveHighPriceCount;
+    item.hasAmountBaseline = client->hasAmountBaseline;
         item.actionRunning = client->actionRunning;
         item.connected = client->connected;
         result.push_back(item);
@@ -1085,34 +1165,44 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
             else if (message.type == Protocol::MessageType::ListingResponse)
             {
                 const QString responseText = QString::fromUtf8(message.payload.data(), static_cast<int>(message.payload.size()));
+                bool acceptResponse = false;
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
-                    // 上架回包后释放动作锁，并将 OCR 最终判断直接显示在对应币号行。
-                    client->actionRunning = false;
-                    client->runningAction.clear();
-                    const QRegularExpression quantityPattern(QStringLiteral(R"((\d+)\s*/\s*(\d+))"));
-                    const QRegularExpressionMatch quantityMatch = quantityPattern.match(responseText);
-                    client->listingQuantityX = quantityMatch.hasMatch() ? quantityMatch.captured(1).toInt() : -1;
-                    if (message.success)
+                    // 停止动作后服务端已清除 actionRunning；此时到达的旧上架回包
+                    // 不能再次把“待执行”覆盖成“失败[0/N]”。
+                    if (client->actionRunning)
                     {
-                        client->listingStatus = QStringLiteral("成功");
-                    }
-                    else if (responseText.contains(QStringLiteral("使用量少")))
-                    {
-                        // 数量不足是 OCR 的有效结果，不应在列表中归类为通用失败。
-                        client->listingStatus = QStringLiteral("少");
-                    }
-                    else if (responseText.contains(QStringLiteral("使用量超出")))
-                    {
-                        client->listingStatus = QStringLiteral("超出");
-                    }
-                    else
-                    {
-                        client->listingStatus = QStringLiteral("失败");
+                        // 上架回包后释放动作锁，并将 OCR 最终判断直接显示在对应币号行。
+                        client->actionRunning = false;
+                        client->runningAction.clear();
+                        const QRegularExpression quantityPattern(QStringLiteral(R"((\d+)\s*/\s*(\d+))"));
+                        const QRegularExpressionMatch quantityMatch = quantityPattern.match(responseText);
+                        client->listingQuantityX = quantityMatch.hasMatch() ? quantityMatch.captured(1).toInt() : -1;
+                        if (message.success)
+                        {
+                            client->listingStatus = QStringLiteral("成功");
+                        }
+                        else if (responseText.contains(QStringLiteral("使用量少")))
+                        {
+                            // 数量不足是 OCR 的有效结果，不应在列表中归类为通用失败。
+                            client->listingStatus = QStringLiteral("少");
+                        }
+                        else if (responseText.contains(QStringLiteral("使用量超出")))
+                        {
+                            client->listingStatus = QStringLiteral("超出");
+                        }
+                        else
+                        {
+                            client->listingStatus = QStringLiteral("失败");
+                        }
+                        acceptResponse = true;
                     }
                 }
-                emit clientsChanged();
-                emit listingResponseReceived(client->id, message.requestId, message.success, responseText);
+                if (acceptResponse)
+                {
+                    emit clientsChanged();
+                    emit listingResponseReceived(client->id, message.requestId, message.success, responseText);
+                }
             }
             else if (message.type == Protocol::MessageType::MailResponse)
             {
@@ -1124,6 +1214,10 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
                 }
                 emit clientsChanged();
                 emit mailResponseReceived(client->id, message.requestId, message.success, responseText);
+            }
+            else if (message.type == Protocol::MessageType::AmountReport)
+            {
+                emit amountReportReceived(client->id, static_cast<qint64>(message.timestampMs));
             }
             else if (message.type == Protocol::MessageType::Ping)
             {
