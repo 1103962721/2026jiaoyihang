@@ -29,6 +29,7 @@ public:
     void stopListening();
     int triggerReadyClients(int seconds, const QString& bossPrice = QString());
     int triggerReadyClientsByRole(int seconds, ClientRole role, const QString& bossPrice = QString());
+    int triggerClientsByIds(int seconds, const QVector<quint64>& clientIds, const QString& bossPrice = QString());
     bool requestTimeSync(quint64 clientId, int requestId, qint64 serverSendMs, QString& errorText);
     bool sendServerTime(quint64 clientId, qint64 serverTimeMs, qint64 clientOffsetMs, QString& errorText);
     bool sendScheduledTrigger(quint64 clientId, int seconds, qint64 targetClientMs, const QString& bossPrice, QString& errorText);
@@ -40,10 +41,13 @@ public:
     int requestRebindAllWindows();
     bool requestForceStopAction(quint64 clientId, QString& errorText);
     int requestForceStopAllActions();
+    void resetAllClientStates();
     bool requestOcr(quint64 clientId, int requestId, const OcrRequestRegion& region, QString& errorText);
     bool requestSelfThunder(quint64 clientId, int requestId, QString& errorText);
     bool requestLoadout(quint64 clientId, int requestId, const QString& loadoutType, QString& errorText);
-    bool requestListing(quint64 clientId, int requestId, const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, QString& errorText);
+    bool requestSaveLoadout(quint64 clientId, int requestId, ClientRole targetRole, const QString& weapon, const QString& backpack,
+        const QString& egg, const QString& bulletName, int perClick, int bulletTotal, QString& errorText);
+    bool requestListing(quint64 clientId, int requestId, const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, bool loadoutMode, QString& errorText);
     bool requestMail(quint64 clientId, int requestId, QString& errorText);
     bool setClientTeamReadyDisplay(quint64 clientId, const QString& text, int state);
     bool resetClientTeamReadyDisplay(quint64 clientId);
@@ -64,6 +68,7 @@ signals:
     void ocrResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void selfThunderResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void loadoutResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
+    void saveLoadoutResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void listingResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void mailResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void timeSyncResponseReceived(quint64 clientId, int requestId, qint64 clientReceiveMs, qint64 clientSendMs,

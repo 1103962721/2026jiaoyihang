@@ -10,7 +10,7 @@ class UmiOcrRunner
 public:
     QString recognizeImage(const QString& imagePath, const QString& executablePath, int port, QString& errorText) const;
     bool findTextBounds(const QString& imagePath, const QString& executablePath, int port, const QString& keyword,
-        QRect& bounds, QString& errorText) const;
+        QRect& bounds, QString& errorText, bool exactMatch = false) const;
 
 private:
     bool requestOcr(const QString& imagePath, const QString& executablePath, int port, const QString& dataFormat,

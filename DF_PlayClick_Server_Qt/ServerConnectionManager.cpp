@@ -155,6 +155,37 @@ int ServerConnectionManager::triggerReadyClientsByRole(int seconds, ClientRole r
     return sentCount;
 }
 
+
+int ServerConnectionManager::triggerClientsByIds(int seconds, const QVector<quint64>& clientIds,
+    const QString& bossPrice)
+{
+    std::vector<std::shared_ptr<ClientEntry>> selectedClients;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        selectedClients.reserve(clientIds.size());
+        for (quint64 clientId : clientIds)
+        {
+            const auto client = findClientLocked(clientId);
+            if (client && client->connected && client->ready)
+                selectedClients.push_back(client);
+        }
+    }
+
+    int sentCount = 0;
+    const std::string triggerMessage = Protocol::BuildTriggerMessage(seconds, bossPrice.toUtf8().toStdString());
+    for (const auto& client : selectedClients)
+    {
+        if (SocketUtil::SendLine(client->socketHandle, triggerMessage))
+        {
+            ++sentCount;
+            continue;
+        }
+        recordDisconnectReason(client, QStringLiteral("发送指定客户端 TRIGGER 失败，错误码：%1").arg(WSAGetLastError()));
+        markClientDisconnected(client->id);
+    }
+    return sentCount;
+}
+
 bool ServerConnectionManager::requestTimeSync(quint64 clientId, int requestId, qint64 serverSendMs, QString& errorText)
 {
     std::shared_ptr<ClientEntry> client;
@@ -400,6 +431,26 @@ int ServerConnectionManager::requestForceStopAllActions()
     return sentCount;
 }
 
+void ServerConnectionManager::resetAllClientStates()
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& client : clients_)
+        {
+            client->actionRunning = false;
+            client->runningAction.clear();
+            client->listingStatus = QStringLiteral("待执行");
+            client->listingQuantityX = -1;
+            client->teamReadyText = QStringLiteral("未识别");
+            client->teamReadyState = -1;
+            client->teamReadyCurrent = 0;
+            client->teamReadyTotal = 0;
+            client->teamReadyUpdatedAtMs = 0;
+        }
+    }
+    emit clientsChanged();
+}
+
 bool ServerConnectionManager::requestOcr(quint64 clientId, int requestId, const OcrRequestRegion& region, QString& errorText)
 {
     std::shared_ptr<ClientEntry> client;
@@ -504,7 +555,7 @@ bool ServerConnectionManager::requestLoadout(quint64 clientId, int requestId, co
     return true;
 }
 
-bool ServerConnectionManager::requestListing(quint64 clientId, int requestId, const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, QString& errorText)
+bool ServerConnectionManager::requestListing(quint64 clientId, int requestId, const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, bool loadoutMode, QString& errorText)
 {
     std::shared_ptr<ClientEntry> client;
     {
@@ -531,7 +582,7 @@ bool ServerConnectionManager::requestListing(quint64 clientId, int requestId, co
     }
 
     const std::string message = Protocol::BuildListingRequestMessage(
-        requestId, hasExchange, purchaseCount, listingPrice.toUtf8().toStdString(), listingText.toUtf8().toStdString());
+        requestId, hasExchange, purchaseCount, loadoutMode, listingPrice.toUtf8().toStdString(), listingText.toUtf8().toStdString());
     if (!SocketUtil::SendLine(client->socketHandle, message))
     {
         recordDisconnectReason(client, QStringLiteral("发送 LISTING_REQUEST 失败，错误码：%1").arg(WSAGetLastError()));
@@ -539,6 +590,46 @@ bool ServerConnectionManager::requestListing(quint64 clientId, int requestId, co
         return false;
     }
 
+    emit clientsChanged();
+    return true;
+}
+
+bool ServerConnectionManager::requestSaveLoadout(quint64 clientId, int requestId, ClientRole targetRole, const QString& weapon,
+    const QString& backpack, const QString& egg, const QString& bulletName, int perClick, int bulletTotal,
+    QString& errorText)
+{
+    std::shared_ptr<ClientEntry> client;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        client = findClientLocked(clientId);
+        if (!client || !client->connected)
+        {
+            errorText = QStringLiteral("客户端已断开");
+            return false;
+        }
+        if (client->role != targetRole)
+        {
+            errorText = QStringLiteral("客户端角色不匹配");
+            return false;
+        }
+        if (client->actionRunning)
+        {
+            errorText = QStringLiteral("该客户端正在执行：%1").arg(client->runningAction);
+            return false;
+        }
+        client->actionRunning = true;
+        client->runningAction = QStringLiteral("保存配装");
+    }
+
+    const std::string message = Protocol::BuildSaveLoadoutRequestMessage(
+        requestId, weapon.toUtf8().toStdString(), backpack.toUtf8().toStdString(), egg.toUtf8().toStdString(),
+        bulletName.toUtf8().toStdString(), perClick, bulletTotal);
+    if (!SocketUtil::SendLine(client->socketHandle, message))
+    {
+        recordDisconnectReason(client, QStringLiteral("发送 SAVE_LOADOUT_REQUEST 失败，错误码：%1").arg(WSAGetLastError()));
+        markClientDisconnected(client->id);
+        return false;
+    }
     emit clientsChanged();
     return true;
 }
@@ -974,6 +1065,22 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
                 }
                 emit clientsChanged();
                 emit loadoutResponseReceived(client->id, message.requestId, message.success, responseText);
+            }
+            else if (message.type == Protocol::MessageType::SaveLoadoutResponse)
+            {
+                const QString responseText = QString::fromUtf8(message.payload.data(), static_cast<int>(message.payload.size()));
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    client->actionRunning = false;
+                    client->runningAction.clear();
+                    client->teamReadyText = message.success ? QStringLiteral("配装保存完成") : QStringLiteral("配装保存失败");
+                    client->teamReadyState = -1;
+                    client->teamReadyCurrent = 0;
+                    client->teamReadyTotal = 0;
+                    client->teamReadyUpdatedAtMs = QDateTime::currentMSecsSinceEpoch();
+                }
+                emit clientsChanged();
+                emit saveLoadoutResponseReceived(client->id, message.requestId, message.success, responseText);
             }
             else if (message.type == Protocol::MessageType::ListingResponse)
             {

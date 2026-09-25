@@ -25,7 +25,7 @@ public slots:
     void stopListening();
     void triggerClients(const QString& countdownText, const QString& groupDelayText, bool coinFirst,
         bool compensationEnabled = false, const QString& compensationLeadText = QStringLiteral("1500"),
-        const QString& bossPriceText = QString());
+        const QString& bossPriceText = QString(), bool allowIncomplete = false, bool automatic = false);
     void triggerClient(quint64 clientId, const QString& bossPriceText = QString());
     void requestTeamCode(quint64 clientId);
     void requestTeamReady(quint64 clientId);
@@ -42,9 +42,18 @@ public slots:
     void showSelfThunderPlaceholder(quint64 clientId);
     void setClientRemark(quint64 clientId, const QString& remark);
     void setClientRole(quint64 clientId, ClientRole role);
-    void startListing(const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount);
+    void startListing(const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, bool loadoutMode);
+    void saveLoadout(const QString& weapon, const QString& backpack, const QString& egg,
+        const QString& bulletName, int perClick, int bulletTotal);
+    void saveLoadoutForRole(ClientRole role, const QString& weapon, const QString& backpack, const QString& egg,
+        const QString& bulletName, int perClick, int bulletTotal);
+    void startCoinSemiAuto(const QString& weapon, const QString& backpack, const QString& egg,
+        const QString& bulletName, int perClick, int bulletTotal, const QString& listingText,
+        const QString& listingPrice, int purchaseCount, bool loadoutMode);
     void requestMail(quint64 clientId);
     void requestMailAll();
+    void setAutoExecuteThresholds(int bossCount, int coinCount);
+    void setAutoExecuteEnabled(bool enabled);
     void kickClient(quint64 clientId);
 
 signals:
@@ -53,6 +62,7 @@ signals:
     void statusChanged(const QString& text, ServerStatusTone tone);
     void connectionLogAppended(const QString& text);
     void messageRequested(const QString& title, const QString& text, bool error);
+    void incompleteTriggerRequested();
     void autoStartEnabledChanged(bool enabled);
 
 private:
@@ -99,15 +109,27 @@ private:
     ServerConnectionManager connectionManager_;
     QTimer autoStartTimer_;
     QTimer compensationSyncTimer_;
+    QTimer autoExecuteTimer_;
     QString autoStartCountdownText_;
     QHash<quint64, AutoStartClientState> autoStartClientStates_;
     QHash<int, quint64> pendingOcrRequests_;
     QHash<int, quint64> pendingSelfThunderRequests_;
     QHash<int, quint64> pendingLoadoutRequests_;
+    struct SemiAutoState
+    {
+        QString listingText;
+        QString listingPrice;
+        int purchaseCount = 1;
+        bool loadoutMode = false;
+        bool relistedAfterMail = false;
+    };
+    QHash<int, SemiAutoState> pendingSemiLoadoutRequests_;
+    QHash<quint64, SemiAutoState> semiAutoStates_;
     qint64 autoStartCycleStartedAtMs_ = 0;
     int nextOcrRequestId_ = 1;
     int nextListingRequestId_ = 1;
     int nextMailRequestId_ = 1;
+    int nextSaveLoadoutRequestId_ = 1;
     int nextTimeSyncRequestId_ = 1000;
     struct CompensationRound
     {
@@ -122,8 +144,19 @@ private:
         QHash<quint64, int> requestIds;
         QHash<quint64, qint64> sendTimesMs;
         QHash<quint64, qint64> offsetsMs;
+        QVector<quint64> selectedClientIds;
     } compensationRound_;
     bool autoStartEnabled_ = false;
     bool autoStartCanTrigger_ = true;
+    int autoExecuteBossThreshold_ = 1;
+    int autoExecuteCoinThreshold_ = 1;
+    bool autoExecuteEnabled_ = false;
+    bool autoExecuteTriggered_ = false;
     QString bossListingPrice_;
+    QString lastTriggerCountdownText_ = QStringLiteral("5");
+    QString lastTriggerGroupDelayText_ = QStringLiteral("100");
+    bool lastTriggerCoinFirst_ = true;
+    bool lastTriggerCompensationEnabled_ = true;
+    QString lastTriggerCompensationLeadText_ = QStringLiteral("1500");
+    void processAutoExecuteTick();
 };

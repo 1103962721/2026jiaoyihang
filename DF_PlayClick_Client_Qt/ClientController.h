@@ -119,14 +119,20 @@ private:
     void handleOcrRequest(int requestId, int x, int y, int width, int height, int referenceWidth, int referenceHeight);
     void handleSelfThunderRequest(int requestId);
     void handleLoadoutRequest(int requestId, const QString& loadoutType);
-    void handleListingRequest(int requestId, bool hasExchange, int purchaseCount, const QString& listingPrice, const QString& listingText);
+    void handleSaveLoadoutRequest(int requestId, const QString& weapon, const QString& backpack,
+        const QString& egg, const QString& bulletName, int perClick, int bulletTotal);
+    void handleListingRequest(int requestId, bool hasExchange, int purchaseCount, bool loadoutMode, const QString& listingPrice, const QString& listingText);
     void handleMailRequest(int requestId);
     bool executeSelfThunderSequence(QString& errorText);
     bool executeLoadoutSequence(const QString& loadoutType, QString& errorText);
-    bool executeListingSequence(bool hasExchange, int purchaseCount, const QString& listingPrice, const QString& listingText,
+    bool executeSaveLoadoutSequence(const QString& weapon, const QString& backpack, const QString& egg,
+        const QString& bulletName, int perClick, int bulletTotal, QString& errorText);
+    bool executeListingSequence(bool hasExchange, int purchaseCount, bool loadoutMode, const QString& listingPrice, const QString& listingText,
         QString& ocrText, QString& usageResult, QString& errorText);
     bool executeMailSequence(QString& errorText);
     bool executeCoinRevenueClaimSequence(bool& noRevenue, QString& errorText);
+    bool waitForListingQuantityReady(QString& errorText, const QString& prefix,
+        int timeoutMs = 10000, bool* performedDismount = nullptr);
     bool executeBossListingSequence(const QString& listingPrice, QString& errorText);
     bool waitForAutomation(int milliseconds, QString& errorText);
     bool beginAutomationAction(const QString& actionName);
@@ -164,6 +170,13 @@ private:
     int scheduledTriggerSeconds_ = 0;
     qint64 scheduledTriggerTargetMs_ = 0;
     QString triggerBossPrice_;
+    QString lastListingPrice_;
+    QString lastListingText_;
+    bool lastListingHasExchange_ = false;
+    int lastListingPurchaseCount_ = 0;
+    bool lastListingLoadoutMode_ = false;
+    int lastListingRequestId_ = 0;
+    bool hasLastListingRequest_ = false;
     qint64 serverClockOffsetMs_ = 0;
     bool serverTimeSynchronized_ = false;
     int lastTeamReadyState_ = -2;

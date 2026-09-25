@@ -24,6 +24,8 @@ class Win32InputDispatcher
 {
 public:
     bool clickClientPoint(HWND hwnd, POINT point, int releaseDelayMs, QString& errorText) const;
+    bool rightClickReferencePoint(HWND hwnd, POINT point, int referenceWidth, int referenceHeight, int releaseDelayMs, QString& errorText) const;
+    bool scrollReferencePoint(HWND hwnd, POINT point, int referenceWidth, int referenceHeight, int wheelDelta, QString& errorText) const;
     bool clickReferencePoint(HWND hwnd, POINT point, int referenceWidth, int referenceHeight, int releaseDelayMs, QString& errorText) const;
     bool moveReferencePoint(HWND hwnd, POINT point, int referenceWidth, int referenceHeight, QString& errorText) const;
     bool pressKeyChord(WORD modifierKey, WORD virtualKey, QString& errorText) const;

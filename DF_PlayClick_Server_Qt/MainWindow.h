@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QLabel>
+#include <QCheckBox>
 #include <QLineEdit>
 #include <QMainWindow>
 #include <QPushButton>
@@ -37,6 +38,8 @@ private:
     void updateStatus(const QString& text, ServerStatusTone tone);
     void updateFlowPreview();
     void showSettingsDialog();
+    void loadPersistentLoadoutSettings();
+    void savePersistentLoadoutSettings() const;
     void appendConnectionLog(const QString& text);
     quint64 clientIdForRow(int row) const;
 
@@ -53,17 +56,35 @@ private:
     QLineEdit* listingTextEdit_ = nullptr;
     QLineEdit* listingPriceEdit_ = nullptr;
     QLineEdit* bossPriceEdit_ = nullptr;
+    QString loadoutWeapon_;
+    QString loadoutBackpack_;
+    QString loadoutEgg_;
+    QString loadoutBulletName_;
+    QString loadoutPerClick_;
+    QString loadoutBulletTotal_;
+    QString bossLoadoutWeapon_;
+    QString bossLoadoutBackpack_;
+    QString bossLoadoutEgg_;
+    QString bossLoadoutBulletName_;
+    QString bossLoadoutPerClick_;
+    QString bossLoadoutBulletTotal_;
     QSpinBox* listingPurchaseCountSpin_ = nullptr;
+    QSpinBox* autoBossThresholdSpin_ = nullptr;
+    QSpinBox* autoCoinThresholdSpin_ = nullptr;
+    QCheckBox* autoExecuteCheck_ = nullptr;
     QLabel* listingQuantityTotalLabel_ = nullptr;
     QLabel* listingSuccessClientsLabel_ = nullptr;
     bool coinFirst_ = true;
     bool compensationEnabled_ = true;
     bool bruteCaptcha_ = true;
-    bool tradePurchase_ = true;
+    bool tradePurchase_ = false;
     QPushButton* listenButton_ = nullptr;
     QPushButton* stopButton_ = nullptr;
     QPushButton* triggerAllButton_ = nullptr;
     QPushButton* listingButton_ = nullptr;
+    QPushButton* saveLoadoutButton_ = nullptr;
+    QPushButton* saveBossLoadoutButton_ = nullptr;
+    QPushButton* coinSemiAutoButton_ = nullptr;
     QPushButton* rebindAllButton_ = nullptr;
     QPushButton* forceStopAllButton_ = nullptr;
     QPushButton* mailAllButton_ = nullptr;

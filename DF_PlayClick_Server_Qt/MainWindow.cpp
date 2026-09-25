@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QButtonGroup>
 #include <QColor>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDoubleValidator>
 #include <QDialog>
@@ -15,6 +16,7 @@
 #include <QIntValidator>
 #include <QMessageBox>
 #include <QSizePolicy>
+#include <QSettings>
 #include <QTableWidgetItem>
 #include <QVariant>
 #include <QVBoxLayout>
@@ -26,6 +28,7 @@
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
+    loadPersistentLoadoutSettings();
     buildUi();
     connectSignals();
     serverTimeTimer_.setInterval(50);
@@ -150,6 +153,10 @@ void MainWindow::buildUi()
     triggerAllButton_->setObjectName(QStringLiteral("executeButton"));
     listingButton_ = new QPushButton(QStringLiteral("上架"), this);
     listingButton_->setObjectName(QStringLiteral("listingButton"));
+    saveLoadoutButton_ = new QPushButton(QStringLiteral("保存配装"), this);
+    saveLoadoutButton_->setObjectName(QStringLiteral("saveLoadoutButton"));
+    saveBossLoadoutButton_ = new QPushButton(QStringLiteral("老板保存配装"), this);
+    coinSemiAutoButton_ = new QPushButton(QStringLiteral("币号半自动"), this);
     rebindAllButton_ = new QPushButton(QStringLiteral("全部重新绑定"), this);
     forceStopAllButton_ = new QPushButton(QStringLiteral("停止所有动作"), this);
     forceStopAllButton_->setObjectName(QStringLiteral("forceStopAllButton"));
@@ -161,6 +168,9 @@ void MainWindow::buildUi()
     actionRow->addLayout(compensationLeadBox, 1);
     actionRow->addWidget(triggerAllButton_, 0, Qt::AlignBottom);
     actionRow->addWidget(listingButton_, 0, Qt::AlignBottom);
+    actionRow->addWidget(saveLoadoutButton_, 0, Qt::AlignBottom);
+    actionRow->addWidget(saveBossLoadoutButton_, 0, Qt::AlignBottom);
+    actionRow->addWidget(coinSemiAutoButton_, 0, Qt::AlignBottom);
     dispatchLayout->addLayout(actionRow);
 
     auto* listingTextRow = new QHBoxLayout();
@@ -193,6 +203,21 @@ void MainWindow::buildUi()
     listingOptionRow->addWidget(listingPriceEdit_, 1);
     listingOptionRow->addWidget(listingPurchaseCountLabel);
     listingOptionRow->addWidget(listingPurchaseCountSpin_);
+    auto* autoBossLabel = new QLabel(QStringLiteral("自动执行老板数"), this);
+    autoBossThresholdSpin_ = new QSpinBox(this);
+    autoBossThresholdSpin_->setRange(1, 99);
+    autoBossThresholdSpin_->setValue(1);
+    auto* autoCoinLabel = new QLabel(QStringLiteral("自动执行币号数"), this);
+    autoCoinThresholdSpin_ = new QSpinBox(this);
+    autoCoinThresholdSpin_->setRange(1, 99);
+    autoCoinThresholdSpin_->setValue(1);
+    autoExecuteCheck_ = new QCheckBox(QStringLiteral("全自动执行"), this);
+    autoExecuteCheck_->setToolTip(QStringLiteral("勾选后，老板准备区域识别到数字且币号达到阈值时自动执行"));
+    listingOptionRow->addWidget(autoBossLabel);
+    listingOptionRow->addWidget(autoBossThresholdSpin_);
+    listingOptionRow->addWidget(autoCoinLabel);
+    listingOptionRow->addWidget(autoCoinThresholdSpin_);
+    listingOptionRow->addWidget(autoExecuteCheck_);
     dispatchLayout->addLayout(listingOptionRow);
 
     auto* bossPriceRow = new QHBoxLayout();
@@ -226,7 +251,7 @@ void MainWindow::buildUi()
     clientTable_ = new QTableWidget(0, 5, this);
     clientTable_->setHorizontalHeaderLabels({
         QStringLiteral("客户端 IP"), QStringLiteral("备注类型"),
-        QStringLiteral("点击坐标"), QStringLiteral("上架状态"), QStringLiteral("操作")
+        QStringLiteral("点击坐标"), QStringLiteral("上架/准备状态"), QStringLiteral("操作")
     });
     // 各列使用接近均衡的固定宽度，避免 IP 列独占大量空间。
     clientTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
@@ -281,13 +306,42 @@ void MainWindow::connectSignals()
         appendConnectionLog(QStringLiteral("已提交全部出发指令。"));
     });
     connect(listingButton_, &QPushButton::clicked, this, [this]() {
-        controller_.startListing(listingTextEdit_->text(), listingPriceEdit_->text(), false, listingPurchaseCountSpin_->value());
+        controller_.startListing(listingTextEdit_->text(), listingPriceEdit_->text(), false,
+            listingPurchaseCountSpin_->value(), !tradePurchase_);
         appendConnectionLog(QStringLiteral("已提交币号上架任务。"));
+    });
+    connect(saveLoadoutButton_, &QPushButton::clicked, this, [this]() {
+        if (tradePurchase_)
+        {
+            QMessageBox::information(this, QStringLiteral("购买方式"), QStringLiteral("请先在设置中选择“配装”方式"));
+            return;
+        }
+        controller_.saveLoadout(loadoutWeapon_, loadoutBackpack_, loadoutEgg_, loadoutBulletName_,
+            loadoutPerClick_.toInt(), loadoutBulletTotal_.toInt());
+        appendConnectionLog(QStringLiteral("已提交币号保存配装任务。"));
+    });
+    connect(saveBossLoadoutButton_, &QPushButton::clicked, this, [this]() {
+        controller_.saveLoadoutForRole(ClientRole::Boss, bossLoadoutWeapon_, bossLoadoutBackpack_, bossLoadoutEgg_,
+            bossLoadoutBulletName_, bossLoadoutPerClick_.toInt(), bossLoadoutBulletTotal_.toInt());
+        appendConnectionLog(QStringLiteral("已提交老板保存配装任务。"));
+    });
+    connect(coinSemiAutoButton_, &QPushButton::clicked, this, [this]() {
+        controller_.startCoinSemiAuto(loadoutWeapon_, loadoutBackpack_, loadoutEgg_, loadoutBulletName_,
+            loadoutPerClick_.toInt(), loadoutBulletTotal_.toInt(), listingTextEdit_->text(), listingPriceEdit_->text(),
+            listingPurchaseCountSpin_->value(), !tradePurchase_);
+        appendConnectionLog(QStringLiteral("已提交币号半自动保存配装任务。"));
     });
     connect(forceStopAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestForceStopAllActions);
     connect(mailAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestMailAll);
     connect(rebindAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestRebindAllWindows);
     connect(settingsButton_, &QPushButton::clicked, this, &MainWindow::showSettingsDialog);
+    connect(autoBossThresholdSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+        controller_.setAutoExecuteThresholds(autoBossThresholdSpin_->value(), autoCoinThresholdSpin_->value());
+    });
+    connect(autoCoinThresholdSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+        controller_.setAutoExecuteThresholds(autoBossThresholdSpin_->value(), autoCoinThresholdSpin_->value());
+    });
+    connect(autoExecuteCheck_, &QCheckBox::toggled, &controller_, &ServerController::setAutoExecuteEnabled);
     connect(clientStatusButton_, &QPushButton::clicked, this, [this]() {
         auto* dialog = new QDialog(this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -299,7 +353,7 @@ void MainWindow::connectSignals()
         auto* table = new QTableWidget(0, 7, dialog);
         table->setHorizontalHeaderLabels({
             QStringLiteral("客户端"), QStringLiteral("IP"), QStringLiteral("备注类型"),
-            QStringLiteral("当前动作"), QStringLiteral("上架状态"), QStringLiteral("点击坐标"), QStringLiteral("操作")
+            QStringLiteral("当前动作"), QStringLiteral("上架/准备状态"), QStringLiteral("点击坐标"), QStringLiteral("操作")
         });
         table->setEditTriggers(QAbstractItemView::NoEditTriggers);
         table->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -328,7 +382,7 @@ void MainWindow::connectSignals()
                 const QStringList values = {
                     QString::number(client.id), client.ip, roleText,
                     client.actionRunning ? client.runningAction : QStringLiteral("空闲"),
-                    client.role == ClientRole::Coin ? client.listingStatus : QStringLiteral("不适用"),
+                    client.role == ClientRole::Coin ? client.listingStatus : client.teamReadyText,
                     coordinate
                 };
                 for (int column = 0; column < values.size(); ++column)
@@ -404,6 +458,16 @@ void MainWindow::connectSignals()
                     QMessageBox::information(this, title, text);
                 }
     });
+    connect(&controller_, &ServerController::incompleteTriggerRequested, this, [this]() {
+        const auto answer = QMessageBox::question(this, QStringLiteral("客户端数量不足"),
+            QStringLiteral("当前不满足一整组，是否仍继续下发当前可用客户端？"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer == QMessageBox::Yes)
+        {
+            controller_.triggerClients(countdownEdit_->text(), groupDelayEdit_->text(), coinFirst_,
+                compensationEnabled_, compensationLeadEdit_->text(), bossPriceEdit_->text(), true);
+        }
+    });
 }
 
 void MainWindow::showSettingsDialog()
@@ -411,7 +475,7 @@ void MainWindow::showSettingsDialog()
     QDialog dialog(this);
     dialog.setWindowTitle(QStringLiteral("调度设置"));
     dialog.setModal(true);
-    dialog.resize(560, 360);
+    dialog.resize(720, 600);
 
     auto* root = new QVBoxLayout(&dialog);
     root->setContentsMargins(18, 16, 18, 16);
@@ -477,6 +541,66 @@ void MainWindow::showSettingsDialog()
     optionsGrid->addWidget(purchaseBox, 1, 1);
     root->addLayout(optionsGrid, 1);
 
+    auto* loadoutParamsBox = new QGroupBox(QStringLiteral("配装参数"), &dialog);
+    auto* loadoutParamsLayout = new QGridLayout(loadoutParamsBox);
+    loadoutParamsLayout->setHorizontalSpacing(10);
+    loadoutParamsLayout->setVerticalSpacing(8);
+    auto addLoadoutField = [loadoutParamsBox, loadoutParamsLayout](int row, int column, const QString& labelText,
+        const QString& value, QLineEdit*& edit, bool integerOnly = false) {
+        auto* label = new QLabel(labelText, loadoutParamsBox);
+        edit = new QLineEdit(value, loadoutParamsBox);
+        edit->setPlaceholderText(QStringLiteral("请输入%1").arg(labelText));
+        if (integerOnly)
+        {
+            edit->setValidator(new QIntValidator(1, 999999999, edit));
+        }
+        loadoutParamsLayout->addWidget(label, row, column * 2);
+        loadoutParamsLayout->addWidget(edit, row, column * 2 + 1);
+    };
+    QLineEdit* weaponEdit = nullptr;
+    QLineEdit* backpackEdit = nullptr;
+    QLineEdit* eggEdit = nullptr;
+    QLineEdit* bulletNameEdit = nullptr;
+    QLineEdit* perClickEdit = nullptr;
+    QLineEdit* bulletTotalEdit = nullptr;
+    addLoadoutField(0, 0, QStringLiteral("武器"), loadoutWeapon_, weaponEdit);
+    addLoadoutField(0, 1, QStringLiteral("背包"), loadoutBackpack_, backpackEdit);
+    addLoadoutField(1, 0, QStringLiteral("蛋挂"), loadoutEgg_, eggEdit);
+    addLoadoutField(1, 1, QStringLiteral("子弹名称"), loadoutBulletName_, bulletNameEdit);
+    addLoadoutField(2, 0, QStringLiteral("单次数量"), loadoutPerClick_, perClickEdit, true);
+    addLoadoutField(2, 1, QStringLiteral("子弹总数"), loadoutBulletTotal_, bulletTotalEdit, true);
+    loadoutParamsBox->setVisible(!tradePurchase_);
+    connect(loadoutRadio, &QRadioButton::toggled, loadoutParamsBox, &QWidget::setVisible);
+    root->addWidget(loadoutParamsBox);
+
+    auto* bossLoadoutParamsBox = new QGroupBox(QStringLiteral("老板配装参数"), &dialog);
+    auto* bossLoadoutParamsLayout = new QGridLayout(bossLoadoutParamsBox);
+    bossLoadoutParamsLayout->setHorizontalSpacing(10);
+    bossLoadoutParamsLayout->setVerticalSpacing(8);
+    QLineEdit* bossWeaponEdit = nullptr;
+    QLineEdit* bossBackpackEdit = nullptr;
+    QLineEdit* bossEggEdit = nullptr;
+    QLineEdit* bossBulletNameEdit = nullptr;
+    QLineEdit* bossPerClickEdit = nullptr;
+    QLineEdit* bossBulletTotalEdit = nullptr;
+    auto addBossLoadoutField = [bossLoadoutParamsBox, bossLoadoutParamsLayout](int row, int column, const QString& labelText,
+        const QString& value, QLineEdit*& edit, bool integerOnly = false) {
+        auto* label = new QLabel(labelText, bossLoadoutParamsBox);
+        edit = new QLineEdit(value, bossLoadoutParamsBox);
+        edit->setPlaceholderText(QStringLiteral("请输入%1").arg(labelText));
+        if (integerOnly)
+            edit->setValidator(new QIntValidator(1, 999999999, edit));
+        bossLoadoutParamsLayout->addWidget(label, row, column * 2);
+        bossLoadoutParamsLayout->addWidget(edit, row, column * 2 + 1);
+    };
+    addBossLoadoutField(0, 0, QStringLiteral("武器"), bossLoadoutWeapon_, bossWeaponEdit);
+    addBossLoadoutField(0, 1, QStringLiteral("背包"), bossLoadoutBackpack_, bossBackpackEdit);
+    addBossLoadoutField(1, 0, QStringLiteral("蛋挂"), bossLoadoutEgg_, bossEggEdit);
+    addBossLoadoutField(1, 1, QStringLiteral("子弹名称"), bossLoadoutBulletName_, bossBulletNameEdit);
+    addBossLoadoutField(2, 0, QStringLiteral("单次数量"), bossLoadoutPerClick_, bossPerClickEdit, true);
+    addBossLoadoutField(2, 1, QStringLiteral("子弹总数"), bossLoadoutBulletTotal_, bossBulletTotalEdit, true);
+    root->addWidget(bossLoadoutParamsBox);
+
     auto* buttons = new QDialogButtonBox(
         QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, &dialog);
     buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("确定"));
@@ -494,7 +618,59 @@ void MainWindow::showSettingsDialog()
     compensationEnabled_ = compensationRadio->isChecked();
     bruteCaptcha_ = bruteRadio->isChecked();
     tradePurchase_ = marketRadio->isChecked();
+    loadoutWeapon_ = weaponEdit->text().trimmed();
+    loadoutBackpack_ = backpackEdit->text().trimmed();
+    loadoutEgg_ = eggEdit->text().trimmed();
+    loadoutBulletName_ = bulletNameEdit->text().trimmed();
+    loadoutPerClick_ = perClickEdit->text().trimmed();
+    loadoutBulletTotal_ = bulletTotalEdit->text().trimmed();
+    bossLoadoutWeapon_ = bossWeaponEdit->text().trimmed();
+    bossLoadoutBackpack_ = bossBackpackEdit->text().trimmed();
+    bossLoadoutEgg_ = bossEggEdit->text().trimmed();
+    bossLoadoutBulletName_ = bossBulletNameEdit->text().trimmed();
+    bossLoadoutPerClick_ = bossPerClickEdit->text().trimmed();
+    bossLoadoutBulletTotal_ = bossBulletTotalEdit->text().trimmed();
+    savePersistentLoadoutSettings();
     updateFlowPreview();
+}
+
+void MainWindow::loadPersistentLoadoutSettings()
+{
+    const QString settingsPath = QCoreApplication::applicationDirPath()
+        + QStringLiteral("/DF_PlayClick_Server.ini");
+    const QSettings settings(settingsPath, QSettings::IniFormat);
+    loadoutWeapon_ = settings.value(QStringLiteral("Loadout/Weapon"), loadoutWeapon_).toString();
+    loadoutBackpack_ = settings.value(QStringLiteral("Loadout/Backpack"), loadoutBackpack_).toString();
+    loadoutEgg_ = settings.value(QStringLiteral("Loadout/Egg"), loadoutEgg_).toString();
+    loadoutBulletName_ = settings.value(QStringLiteral("Loadout/BulletName"), loadoutBulletName_).toString();
+    loadoutPerClick_ = settings.value(QStringLiteral("Loadout/PerClick"), loadoutPerClick_).toString();
+    loadoutBulletTotal_ = settings.value(QStringLiteral("Loadout/BulletTotal"), loadoutBulletTotal_).toString();
+    bossLoadoutWeapon_ = settings.value(QStringLiteral("BossLoadout/Weapon"), bossLoadoutWeapon_).toString();
+    bossLoadoutBackpack_ = settings.value(QStringLiteral("BossLoadout/Backpack"), bossLoadoutBackpack_).toString();
+    bossLoadoutEgg_ = settings.value(QStringLiteral("BossLoadout/Egg"), bossLoadoutEgg_).toString();
+    bossLoadoutBulletName_ = settings.value(QStringLiteral("BossLoadout/BulletName"), bossLoadoutBulletName_).toString();
+    bossLoadoutPerClick_ = settings.value(QStringLiteral("BossLoadout/PerClick"), bossLoadoutPerClick_).toString();
+    bossLoadoutBulletTotal_ = settings.value(QStringLiteral("BossLoadout/BulletTotal"), bossLoadoutBulletTotal_).toString();
+}
+
+void MainWindow::savePersistentLoadoutSettings() const
+{
+    const QString settingsPath = QCoreApplication::applicationDirPath()
+        + QStringLiteral("/DF_PlayClick_Server.ini");
+    QSettings settings(settingsPath, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("Loadout/Weapon"), loadoutWeapon_);
+    settings.setValue(QStringLiteral("Loadout/Backpack"), loadoutBackpack_);
+    settings.setValue(QStringLiteral("Loadout/Egg"), loadoutEgg_);
+    settings.setValue(QStringLiteral("Loadout/BulletName"), loadoutBulletName_);
+    settings.setValue(QStringLiteral("Loadout/PerClick"), loadoutPerClick_);
+    settings.setValue(QStringLiteral("Loadout/BulletTotal"), loadoutBulletTotal_);
+    settings.setValue(QStringLiteral("BossLoadout/Weapon"), bossLoadoutWeapon_);
+    settings.setValue(QStringLiteral("BossLoadout/Backpack"), bossLoadoutBackpack_);
+    settings.setValue(QStringLiteral("BossLoadout/Egg"), bossLoadoutEgg_);
+    settings.setValue(QStringLiteral("BossLoadout/BulletName"), bossLoadoutBulletName_);
+    settings.setValue(QStringLiteral("BossLoadout/PerClick"), bossLoadoutPerClick_);
+    settings.setValue(QStringLiteral("BossLoadout/BulletTotal"), bossLoadoutBulletTotal_);
+    settings.sync();
 }
 
 QWidget* MainWindow::createAppHeader()
@@ -585,6 +761,8 @@ void MainWindow::applyStyle()
         #executeButton:hover { background:#12865b; }
         #listingButton { background:#7653c9; color:white; border-color:#7653c9; }
         #listingButton:hover { background:#6343af; }
+        #saveLoadoutButton { background:#0f8a8a; color:white; border-color:#0f8a8a; }
+        #saveLoadoutButton:hover { background:#0b7070; }
          QTableWidget { background:white; border:0; gridline-color:#e4e9f1; selection-background-color:#e8f0ff; }
          QTableWidget::item:selected { color:#1e2b43; background:#e8f0ff; }
         QHeaderView::section { background:#f1f4f9; color:#5b6980; font-weight:800; border:0; border-right:1px solid #e1e7ef; border-bottom:1px solid #e1e7ef; padding:7px; }
@@ -678,8 +856,10 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
             : QStringLiteral("X: 2262  Y: 1159");
         clientTable_->setItem(row, 2, new QTableWidgetItem(coordinate));
 
-        auto* listingStatusItem = new QTableWidgetItem(client.role == ClientRole::Coin
-            ? client.listingStatus : QStringLiteral("不适用"));
+        const QString displayStatus = client.role == ClientRole::Coin
+            ? client.listingStatus
+            : client.teamReadyText;
+        auto* listingStatusItem = new QTableWidgetItem(displayStatus);
         listingStatusItem->setTextAlignment(Qt::AlignCenter);
         if (client.role == ClientRole::Coin)
         {
@@ -695,6 +875,18 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
             {
                 listingStatusItem->setForeground(QColor(QStringLiteral("#dc2626")));
             }
+        }
+        else if (client.teamReadyState == 1)
+        {
+            listingStatusItem->setForeground(QColor(QStringLiteral("#16a34a")));
+        }
+        else if (client.teamReadyState == 0)
+        {
+            listingStatusItem->setForeground(QColor(QStringLiteral("#d97706")));
+        }
+        else
+        {
+            listingStatusItem->setForeground(QColor(QStringLiteral("#64748b")));
         }
         clientTable_->setItem(row, 3, listingStatusItem);
 
@@ -768,6 +960,12 @@ void MainWindow::updateFlowPreview()
         const QString lead = compensationLeadEdit_->text().isEmpty() ? QStringLiteral("1500") : compensationLeadEdit_->text();
         flowPreviewLabel_->setText(QStringLiteral("延迟补偿：先同步时间（最多 10 秒）→ 提前准备 %1 ms → %2 ms 后执行第二组%3")
             .arg(lead, delay, optionSummary));
+        return;
+    }
+    if (!tradePurchase_)
+    {
+        flowPreviewLabel_->setText(QStringLiteral("购买方式：配装 · 验证码：%1 · 保存配装参数已配置")
+            .arg(captchaMode));
         return;
     }
     if (coinFirst_)

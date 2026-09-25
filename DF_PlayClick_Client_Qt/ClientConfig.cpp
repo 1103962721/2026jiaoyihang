@@ -79,10 +79,10 @@ OcrRegionConfig ClientConfig::loadTeamReadyRegion() const
 {
     OcrRegionConfig region;
     region.enabled = GetPrivateProfileIntW(L"TeamReadyOCR", L"Enabled", 1, reinterpret_cast<LPCWSTR>(configPath().utf16())) != 0;
-    region.x = GetPrivateProfileIntW(L"TeamReadyOCR", L"X", 2195, reinterpret_cast<LPCWSTR>(configPath().utf16()));
-    region.y = GetPrivateProfileIntW(L"TeamReadyOCR", L"Y", 1259, reinterpret_cast<LPCWSTR>(configPath().utf16()));
-    region.width = GetPrivateProfileIntW(L"TeamReadyOCR", L"Width", 250, reinterpret_cast<LPCWSTR>(configPath().utf16()));
-    region.height = GetPrivateProfileIntW(L"TeamReadyOCR", L"Height", 60, reinterpret_cast<LPCWSTR>(configPath().utf16()));
+    region.x = GetPrivateProfileIntW(L"TeamReadyOCR", L"X", 2048, reinterpret_cast<LPCWSTR>(configPath().utf16()));
+    region.y = GetPrivateProfileIntW(L"TeamReadyOCR", L"Y", 1123, reinterpret_cast<LPCWSTR>(configPath().utf16()));
+    region.width = GetPrivateProfileIntW(L"TeamReadyOCR", L"Width", 400, reinterpret_cast<LPCWSTR>(configPath().utf16()));
+    region.height = GetPrivateProfileIntW(L"TeamReadyOCR", L"Height", 80, reinterpret_cast<LPCWSTR>(configPath().utf16()));
     region.referenceWidth = GetPrivateProfileIntW(L"TeamReadyOCR", L"ReferenceWidth", 2560, reinterpret_cast<LPCWSTR>(configPath().utf16()));
     region.referenceHeight = GetPrivateProfileIntW(L"TeamReadyOCR", L"ReferenceHeight", 1440, reinterpret_cast<LPCWSTR>(configPath().utf16()));
     region.enabled = region.enabled && region.width > 0 && region.height > 0 && region.referenceWidth > 0 && region.referenceHeight > 0;

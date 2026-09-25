@@ -2,6 +2,7 @@
 
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "ClientRole.h"
 
@@ -36,6 +37,8 @@ namespace Protocol
         SelfThunderResponse,
         LoadoutRequest,
         LoadoutResponse,
+        SaveLoadoutRequest,
+        SaveLoadoutResponse,
         ListingRequest,
         ListingResponse,
         MailRequest,
@@ -56,6 +59,7 @@ namespace Protocol
         int total = 0;
         int requestId = 0;
         int purchaseCount = 1;
+        bool loadoutMode = false;
         int x = 0;
         int y = 0;
         int width = 0;
@@ -69,6 +73,12 @@ namespace Protocol
         std::string payload;
         std::string price;
         std::string bossPrice;
+        std::string loadoutWeapon;
+        std::string loadoutBackpack;
+        std::string loadoutEgg;
+        std::string loadoutBulletName;
+        int loadoutPerClick = 0;
+        int loadoutBulletTotal = 0;
     };
 
     inline std::string NormalizeLinePayload(std::string text);
@@ -246,9 +256,26 @@ namespace Protocol
         return "LOADOUT_RESPONSE " + std::to_string(requestId) + (success ? " OK " : " ERROR ") + NormalizeLinePayload(payload) + "\n";
     }
 
-    inline std::string BuildListingRequestMessage(int requestId, bool hasExchange, int purchaseCount, const std::string& price, const std::string& listingText)
+    inline std::string BuildSaveLoadoutRequestMessage(int requestId, const std::string& weapon,
+        const std::string& backpack, const std::string& egg, const std::string& bulletName,
+        int perClick, int bulletTotal)
     {
-        return "LISTING_REQUEST " + std::to_string(requestId) + (hasExchange ? " 1 " : " 0 ") + std::to_string(purchaseCount) + " "
+        return "SAVE_LOADOUT_REQUEST " + std::to_string(requestId) + " " + std::to_string(perClick)
+            + " " + std::to_string(bulletTotal) + " " + NormalizeLinePayload(weapon)
+            + "|" + NormalizeLinePayload(backpack) + "|" + NormalizeLinePayload(egg)
+            + "|" + NormalizeLinePayload(bulletName) + "\n";
+    }
+
+    inline std::string BuildSaveLoadoutResponseMessage(int requestId, bool success, const std::string& payload)
+    {
+        return "SAVE_LOADOUT_RESPONSE " + std::to_string(requestId)
+            + (success ? " OK " : " ERROR ") + NormalizeLinePayload(payload) + "\n";
+    }
+
+    inline std::string BuildListingRequestMessage(int requestId, bool hasExchange, int purchaseCount, bool loadoutMode, const std::string& price, const std::string& listingText)
+    {
+        return "LISTING_REQUEST " + std::to_string(requestId) + (hasExchange ? " 1 " : " 0 ") + std::to_string(purchaseCount)
+            + (loadoutMode ? " 1 " : " 0 ")
             + NormalizeLinePayload(price) + " " + NormalizeLinePayload(listingText) + "\n";
     }
 
@@ -569,15 +596,81 @@ namespace Protocol
             return true;
         }
 
+        if (command == "SAVE_LOADOUT_REQUEST")
+        {
+            int requestId = 0;
+            int perClick = 0;
+            int bulletTotal = 0;
+            stream >> requestId >> perClick >> bulletTotal;
+            if (stream.fail() || requestId <= 0 || perClick <= 0 || bulletTotal <= 0
+                || bulletTotal % perClick != 0)
+            {
+                return false;
+            }
+
+            std::string fields;
+            std::getline(stream, fields);
+            if (!fields.empty() && fields.front() == ' ')
+            {
+                fields.erase(0, 1);
+            }
+            std::stringstream fieldStream(fields);
+            std::string field;
+            std::vector<std::string> values;
+            while (std::getline(fieldStream, field, '|'))
+            {
+                values.push_back(field);
+            }
+            if (values.size() != 4 || values[0].empty() || values[1].empty()
+                || values[2].empty() || values[3].empty())
+            {
+                return false;
+            }
+
+            message.type = MessageType::SaveLoadoutRequest;
+            message.requestId = requestId;
+            message.loadoutPerClick = perClick;
+            message.loadoutBulletTotal = bulletTotal;
+            message.loadoutWeapon = values[0];
+            message.loadoutBackpack = values[1];
+            message.loadoutEgg = values[2];
+            message.loadoutBulletName = values[3];
+            return true;
+        }
+
+        if (command == "SAVE_LOADOUT_RESPONSE")
+        {
+            int requestId = 0;
+            std::string status;
+            stream >> requestId >> status;
+            if (stream.fail() || requestId <= 0 || (status != "OK" && status != "ERROR"))
+            {
+                return false;
+            }
+
+            std::string payload;
+            std::getline(stream, payload);
+            if (!payload.empty() && payload.front() == ' ')
+            {
+                payload.erase(0, 1);
+            }
+            message.type = MessageType::SaveLoadoutResponse;
+            message.requestId = requestId;
+            message.success = status == "OK";
+            message.payload = payload;
+            return true;
+        }
+
         if (command == "LISTING_REQUEST")
         {
             int requestId = 0;
             int hasExchange = 0;
             int purchaseCount = 0;
+            int loadoutMode = 0;
             std::string price;
-            stream >> requestId >> hasExchange >> purchaseCount >> price;
+            stream >> requestId >> hasExchange >> purchaseCount >> loadoutMode >> price;
             if (stream.fail() || requestId <= 0 || (hasExchange != 0 && hasExchange != 1)
-                || purchaseCount <= 0 || purchaseCount > 99 || price.empty())
+                || (loadoutMode != 0 && loadoutMode != 1) || purchaseCount <= 0 || purchaseCount > 99 || price.empty())
             {
                 return false;
             }
@@ -588,15 +681,11 @@ namespace Protocol
             {
                 listingText.erase(0, 1);
             }
-            if (listingText.empty())
-            {
-                return false;
-            }
-
             message.type = MessageType::ListingRequest;
             message.requestId = requestId;
             message.value = hasExchange;
             message.purchaseCount = purchaseCount;
+            message.loadoutMode = loadoutMode == 1;
             message.price = price;
             message.payload = listingText;
             return true;

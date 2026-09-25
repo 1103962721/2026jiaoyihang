@@ -126,6 +126,100 @@ bool Win32InputDispatcher::clickReferencePoint(HWND hwnd, POINT point, int refer
     return clickClientPoint(hwnd, scaled, releaseDelayMs, errorText);
 }
 
+bool Win32InputDispatcher::rightClickReferencePoint(HWND hwnd, POINT point, int referenceWidth, int referenceHeight,
+    int releaseDelayMs, QString& errorText) const
+{
+    RECT rect{};
+    if (!hwnd || !IsWindow(hwnd) || !GetClientRect(hwnd, &rect))
+    {
+        errorText = QStringLiteral("绑定窗口已失效，请重新绑定");
+        return false;
+    }
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0 || referenceWidth <= 0 || referenceHeight <= 0)
+    {
+        errorText = QStringLiteral("窗口客户区尺寸无效");
+        return false;
+    }
+    POINT scaled{ point.x * width / referenceWidth, point.y * height / referenceHeight };
+    if (!pointInsideClient(hwnd, scaled))
+    {
+        errorText = QStringLiteral("点击坐标不在绑定窗口客户区内");
+        return false;
+    }
+
+    Win32InputSequenceLock gate;
+    if (!gate.acquire(errorText))
+    {
+        return false;
+    }
+    ClientToScreen(hwnd, &scaled);
+    SetForegroundWindow(hwnd);
+    INPUT inputs[3]{};
+    inputs[0].type = INPUT_MOUSE;
+    inputs[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+    inputs[0].mi.dx = static_cast<LONG>(scaled.x * 65535 / GetSystemMetrics(SM_CXSCREEN));
+    inputs[0].mi.dy = static_cast<LONG>(scaled.y * 65535 / GetSystemMetrics(SM_CYSCREEN));
+    inputs[1].type = INPUT_MOUSE;
+    inputs[1].mi.dwFlags = MOUSEEVENTF_RIGHTDOWN;
+    inputs[2].type = INPUT_MOUSE;
+    inputs[2].mi.dwFlags = MOUSEEVENTF_RIGHTUP;
+    const UINT sent = SendInput(3, inputs, sizeof(INPUT));
+    Sleep(static_cast<DWORD>(releaseDelayMs));
+    if (sent != 3)
+    {
+        errorText = QStringLiteral("发送鼠标右键输入失败");
+        return false;
+    }
+    return true;
+}
+
+bool Win32InputDispatcher::scrollReferencePoint(HWND hwnd, POINT point, int referenceWidth, int referenceHeight,
+    int wheelDelta, QString& errorText) const
+{
+    RECT rect{};
+    if (!hwnd || !IsWindow(hwnd) || !GetClientRect(hwnd, &rect))
+    {
+        errorText = QStringLiteral("绑定窗口已失效，请重新绑定");
+        return false;
+    }
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0 || referenceWidth <= 0 || referenceHeight <= 0)
+    {
+        errorText = QStringLiteral("窗口客户区尺寸无效");
+        return false;
+    }
+    POINT scaled{ point.x * width / referenceWidth, point.y * height / referenceHeight };
+    if (!pointInsideClient(hwnd, scaled))
+    {
+        errorText = QStringLiteral("滚轮坐标不在绑定窗口客户区内");
+        return false;
+    }
+    Win32InputSequenceLock gate;
+    if (!gate.acquire(errorText))
+    {
+        return false;
+    }
+    ClientToScreen(hwnd, &scaled);
+    SetForegroundWindow(hwnd);
+    INPUT inputs[2]{};
+    inputs[0].type = INPUT_MOUSE;
+    inputs[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+    inputs[0].mi.dx = static_cast<LONG>(scaled.x * 65535 / GetSystemMetrics(SM_CXSCREEN));
+    inputs[0].mi.dy = static_cast<LONG>(scaled.y * 65535 / GetSystemMetrics(SM_CYSCREEN));
+    inputs[1].type = INPUT_MOUSE;
+    inputs[1].mi.dwFlags = MOUSEEVENTF_WHEEL;
+    inputs[1].mi.mouseData = static_cast<DWORD>(wheelDelta);
+    if (SendInput(2, inputs, sizeof(INPUT)) != 2)
+    {
+        errorText = QStringLiteral("发送鼠标滚轮输入失败");
+        return false;
+    }
+    return true;
+}
+
 bool Win32InputDispatcher::moveReferencePoint(HWND hwnd, POINT point, int referenceWidth, int referenceHeight, QString& errorText) const
 {
     RECT rect{};

@@ -30,6 +30,7 @@ public:
     bool sendOcrResponse(int requestId, bool success, const QString& payload);
     bool sendSelfThunderResponse(int requestId, bool success, const QString& payload);
     bool sendLoadoutResponse(int requestId, bool success, const QString& payload);
+    bool sendSaveLoadoutResponse(int requestId, bool success, const QString& payload);
     bool sendListingResponse(int requestId, bool success, const QString& payload);
     bool sendMailResponse(int requestId, bool success, const QString& payload);
     bool sendTimeSyncResponse(int requestId, qint64 clientReceiveMs, qint64 clientSendMs);
@@ -52,7 +53,9 @@ signals:
     void ocrRequestReceived(int requestId, int x, int y, int width, int height, int referenceWidth, int referenceHeight);
     void selfThunderRequestReceived(int requestId);
     void loadoutRequestReceived(int requestId, const QString& loadoutType);
-    void listingRequestReceived(int requestId, bool hasExchange, int purchaseCount, const QString& listingPrice, const QString& listingText);
+    void saveLoadoutRequestReceived(int requestId, const QString& weapon, const QString& backpack,
+        const QString& egg, const QString& bulletName, int perClick, int bulletTotal);
+    void listingRequestReceived(int requestId, bool hasExchange, int purchaseCount, bool loadoutMode, const QString& listingPrice, const QString& listingText);
     void mailRequestReceived(int requestId);
 
 private slots:

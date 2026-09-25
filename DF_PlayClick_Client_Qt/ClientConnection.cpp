@@ -361,6 +361,21 @@ bool ClientConnection::sendLoadoutResponse(int requestId, bool success, const QS
     return true;
 }
 
+bool ClientConnection::sendSaveLoadoutResponse(int requestId, bool success, const QString& payload)
+{
+    if (!connected_ || socket_ == INVALID_SOCKET)
+    {
+        return false;
+    }
+    if (!SocketUtil::SendLine(socket_, Protocol::BuildSaveLoadoutResponseMessage(
+        requestId, success, payload.toUtf8().toStdString())))
+    {
+        handleConnectionLost(QStringLiteral("发送保存配装结果失败，服务端连接已断开，错误码：%1").arg(WSAGetLastError()));
+        return false;
+    }
+    return true;
+}
+
 bool ClientConnection::sendListingResponse(int requestId, bool success, const QString& payload)
 {
     if (!connected_ || socket_ == INVALID_SOCKET)
@@ -520,13 +535,24 @@ void ClientConnection::receiveLoop()
                     emit loadoutRequestReceived(requestId, loadoutType);
                 }, Qt::QueuedConnection);
             }
+            else if (message.type == Protocol::MessageType::SaveLoadoutRequest)
+            {
+                const QString weapon = QString::fromUtf8(message.loadoutWeapon.data(), static_cast<int>(message.loadoutWeapon.size()));
+                const QString backpack = QString::fromUtf8(message.loadoutBackpack.data(), static_cast<int>(message.loadoutBackpack.size()));
+                const QString egg = QString::fromUtf8(message.loadoutEgg.data(), static_cast<int>(message.loadoutEgg.size()));
+                const QString bulletName = QString::fromUtf8(message.loadoutBulletName.data(), static_cast<int>(message.loadoutBulletName.size()));
+                QMetaObject::invokeMethod(this, [this, requestId = message.requestId, weapon, backpack, egg, bulletName,
+                    perClick = message.loadoutPerClick, bulletTotal = message.loadoutBulletTotal]() {
+                    emit saveLoadoutRequestReceived(requestId, weapon, backpack, egg, bulletName, perClick, bulletTotal);
+                }, Qt::QueuedConnection);
+            }
             else if (message.type == Protocol::MessageType::ListingRequest)
             {
                 const QString listingPrice = QString::fromUtf8(message.price.data(), static_cast<int>(message.price.size()));
                 const QString listingText = QString::fromUtf8(message.payload.data(), static_cast<int>(message.payload.size()));
                 QMetaObject::invokeMethod(this, [this, requestId = message.requestId, hasExchange = message.value == 1,
-                    purchaseCount = message.purchaseCount, listingPrice, listingText]() {
-                    emit listingRequestReceived(requestId, hasExchange, purchaseCount, listingPrice, listingText);
+                    loadoutMode = message.loadoutMode, purchaseCount = message.purchaseCount, listingPrice, listingText]() {
+                    emit listingRequestReceived(requestId, hasExchange, purchaseCount, loadoutMode, listingPrice, listingText);
                 }, Qt::QueuedConnection);
             }
             else if (message.type == Protocol::MessageType::MailRequest)

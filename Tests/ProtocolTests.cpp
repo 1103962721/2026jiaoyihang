@@ -31,7 +31,7 @@ int main()
     assert(Protocol::BuildSelfThunderRequestMessage(11) == "SELF_THUNDER_REQUEST 11\n");
     assert(Protocol::BuildSelfThunderResponseMessage(11, true, "完成") == "SELF_THUNDER_RESPONSE 11 OK 完成\n");
     assert(Protocol::BuildSelfThunderResponseMessage(11, false, "line\nbreak") == "SELF_THUNDER_RESPONSE 11 ERROR line break\n");
-    assert(Protocol::BuildListingRequestMessage(21, true, 5, "99.50", "测试 上架 文本") == "LISTING_REQUEST 21 1 5 99.50 测试 上架 文本\n");
+    assert(Protocol::BuildListingRequestMessage(21, true, 5, false, "99.50", "测试 上架 文本") == "LISTING_REQUEST 21 1 5 0 99.50 测试 上架 文本\n");
     assert(Protocol::BuildListingResponseMessage(21, true, "识别到上架") == "LISTING_RESPONSE 21 OK 识别到上架\n");
     assert(Protocol::BuildMailRequestMessage(31) == "MAIL_REQUEST 31\n");
     assert(Protocol::BuildMailResponseMessage(31, true, "领取完成") == "MAIL_RESPONSE 31 OK 领取完成\n");
@@ -181,11 +181,12 @@ int main()
     assert(!parsed.success);
     assert(parsed.payload == "配装失败");
 
-    assert(Protocol::ParseLine("LISTING_REQUEST 21 1 5 99.50 测试 上架 文本", parsed));
+    assert(Protocol::ParseLine("LISTING_REQUEST 21 1 5 0 99.50 测试 上架 文本", parsed));
     assert(parsed.type == Protocol::MessageType::ListingRequest);
     assert(parsed.requestId == 21);
     assert(parsed.value == 1);
     assert(parsed.purchaseCount == 5);
+    assert(!parsed.loadoutMode);
     assert(parsed.price == "99.50");
     assert(parsed.payload == "测试 上架 文本");
 
@@ -245,12 +246,16 @@ int main()
     assert(!Protocol::ParseLine("LOADOUT_REQUEST 1 NORMAL extra", parsed));
     assert(!Protocol::ParseLine("LOADOUT_RESPONSE 0 OK text", parsed));
     assert(!Protocol::ParseLine("LOADOUT_RESPONSE 1 BAD text", parsed));
-    assert(!Protocol::ParseLine("LISTING_REQUEST 0 1 5 99 text", parsed));
-    assert(!Protocol::ParseLine("LISTING_REQUEST 1 2 5 99 text", parsed));
-    assert(!Protocol::ParseLine("LISTING_REQUEST 1 1 0 99 text", parsed));
-    assert(!Protocol::ParseLine("LISTING_REQUEST 1 1 100 99 text", parsed));
-    assert(!Protocol::ParseLine("LISTING_REQUEST 1 1 5  text", parsed));
-    assert(!Protocol::ParseLine("LISTING_REQUEST 1 1 5 99", parsed));
+    assert(!Protocol::ParseLine("LISTING_REQUEST 0 1 5 0 99 text", parsed));
+    assert(!Protocol::ParseLine("LISTING_REQUEST 1 2 5 0 99 text", parsed));
+    assert(!Protocol::ParseLine("LISTING_REQUEST 1 1 0 0 99 text", parsed));
+    assert(!Protocol::ParseLine("LISTING_REQUEST 1 1 100 0 99 text", parsed));
+    assert(!Protocol::ParseLine("LISTING_REQUEST 1 1 5 2 99 text", parsed));
+    assert(Protocol::ParseLine("LISTING_REQUEST 1 1 5 0  text", parsed));
+    assert(parsed.payload.empty());
+    assert(Protocol::ParseLine("LISTING_REQUEST 1 1 5 1 99", parsed));
+    assert(parsed.loadoutMode);
+    assert(parsed.payload.empty());
     assert(!Protocol::ParseLine("LISTING_RESPONSE 0 OK text", parsed));
     assert(!Protocol::ParseLine("LISTING_RESPONSE 1 BAD text", parsed));
     assert(!Protocol::ParseLine("SELF_THUNDER_REQUEST 0", parsed));

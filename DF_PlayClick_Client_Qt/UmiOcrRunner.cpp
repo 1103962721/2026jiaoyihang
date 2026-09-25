@@ -47,6 +47,30 @@ bool ConnectLocalSocket(SOCKET& socketHandle, int port)
 
     return true;
 }
+
+QString NormalizeOcrMatchText(const QString& value)
+{
+    QString normalized;
+    normalized.reserve(value.size());
+    for (const QChar character : value)
+    {
+        if (character.isSpace())
+        {
+            continue;
+        }
+
+        // Umi-OCR 常把“霰”识别成“霞”或“散”，这些字符在物品名称中按同义误识别处理。
+        if (character == QChar(u'霞') || character == QChar(u'散'))
+        {
+            normalized.append(QChar(u'霰'));
+        }
+        else
+        {
+            normalized.append(character);
+        }
+    }
+    return normalized.toCaseFolded();
+}
 }
 
 bool UmiOcrRunner::requestOcr(const QString& imagePath, const QString& executablePath, int port, const QString& dataFormat,
@@ -69,7 +93,9 @@ bool UmiOcrRunner::requestOcr(const QString& imagePath, const QString& executabl
     QJsonObject options;
     options.insert(QStringLiteral("ocr.angle"), false);
     options.insert(QStringLiteral("ocr.language"), QStringLiteral("models/config_chinese.txt"));
-    options.insert(QStringLiteral("ocr.maxSideLen"), 960);
+    // 保持当前 OCR 截图的原始尺寸，避免 UmiOCR 缩放后返回的文字框坐标
+    // 与客户端截图坐标不一致，导致后续点击偏移到分隔线或空白区域。
+    options.insert(QStringLiteral("ocr.maxSideLen"), 2048);
     options.insert(QStringLiteral("ocr.cpuThreads"), 12);
     options.insert(QStringLiteral("tbpu.parser"), QStringLiteral("single_line"));
     options.insert(QStringLiteral("data.format"), dataFormat);
@@ -161,7 +187,7 @@ QString UmiOcrRunner::recognizeImage(const QString& imagePath, const QString& ex
 }
 
 bool UmiOcrRunner::findTextBounds(const QString& imagePath, const QString& executablePath, int port, const QString& keyword,
-    QRect& bounds, QString& errorText) const
+    QRect& bounds, QString& errorText, bool exactMatch) const
 {
     bounds = {};
     QJsonObject responseObject;
@@ -178,6 +204,7 @@ bool UmiOcrRunner::findTextBounds(const QString& imagePath, const QString& execu
     }
 
     QStringList allTexts;
+    const QString normalizedKeyword = NormalizeOcrMatchText(keyword);
     const QJsonArray blocks = dataValue.toArray();
     for (const QJsonValue blockValue : blocks)
     {
@@ -187,7 +214,8 @@ bool UmiOcrRunner::findTextBounds(const QString& imagePath, const QString& execu
         {
             allTexts.append(text);
         }
-        if (!text.contains(keyword, Qt::CaseInsensitive))
+        const QString normalizedText = NormalizeOcrMatchText(text);
+        if (exactMatch ? normalizedText != normalizedKeyword : !normalizedText.contains(normalizedKeyword))
         {
             continue;
         }
