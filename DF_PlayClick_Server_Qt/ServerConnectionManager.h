@@ -37,6 +37,7 @@ public:
     bool triggerSingleClient(quint64 clientId, int seconds, const QString& bossPrice, QString& errorText);
     bool requestTeamCode(quint64 clientId, QString& errorText);
     bool requestTeamReady(quint64 clientId, QString& errorText);
+    bool requestPrepare(quint64 clientId, int requestId, QString& errorText);
     bool requestRebindWindow(quint64 clientId, QString& errorText);
     int requestRebindAllWindows();
     bool requestForceStopAction(quint64 clientId, QString& errorText);
@@ -56,6 +57,7 @@ public:
     bool setClientRemark(quint64 clientId, const QString& remark);
     bool setClientRole(quint64 clientId, ClientRole role);
     bool setClientListingStatus(quint64 clientId, const QString& status);
+    bool resetClientListingQuantity(quint64 clientId);
     bool updateBossAmount(quint64 clientId, qint64 amount, QString& errorText);
     bool setBossExpectedAmount(quint64 clientId, qint64 amount, QString& errorText);
     void resetListingQuantities();
@@ -74,6 +76,7 @@ signals:
     void listingResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void mailResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void amountReportReceived(quint64 clientId, qint64 amount);
+    void prepareResponseReceived(quint64 clientId, int requestId, int status, const QString& text);
     void timeSyncResponseReceived(quint64 clientId, int requestId, qint64 clientReceiveMs, qint64 clientSendMs,
         qint64 serverSendMs, qint64 serverReceiveMs);
 

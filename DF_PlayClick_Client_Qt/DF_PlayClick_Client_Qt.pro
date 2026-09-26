@@ -3,7 +3,7 @@ TARGET = DF_PlayClick_Client_Qt
 QT += widgets
 CONFIG += c++17
 DEFINES += UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
-INCLUDEPATH += ../Shared ../DF_PlayClick_Client
+INCLUDEPATH += ../Shared
 LIBS += -lWs2_32 -lUser32 -lGdi32 -lAdvapi32 -lShell32
 
 win32:RC_ICONS = AppIcon.ico

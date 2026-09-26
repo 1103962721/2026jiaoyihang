@@ -122,7 +122,7 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="E:\visual studio Project\DF_PlayClick_Qt_Dev_20260715\DF_PlayClick_Client_Qt\df_playclick_client_qt_plugin_import.cpp">
+    <ClCompile Include="$(SolutionDir)\DF_PlayClick_Client_Qt\df_playclick_client_qt_plugin_import.cpp">
       <Filter>Generated Files</Filter>
     </ClCompile>
     <ClCompile Include="debug\moc_ClientConnection.cpp">
@@ -168,6 +168,6 @@
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="E:\visual studio Project\DF_PlayClick_Qt_Dev_20260715\DF_PlayClick_Client_Qt\DF_PlayClick_Client_Qt_resource.rc" />
+    <ResourceCompile Include="$(SolutionDir)\DF_PlayClick_Client_Qt\DF_PlayClick_Client_Qt_resource.rc" />
   </ItemGroup>
 </Project>

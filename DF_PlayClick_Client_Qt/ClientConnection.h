@@ -27,6 +27,7 @@ public:
     bool sendReady(bool ready);
     bool sendTeamCodeResponse(const QString& payload);
     bool sendTeamReady(int state, int current, int total);
+    bool sendPrepareResponse(int requestId, const QString& status, const QString& payload);
     bool sendOcrResponse(int requestId, bool success, const QString& payload);
     bool sendSelfThunderResponse(int requestId, bool success, const QString& payload);
     bool sendLoadoutResponse(int requestId, bool success, const QString& payload);
@@ -47,6 +48,7 @@ signals:
     void roleReceived(ClientRole role);
     void teamCodeRequestReceived();
     void teamReadyRequestReceived();
+    void prepareRequestReceived(int requestId);
     void rebindWindowRequestReceived();
     void forceStopActionRequestReceived();
     // 在接收线程直接通知取消标志，避免 UI 线程被同步自动化流程阻塞时无法中止。

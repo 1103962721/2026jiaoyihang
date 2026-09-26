@@ -291,7 +291,7 @@ void MainWindow::buildUi()
     clientTable_->horizontalHeader()->resizeSection(4, 100);
     clientTable_->horizontalHeader()->resizeSection(5, 110);
     clientTable_->horizontalHeader()->resizeSection(6, 100);
-    clientTable_->horizontalHeader()->resizeSection(7, 330);
+    clientTable_->horizontalHeader()->resizeSection(7, 390);
     clientTable_->verticalHeader()->setVisible(false);
     clientTable_->verticalHeader()->setDefaultSectionSize(40);
     clientTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -477,11 +477,23 @@ void MainWindow::connectSignals()
         refreshDetailTable(controller_.clients());
         dialog->show();
     });
-    connect(groupDelayEdit_, &QLineEdit::textChanged, this, [this](const QString&) {
+    const auto syncAutoParameters = [this]() {
+        controller_.updateAutoExecuteParameters(countdownEdit_->text(), groupDelayEdit_->text(), coinFirst_,
+            compensationEnabled_, compensationLeadEdit_->text(), bossPriceEdit_->text());
+    };
+    connect(countdownEdit_, &QLineEdit::textChanged, this, [this, syncAutoParameters](const QString&) {
+        syncAutoParameters();
+    });
+    connect(groupDelayEdit_, &QLineEdit::textChanged, this, [this, syncAutoParameters](const QString&) {
+        syncAutoParameters();
         updateFlowPreview();
     });
-    connect(compensationLeadEdit_, &QLineEdit::textChanged, this, [this](const QString&) {
+    connect(compensationLeadEdit_, &QLineEdit::textChanged, this, [this, syncAutoParameters](const QString&) {
+        syncAutoParameters();
         updateFlowPreview();
+    });
+    connect(bossPriceEdit_, &QLineEdit::textChanged, this, [syncAutoParameters](const QString&) {
+        syncAutoParameters();
     });
     connect(&controller_, &ServerController::clientsChanged, this, &MainWindow::refreshClients);
     connect(&controller_, &ServerController::listeningChanged, this, &MainWindow::updateListeningState);
@@ -671,6 +683,8 @@ void MainWindow::showSettingsDialog()
     bossLoadoutPerClick_ = bossPerClickEdit->text().trimmed();
     bossLoadoutBulletTotal_ = bossBulletTotalEdit->text().trimmed();
     savePersistentLoadoutSettings();
+    controller_.updateAutoExecuteParameters(countdownEdit_->text(), groupDelayEdit_->text(), coinFirst_,
+        compensationEnabled_, compensationLeadEdit_->text(), bossPriceEdit_->text());
     updateFlowPreview();
 }
 
@@ -963,6 +977,16 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
         auto* stopActionButton = new QPushButton(QStringLiteral("停止动作"), actionCell);
         auto* loadoutButton = new QPushButton(QStringLiteral("配装"), actionCell);
         auto* mailButton = new QPushButton(QStringLiteral("领取邮件"), actionCell);
+        QPushButton* listingButton = nullptr;
+        if (client.role == ClientRole::Coin)
+        {
+            listingButton = new QPushButton(QStringLiteral("上架"), actionCell);
+            listingButton->setMinimumWidth(50);
+            connect(listingButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
+                controller_.startListingForClient(clientId, listingTextEdit_->text(), listingPriceEdit_->text(),
+                    false, listingPurchaseCountSpin_->value(), !tradePurchase_);
+            });
+        }
         auto* kickButton = new QPushButton(QStringLiteral("断开"), actionCell);
         rebindButton->setMinimumWidth(70);
         stopActionButton->setMinimumWidth(70);
@@ -995,6 +1019,10 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
         actionLayout->addWidget(stopActionButton);
         actionLayout->addWidget(loadoutButton);
         actionLayout->addWidget(mailButton);
+        if (listingButton)
+        {
+            actionLayout->addWidget(listingButton);
+        }
         actionLayout->addWidget(kickButton);
         clientTable_->setCellWidget(row, 7, actionCell);
     }

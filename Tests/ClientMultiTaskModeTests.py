@@ -68,7 +68,7 @@ def test_qt_client_ui_contains_multi_task_layout_and_bindings():
 
 
 def test_auto_pick_supports_1024_768_rule():
-    rules = read_text("DF_PlayClick_Client/ClientBindingRules.h")
+    rules = read_text("Shared/ClientBindingRules.h")
     tests = read_text("Tests/ClientBindingRulesTests.cpp")
 
     assert "{1024, 768, 1159, 692}" in rules

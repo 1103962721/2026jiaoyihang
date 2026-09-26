@@ -1,7 +1,7 @@
 #include <cassert>
 #include <cstdint>
 #include <windows.h>
-#include "../DF_PlayClick_Client/ClientBindingRules.h"
+#include "../Shared/ClientBindingRules.h"
 
 int main()
 {

@@ -22,8 +22,8 @@
 
 #include <cmath>
 
-#include "../DF_PlayClick_Client/ClientBindingRules.h"
-#include "../DF_PlayClick_Client/ClientCountdownRules.h"
+#include "../Shared/ClientBindingRules.h"
+#include "../Shared/ClientCountdownRules.h"
 #include "../Shared/Protocol.h"
 
 namespace
@@ -126,6 +126,7 @@ ClientController::ClientController(QObject* parent)
     });
     connect(&connection_, &ClientConnection::teamCodeRequestReceived, this, &ClientController::handleTeamCodeRequest);
     connect(&connection_, &ClientConnection::teamReadyRequestReceived, this, &ClientController::handleTeamReadyRequest);
+    connect(&connection_, &ClientConnection::prepareRequestReceived, this, &ClientController::handlePrepareRequest);
     connect(&connection_, &ClientConnection::rebindWindowRequestReceived, this, &ClientController::rebindGameWindow);
     connect(&connection_, &ClientConnection::forceStopActionRequestReceived, this, &ClientController::forceStopCurrentAction);
     connect(&connection_, &ClientConnection::forceStopActionImmediate, this, [this]() {
@@ -926,17 +927,22 @@ void ClientController::clickEnabledTasks()
     const auto reportStableAmount = [this, &errorText](POINT movePoint, int moveReferenceWidth, int moveReferenceHeight,
         int x, int y, int width, int height, const QString& prefix, bool reportToServer) {
         QRegularExpression amountPattern(QStringLiteral(R"((\d[\d,.]*\d|\d)[\s]*([KkMm])?)"));
-        QString previous;
-        int stableCount = 0;
-        QElapsedTimer timer;
-        timer.start();
-        // 只在进入金额区域时等待一次；后续识别按 100ms 轮询，避免每次 OCR 都额外等待 1 秒。
-        if (!input_.moveReferencePoint(boundHwnd_, movePoint, moveReferenceWidth, moveReferenceHeight, errorText))
-            return false;
-        if (!waitForAutomation(1000, errorText))
-            return false;
-        while (timer.elapsed() < 5000)
+        // 资金面板可能因鼠标已在附近而没有重新弹出，最多向右偏移 3、6 像素重试。
+        for (int attempt = 0; attempt < 3; ++attempt)
         {
+            QString previous;
+            int stableCount = 0;
+            QElapsedTimer timer;
+            POINT retryPoint = movePoint;
+            retryPoint.x += attempt * 3;
+            if (!input_.moveReferencePoint(boundHwnd_, retryPoint, moveReferenceWidth, moveReferenceHeight, errorText))
+                return false;
+            if (!waitForAutomation(1000, errorText))
+                return false;
+            timer.start();
+            // 每次重新移动后最多识别 5 秒；失败才进入下一偏移点。
+            while (timer.elapsed() < 5000)
+            {
             OcrRegionConfig region;
             region.enabled = true;
             region.x = x; region.y = y; region.width = width; region.height = height;
@@ -1008,8 +1014,11 @@ void ClientController::clickEnabledTasks()
                 emit connectionLogAppended(QStringLiteral("金额OCR[%1]：未识别到金额，OCR文本“%2”错误“%3”")
                     .arg(prefix, text, ocrError));
             }
-            if (!waitForAutomation(100, errorText)) return false;
+                if (!waitForAutomation(100, errorText)) return false;
+            }
         }
+        if (errorText.isEmpty())
+            errorText = QStringLiteral("资金面板在原坐标及右移 3/6 像素后仍未识别到稳定金额");
         return false;
     };
     // 出发点不接受用户取点，只按角色使用 2560x1440 固定坐标并适配当前客户区。
@@ -1333,6 +1342,126 @@ void ClientController::handleTeamReadyRequest()
     sendTeamReadyResult(result);
 }
 
+void ClientController::handlePrepareRequest(int requestId)
+{
+    if (currentRole_ != ClientRole::Boss)
+    {
+        connection_.sendPrepareResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("执行前准备请求仅适用于老板客户端"));
+        return;
+    }
+    if (!beginAutomationAction(QStringLiteral("执行前准备检查")))
+    {
+        connection_.sendPrepareResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("已有自动化流程正在执行"));
+        return;
+    }
+    struct Guard { ClientController* c; ~Guard() { c->finishAutomationAction(); } } guard{ this };
+    QString errorText;
+    const bool ok = executeBossPrepareCheck(requestId, errorText);
+    if (!ok)
+    {
+        connection_.sendPrepareResponse(requestId, QStringLiteral("ERROR"), errorText.isEmpty()
+            ? QStringLiteral("老板准备检查失败") : errorText);
+        setStatus(QStringLiteral("老板执行前准备失败：%1").arg(errorText));
+    }
+    else
+    {
+        connection_.sendPrepareResponse(requestId, QStringLiteral("OK"), QStringLiteral("准备数字和金额基线已确认"));
+        setStatus(QStringLiteral("老板执行前准备成功"));
+    }
+}
+
+bool ClientController::executeBossPrepareCheck(int requestId, QString& errorText)
+{
+    Q_UNUSED(requestId);
+    if (!boundHwnd_ || !binder_.isValid(boundHwnd_))
+    {
+        errorText = QStringLiteral("未绑定有效游戏窗口");
+        return false;
+    }
+    constexpr int ReferenceWidth = 2560;
+    constexpr int ReferenceHeight = 1440;
+    const auto ocrContainsDigit = [this, &errorText](int x, int y, int width, int height, const QString& prefix) {
+        QElapsedTimer timer; timer.start();
+        while (timer.elapsed() < 5000)
+        {
+            if (automationCancelRequested_.load()) { errorText = QStringLiteral("用户或服务端已强制停止当前动作"); return false; }
+            OcrRegionConfig region; region.enabled = true; region.x = x; region.y = y;
+            region.width = width; region.height = height; region.referenceWidth = 2560; region.referenceHeight = 1440;
+            QString ocrError;
+            const QString image = captureOcrRegion(region, prefix, ocrError);
+            QString text;
+            if (!image.isEmpty()) { text = umiOcrRunner_.recognizeImage(image, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), ocrError); QFile::remove(image); }
+            if (text.contains(QRegularExpression(QStringLiteral("\\d")))) return true;
+            if (!ocrError.isEmpty() && !ocrError.contains(QStringLiteral("No text found in image"), Qt::CaseInsensitive)) errorText = ocrError;
+            if (!waitForAutomation(150, errorText)) return false;
+        }
+        errorText = QStringLiteral("5 秒内未识别到老板准备数字");
+        return false;
+    };
+
+    // 价格提示出现时，先回报本轮失败，再 ESC，等待 1500ms 后重新检查。
+    QElapsedTimer promptTimer; promptTimer.start();
+    while (promptTimer.elapsed() < 5000)
+    {
+        OcrRegionConfig region; region.enabled = true; region.x = 538; region.y = 313; region.width = 275; region.height = 60;
+        region.referenceWidth = ReferenceWidth; region.referenceHeight = ReferenceHeight;
+        QString ocrError; const QString image = captureOcrRegion(region, QStringLiteral("prepare_prompt"), ocrError);
+        QString text;
+        if (!image.isEmpty()) { text = umiOcrRunner_.recognizeImage(image, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), ocrError); QFile::remove(image); }
+        if (text.contains(QStringLiteral("价格变动提醒"), Qt::CaseInsensitive)
+            || text.contains(QStringLiteral("确认实现方案"), Qt::CaseInsensitive))
+        {
+            connection_.sendPrepareResponse(requestId, QStringLiteral("RETRY"), QStringLiteral("检测到价格提示，正在 ESC 后重试"));
+            if (!input_.pressKey(VK_ESCAPE, errorText) || !waitForAutomation(1500, errorText)) return false;
+            promptTimer.restart();
+            continue;
+        }
+        if (!ocrError.isEmpty() && !ocrError.contains(QStringLiteral("No text found in image"), Qt::CaseInsensitive)) { errorText = ocrError; return false; }
+        break;
+    }
+    if (!ocrContainsDigit(2048, 1123, 400, 80, QStringLiteral("prepare_ready"))) return false;
+
+    int bossClientWidth = 0;
+    int bossClientHeight = 0;
+    if (!binder_.clientSize(boundHwnd_, bossClientWidth, bossClientHeight)
+        || bossClientWidth <= 0 || bossClientHeight <= 0)
+    {
+        errorText = QStringLiteral("读取老板游戏窗口客户区失败");
+        return false;
+    }
+    const bool bossWindow1K = bossClientWidth <= 1920 && bossClientHeight <= 1080;
+    const POINT bossAmountMovePoint = bossWindow1K ? POINT{ 1639, 54 } : POINT{ 2128, 67 };
+    const int bossReferenceWidth = bossWindow1K ? 1920 : ReferenceWidth;
+    const int bossReferenceHeight = bossWindow1K ? 1080 : ReferenceHeight;
+    QRegularExpression amountPattern(QStringLiteral(R"((\d[\d,.]*\d|\d)[\s]*([KkMm])?)"));
+    for (int attempt = 0; attempt < 3; ++attempt)
+    {
+        QString previous; int stable = 0; QElapsedTimer amountTimer;
+        POINT retryPoint = bossAmountMovePoint;
+        retryPoint.x += attempt * 3;
+        if (!input_.moveReferencePoint(boundHwnd_, retryPoint,
+            bossReferenceWidth, bossReferenceHeight, errorText)
+            || !waitForAutomation(1000, errorText)) return false;
+        amountTimer.start();
+        while (amountTimer.elapsed() < 5000)
+        {
+        OcrRegionConfig region; region.enabled = true; region.x = 2015; region.y = 325; region.width = 450; region.height = 95;
+        region.referenceWidth = ReferenceWidth; region.referenceHeight = ReferenceHeight;
+        QString ocrError; const QString image = captureOcrRegion(region, QStringLiteral("prepare_amount"), ocrError);
+        QString text;
+        if (!image.isEmpty()) { text = umiOcrRunner_.recognizeImage(image, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), ocrError); QFile::remove(image); }
+        auto matches = amountPattern.globalMatch(NormalizeAmountOcrText(text));
+        QString sample;
+        while (matches.hasNext()) { const auto m = matches.next(); QString n = NormalizeAmountNumericToken(m.captured(1)); if (n.size() > 1 || !m.captured(2).isEmpty()) { bool ok=false; double v=n.toDouble(&ok); if (ok) { const QString s=m.captured(2).toUpper(); if(s==QStringLiteral("K"))v*=1000; if(s==QStringLiteral("M"))v*=1000000; sample=QString::number(static_cast<qint64>(v)); } } }
+        if (!sample.isEmpty()) { stable = sample == previous ? stable + 1 : 1; previous = sample; if (stable >= 3) { if (!connection_.sendAmountReport(sample.toLongLong())) { errorText = QStringLiteral("老板金额基线回报失败"); return false; } return true; } }
+        if (!ocrError.isEmpty() && !ocrError.contains(QStringLiteral("No text found in image"), Qt::CaseInsensitive)) errorText = ocrError;
+            if (!waitForAutomation(100, errorText)) return false;
+        }
+    }
+    errorText = QStringLiteral("5 秒内未识别到老板金额基线（已重试右移 3/6 像素）");
+    return false;
+}
+
 void ClientController::handleOcrRequest(int requestId, int x, int y, int width, int height, int referenceWidth, int referenceHeight)
 {
     if (!beginAutomationAction(QStringLiteral("OCR识别")))
@@ -1544,6 +1673,7 @@ bool ClientController::waitForListingQuantityReady(QString& errorText, const QSt
     constexpr int ReferenceWidth = 2560;
     constexpr int ReferenceHeight = 1440;
     constexpr int PollIntervalMs = 150;
+    constexpr int PostDismountPollIntervalMs = 300;
     if (performedDismount)
         *performedDismount = false;
     const auto log = [this](const QString& text) { emit connectionLogAppended(text); };
@@ -1681,29 +1811,28 @@ bool ClientController::waitForListingQuantityReady(QString& errorText, const QSt
         log(QStringLiteral("%1：已点击两处下架，重新检查 X/N").arg(prefix));
         if (performedDismount)
             *performedDismount = true;
-        // 下架后必须重新确认 X/N；只有确认 X=0 才允许继续领取。
-        QElapsedTimer retryTimer;
-        retryTimer.start();
-        while (retryTimer.elapsed() < timeoutMs)
+        // 下架后的边界固定为 300ms：每 300ms 重试识别 X/N。
+        // 只有明确识别到合法数量且 X>0 才进入下一轮下架；X=0 才结束。
+        for (;;)
         {
+            if (!waitForAutomation(PostDismountPollIntervalMs, errorText))
+                return false;
             QString retryText;
-            if (readText(108, 185, 189, 45,
-                QStringLiteral("%1_after_dismount_%2").arg(prefix).arg(retryTimer.elapsed()), retryText))
+            if (!readText(108, 185, 189, 45,
+                QStringLiteral("%1_after_dismount").arg(prefix), retryText))
+                continue;
+            const auto retryMatch = quantityPattern.match(retryText.simplified());
+            if (!retryMatch.hasMatch())
+                continue;
+            log(QStringLiteral("%1：下架后数量 %2").arg(prefix, retryText.simplified()));
+            if (retryMatch.captured(1).toInt() == 0)
             {
-                const auto retryMatch = quantityPattern.match(retryText.simplified());
-                if (retryMatch.hasMatch())
-                {
-                    log(QStringLiteral("%1：下架后数量 %2").arg(prefix, retryText.simplified()));
-                    if (retryMatch.captured(1).toInt() == 0)
-                    {
-                        if (!waitForAutomation(1500, errorText)) return false;
-                        return true;
-                    }
-                }
+                if (!waitForAutomation(1500, errorText)) return false;
+                return true;
             }
-            if (!waitForAutomation(300, errorText)) return false;
+            break;
         }
-        log(QStringLiteral("%1：下架后仍未归零，继续下一轮下架").arg(prefix));
+        log(QStringLiteral("%1：下架后数量仍不为 0，300ms 检查完成，继续下一轮下架").arg(prefix));
     }
 }
 
@@ -1987,14 +2116,33 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
         QString previous;
         int stableCount = 0;
         QElapsedTimer timer;
-        timer.start();
         // 移动到金额区域后只等待一次，随后每 100ms 重新截图识别。
-        if (!input_.moveReferencePoint(boundHwnd_, POINT{ 2128, 67 }, 2560, 1440, errorText))
-            return false;
-        if (!waitForAutomation(1000, errorText))
-            return false;
-        while (timer.elapsed() < 5000)
+        int bossClientWidth = 0;
+        int bossClientHeight = 0;
+        if (!binder_.clientSize(boundHwnd_, bossClientWidth, bossClientHeight)
+            || bossClientWidth <= 0 || bossClientHeight <= 0)
         {
+            errorText = QStringLiteral("读取老板游戏窗口客户区失败");
+            return false;
+        }
+        const bool bossWindow1K = bossClientWidth <= 1920 && bossClientHeight <= 1080;
+        const POINT bossAmountMovePoint = bossWindow1K ? POINT{ 1639, 54 } : POINT{ 2128, 67 };
+        const int bossReferenceWidth = bossWindow1K ? 1920 : 2560;
+        const int bossReferenceHeight = bossWindow1K ? 1080 : 1440;
+        for (int attempt = 0; attempt < 3; ++attempt)
+        {
+            previous.clear();
+            stableCount = 0;
+            POINT retryPoint = bossAmountMovePoint;
+            retryPoint.x += attempt * 3;
+            if (!input_.moveReferencePoint(boundHwnd_, retryPoint,
+                bossReferenceWidth, bossReferenceHeight, errorText))
+                return false;
+            if (!waitForAutomation(1000, errorText))
+                return false;
+            timer.start();
+            while (timer.elapsed() < 5000)
+            {
             OcrRegionConfig region;
             region.enabled = true;
             // 老板资金区域同样包含中文说明，金额解析器只提取数字及分隔符，忽略中文。
@@ -2062,13 +2210,19 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
                     }
                 }
             }
-            if (!waitForAutomation(100, errorText))
-                return false;
+                if (!waitForAutomation(100, errorText))
+                    return false;
+            }
         }
+        if (errorText.isEmpty())
+            errorText = QStringLiteral("5 秒内未识别到老板金额基线（已重试右移 3/6 像素）");
         return false;
     };
 
-    // 执行入口点击后，先清理可能残留的价格提示/确认方案弹窗，再进行初始化数字检测。
+    // 执行入口点击后，先留出 1 秒让价格提示/确认方案弹窗稳定，再进行 OCR 清理。
+    if (!waitForAutomation(1000, errorText))
+        return false;
+    // 清理可能残留的价格提示/确认方案弹窗，再进行初始化数字检测。
     {
         OcrRegionConfig promptRegion;
         promptRegion.enabled = true;
@@ -2169,7 +2323,11 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
             if (!waitForAutomation(150, errorText))
                 return false;
         }
-        Q_UNUSED(initialReadyFound);
+        if (!initialReadyFound)
+        {
+            errorText = QStringLiteral("5 秒内未识别到老板初始准备数字");
+            return false;
+        }
     }
 
     QString currentBossPrice = listingPrice.trimmed();
@@ -2390,16 +2548,28 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
     const POINT finalSelection{ 234, 563 };
     // 老板价格可能需要在下架后按“服务端价格 - 20”重新上架并再次确认数量。
     bool performedDismount = false;
+    bool itemSoldAfterDismount = false;
     for (;;)
     {
         // 下架后返回价格输入前，重新定位“上架物品”，避免直接操作旧的价格面板。
         if (performedDismount)
         {
+            const POINT relistPriceArea{ 1693, 282 };
             bool relistedItemFound = false;
             QString relistItemError;
-            for (int relistAttempt = 1; relistAttempt <= 3; ++relistAttempt)
+            if (!click(relistPriceArea) || !waitForAutomation(1500, errorText))
+                return false;
+            QElapsedTimer relistTimer;
+            relistTimer.start();
+            int relistAttempt = 0;
+            while (relistTimer.elapsed() < TimeoutMs)
             {
-                if (!click(POINT{ 1686, 214 }) || !waitForAutomation(1500, errorText))
+                if (automationCancelRequested_.load())
+                {
+                    errorText = QStringLiteral("用户或服务端已强制停止当前动作");
+                    return false;
+                }
+                if (!click(relistPriceArea))
                     return false;
                 OcrRegionConfig relistRegion;
                 relistRegion.enabled = true;
@@ -2423,15 +2593,21 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
                 if (relistedItemFound)
                     break;
                 relistItemError = ocrError;
+                if (!waitForAutomation(PollIntervalMs, errorText))
+                    return false;
             }
             if (!relistedItemFound)
             {
-                errorText = relistItemError.isEmpty()
-                    ? QStringLiteral("重新定位上架物品失败")
-                    : QStringLiteral("重新定位上架物品失败：%1").arg(relistItemError);
-                return false;
+                // 下架后物品可能在重新上架前已被买走；此时本轮视为成功，跳过重上架。
+                itemSoldAfterDismount = true;
+                emit connectionLogAppended(QStringLiteral(
+                    "老板执行：下架后 5 秒内未找到上架物品，视为货物已被买走，跳过减价重上架"));
+                Q_UNUSED(relistItemError);
+                break;
             }
         }
+        if (itemSoldAfterDismount)
+            break;
         if (!enterAndVerifyBossPrice(pricePanelClick, priceInput)
             || !click(coinDispatchPoint)
             || !waitForAutomation(1500, errorText))
@@ -3090,6 +3266,73 @@ bool ClientController::executeSaveLoadoutSequence(const QString& weapon, const Q
     if (!click(POINT{ 625, 1268 }) || !waitStep())
         return false;
 
+    // 进入弹药选择页后，先处理可能挡住子弹列表的“弹药穿透机制”提示。
+    // 首次识别不到或 OCR 为空时直接继续；识别到后向下滚动 4 格并按空格，
+    // 等待界面刷新后再次确认提示已经消失。
+    {
+        OcrRegionConfig penetrationRegion;
+        penetrationRegion.enabled = true;
+        penetrationRegion.x = 605;
+        penetrationRegion.y = 219;
+        penetrationRegion.width = 773;
+        penetrationRegion.height = 104;
+        penetrationRegion.referenceWidth = ReferenceWidth;
+        penetrationRegion.referenceHeight = ReferenceHeight;
+
+        QElapsedTimer penetrationTimer;
+        penetrationTimer.start();
+        int penetrationAttempt = 0;
+        while (penetrationTimer.elapsed() < 20000)
+        {
+            if (stopIfRequested())
+                return false;
+
+            QString ocrError;
+            const QString imagePath = captureOcrRegion(
+                penetrationRegion,
+                QStringLiteral("save_loadout_penetration_%1").arg(++penetrationAttempt),
+                ocrError);
+            bool foundPenetration = false;
+            if (!imagePath.isEmpty())
+            {
+                QRect bounds;
+                foundPenetration = umiOcrRunner_.findTextBounds(
+                    imagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(),
+                    QStringLiteral("弹药穿透机制"), bounds, ocrError, true);
+                QFile::remove(imagePath);
+            }
+
+            const bool emptyOcr = ocrError.contains(QStringLiteral("No text found in image"), Qt::CaseInsensitive)
+                || (imagePath.isEmpty() && ocrError.isEmpty());
+            const bool normalNoMatch = ocrError.startsWith(QStringLiteral("OCR未找到"))
+                || ocrError.startsWith(QStringLiteral("OCR未识别到文字"));
+            if (!foundPenetration && !ocrError.isEmpty() && !emptyOcr && !normalNoMatch)
+            {
+                errorText = ocrError;
+                return false;
+            }
+            if (!foundPenetration)
+                break;
+
+            for (int scrollIndex = 0; scrollIndex < 4; ++scrollIndex)
+            {
+                if (!input_.scrollReferencePoint(boundHwnd_, POINT{ 342, 700 },
+                    ReferenceWidth, ReferenceHeight, -WHEEL_DELTA * 2, errorText)
+                    || !waitForAutomation(500, errorText))
+                    return false;
+            }
+            if (!input_.pressKey(VK_SPACE, errorText)
+                || !waitForAutomation(1000, errorText))
+                return false;
+        }
+
+        if (penetrationTimer.elapsed() >= 20000)
+        {
+            errorText = QStringLiteral("20 秒内未能关闭“弹药穿透机制”提示");
+            return false;
+        }
+    }
+
     OcrRegionConfig bulletRegion;
     bulletRegion.enabled = true;
     bulletRegion.x = 1487;
@@ -3163,6 +3406,46 @@ bool ClientController::executeSaveLoadoutSequence(const QString& weapon, const Q
         return false;
     if (!input_.pressKey(VK_ESCAPE, errorText) || !waitStep()
         || !input_.pressKey(VK_ESCAPE, errorText) || !waitStep())
+        return false;
+
+    // 两次返回后检查是否仍停留在“配装方案”页面；若仍在该页面，
+    // 再补一次 ESC 返回上一级。4 秒未找到时按正常完成继续。
+    OcrRegionConfig loadoutPlanRegion;
+    loadoutPlanRegion.enabled = true;
+    loadoutPlanRegion.x = 483;
+    loadoutPlanRegion.y = 1380;
+    loadoutPlanRegion.width = 80;
+    loadoutPlanRegion.height = 45;
+    loadoutPlanRegion.referenceWidth = ReferenceWidth;
+    loadoutPlanRegion.referenceHeight = ReferenceHeight;
+    QElapsedTimer loadoutPlanTimer;
+    loadoutPlanTimer.start();
+    bool loadoutPlanFound = false;
+    int loadoutPlanAttempt = 0;
+    while (loadoutPlanTimer.elapsed() < 4000)
+    {
+        if (stopIfRequested())
+            return false;
+        QString ocrError;
+        const QString imagePath = captureOcrRegion(
+            loadoutPlanRegion,
+            QStringLiteral("save_loadout_finish_plan_%1").arg(++loadoutPlanAttempt),
+            ocrError);
+        if (!imagePath.isEmpty())
+        {
+            QRect bounds;
+            loadoutPlanFound = umiOcrRunner_.findTextBounds(
+                imagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(),
+                QStringLiteral("配装方案"), bounds, ocrError);
+            QFile::remove(imagePath);
+        }
+        if (loadoutPlanFound)
+            break;
+        if (!waitForAutomation(150, errorText))
+            return false;
+    }
+    if (loadoutPlanFound
+        && (!input_.pressKey(VK_ESCAPE, errorText) || !waitStep()))
         return false;
     return true;
 }
@@ -3500,159 +3783,217 @@ bool ClientController::executeListingSequence(bool hasExchange, int purchaseCoun
             }
         }
 
-        if (!findAndClickWithin(483, 1380, 80, 45,
-            QStringLiteral("loadout_plan"), QStringLiteral("配装方案"), 4000))
-            return false;
-        if (!findAndClickWithin(114, 491, 145, 40,
-            QStringLiteral("loadout_custom_plan"), QStringLiteral("自定义方案"), 4000))
-        {
-            return false;
-        }
-        if (!click(POINT{ 199, 563 }) || !waitForAutomation(1000, errorText))
-            return false;
-        if (stopRequested() || !click(loadoutPurchase) || !waitStep())
-            return false;
-
-        OcrRegionConfig captchaRegion;
-        captchaRegion.enabled = true;
-        captchaRegion.x = 1221;
-        captchaRegion.y = 491;
-        captchaRegion.width = 100;
-        captchaRegion.height = 55;
-        captchaRegion.referenceWidth = ReferenceWidth;
-        captchaRegion.referenceHeight = ReferenceHeight;
+        // 配装方案入口和自定义方案都允许回调重试：自定义方案暂时未出现时，
+        // 重新点击配装方案入口，再按相同的 4 秒 OCR 上限查找自定义方案。
         for (;;)
         {
             if (stopRequested())
                 return false;
-            QString captchaError;
-            const QString imagePath = captureOcrRegion(
-                captchaRegion, QStringLiteral("loadout_listing_captcha"), captchaError);
-            if (imagePath.isEmpty())
-            {
-                errorText = captchaError;
+            errorText.clear();
+            if (!findAndClickWithin(483, 1380, 80, 45,
+                QStringLiteral("loadout_plan"), QStringLiteral("配装方案"), 4000))
                 return false;
-            }
-            const QString captchaText = umiOcrRunner_.recognizeImage(
-                imagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), captchaError);
-            QFile::remove(imagePath);
-            const bool noText = captchaError.contains(
-                QStringLiteral("No text found in image"), Qt::CaseInsensitive);
-            if (!captchaError.isEmpty() && !noText)
-            {
-                errorText = captchaError;
-                return false;
-            }
-            if (noText || !captchaText.contains(QStringLiteral("验证码"), Qt::CaseInsensitive))
+            errorText.clear();
+            if (findAndClickWithin(114, 491, 145, 40,
+                QStringLiteral("loadout_custom_plan"), QStringLiteral("自定义方案"), 4000))
                 break;
-            if (!click(captchaConfirm) || !waitForAutomation(600, errorText)
-                || !click(loadoutPurchase) || !waitStep())
-                return false;
+            emit connectionLogAppended(QStringLiteral("配装上架：4秒内未找到自定义方案，回调重新点击配装方案"));
+            errorText.clear();
         }
-
-        // 购买后处理可能出现的“价格变动提醒”，确认后重新识别，直到提醒消失。
-        OcrRegionConfig priceChangeRegion;
-        priceChangeRegion.enabled = true;
-        priceChangeRegion.x = 538;
-        priceChangeRegion.y = 313;
-        priceChangeRegion.width = 275;
-        priceChangeRegion.height = 60;
-        priceChangeRegion.referenceWidth = ReferenceWidth;
-        priceChangeRegion.referenceHeight = ReferenceHeight;
-        const POINT priceChangeConfirm{ 1280, 1009 };
-        int priceChangeAttempt = 0;
-        for (;;)
-        {
-            if (stopRequested())
+        const auto runCustomPlanPurchase = [&]() {
+            if (!click(POINT{ 199, 563 }) || !waitForAutomation(1000, errorText))
                 return false;
-            QString priceChangeError;
-            const QString priceChangeImagePath = captureOcrRegion(
-                priceChangeRegion,
-                QStringLiteral("loadout_price_change_%1").arg(++priceChangeAttempt),
-                priceChangeError);
-            if (priceChangeImagePath.isEmpty())
+            if (stopRequested() || !click(loadoutPurchase) || !waitStep())
+                return false;
+
+            OcrRegionConfig captchaRegion;
+            captchaRegion.enabled = true;
+            captchaRegion.x = 1221;
+            captchaRegion.y = 491;
+            captchaRegion.width = 100;
+            captchaRegion.height = 55;
+            captchaRegion.referenceWidth = ReferenceWidth;
+            captchaRegion.referenceHeight = ReferenceHeight;
+            for (;;)
             {
-                if (priceChangeError.contains(QStringLiteral("No text found in image"), Qt::CaseInsensitive))
+                if (stopRequested())
+                    return false;
+                QString captchaError;
+                const QString imagePath = captureOcrRegion(
+                    captchaRegion, QStringLiteral("loadout_listing_captcha"), captchaError);
+                if (imagePath.isEmpty())
+                {
+                    errorText = captchaError;
+                    return false;
+                }
+                const QString captchaText = umiOcrRunner_.recognizeImage(
+                    imagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), captchaError);
+                QFile::remove(imagePath);
+                const bool noText = captchaError.contains(
+                    QStringLiteral("No text found in image"), Qt::CaseInsensitive);
+                if (!captchaError.isEmpty() && !noText)
+                {
+                    errorText = captchaError;
+                    return false;
+                }
+                if (noText || !captchaText.contains(QStringLiteral("验证码"), Qt::CaseInsensitive))
                     break;
-                errorText = priceChangeError;
-                return false;
+                if (!click(captchaConfirm) || !waitForAutomation(600, errorText)
+                    || !click(loadoutPurchase) || !waitStep())
+                    return false;
             }
-            QRect priceChangeBounds;
-            const bool priceChangeFound = umiOcrRunner_.findTextBounds(
-                priceChangeImagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(),
-                QStringLiteral("价格变动提醒"), priceChangeBounds, priceChangeError);
-            QRect schemeBounds;
-            const bool schemeFound = umiOcrRunner_.findTextBounds(
-                priceChangeImagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(),
-                QStringLiteral("确认实现方案"), schemeBounds, priceChangeError);
-            QFile::remove(priceChangeImagePath);
-            if (!priceChangeFound && !schemeFound)
-                break;
-            if (!click(priceChangeConfirm) || !waitStep())
-                return false;
-        }
 
-        if (!findAndClickWithin(173, 44, 1217, 60,
-            QStringLiteral("loadout_listing_warehouse"), QStringLiteral("仓库"))
-            || !findAndClickWithin(394, 1380, 80, 45,
-                QStringLiteral("loadout_transfer_all"), QStringLiteral("转移全部"), 4000)
-            || !findAndClickWithin(173, 44, 1217, 60,
-                QStringLiteral("loadout_listing_market"), QStringLiteral("交易行"))
-            || !waitStep()
-            || !findAndClickWithin(195, 125, 495, 46,
-                QStringLiteral("loadout_listing_sell"), QStringLiteral("出售"))
-            || !waitStep())
-        {
+            // 购买后处理可能出现的“价格变动提醒”，确认后重新识别，直到提醒消失。
+            OcrRegionConfig priceChangeRegion;
+            priceChangeRegion.enabled = true;
+            priceChangeRegion.x = 538;
+            priceChangeRegion.y = 313;
+            priceChangeRegion.width = 275;
+            priceChangeRegion.height = 60;
+            priceChangeRegion.referenceWidth = ReferenceWidth;
+            priceChangeRegion.referenceHeight = ReferenceHeight;
+            const POINT priceChangeConfirm{ 1280, 1009 };
+            int priceChangeAttempt = 0;
+            for (;;)
+            {
+                if (stopRequested())
+                    return false;
+                QString priceChangeError;
+                const QString priceChangeImagePath = captureOcrRegion(
+                    priceChangeRegion,
+                    QStringLiteral("loadout_price_change_%1").arg(++priceChangeAttempt),
+                    priceChangeError);
+                if (priceChangeImagePath.isEmpty())
+                {
+                    if (priceChangeError.contains(QStringLiteral("No text found in image"), Qt::CaseInsensitive))
+                        break;
+                    errorText = priceChangeError;
+                    return false;
+                }
+                QRect priceChangeBounds;
+                const bool priceChangeFound = umiOcrRunner_.findTextBounds(
+                    priceChangeImagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(),
+                    QStringLiteral("价格变动提醒"), priceChangeBounds, priceChangeError);
+                QRect schemeBounds;
+                const bool schemeFound = umiOcrRunner_.findTextBounds(
+                    priceChangeImagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(),
+                    QStringLiteral("确认实现方案"), schemeBounds, priceChangeError);
+                QFile::remove(priceChangeImagePath);
+                if (!priceChangeFound && !schemeFound)
+                    break;
+                if (!click(priceChangeConfirm) || !waitStep())
+                    return false;
+            }
+            return true;
+        };
+
+        if (!runCustomPlanPurchase())
             return false;
+
+        // 配装上架的 OCR 文本成功后，先留出 300ms 让界面稳定，再点击识别到的文字中心。
+        const auto navigateLoadoutFromTransferToSell = [&]() {
+            if (!findAndClickWithin(394, 1380, 80, 45,
+                QStringLiteral("loadout_transfer_all"), QStringLiteral("转移全部"), 4000, 300))
+                return false;
+            if (!findAndClickWithin(173, 44, 1217, 60,
+                QStringLiteral("loadout_listing_market"), QStringLiteral("交易行"), 5000, 300))
+                return false;
+            if (!waitStep())
+                return false;
+            if (!findAndClickWithin(195, 125, 495, 46,
+                QStringLiteral("loadout_listing_sell"), QStringLiteral("出售"), 5000, 300))
+                return false;
+            return waitStep();
+        };
+
+        const auto navigateLoadoutToSell = [&]() {
+            if (!findAndClickWithin(173, 44, 1217, 60,
+                QStringLiteral("loadout_listing_warehouse"), QStringLiteral("仓库"), 5000, 300))
+                return false;
+            return navigateLoadoutFromTransferToSell();
+        };
+
+        for (;;)
+        {
+            if (navigateLoadoutToSell())
+                break;
+            if (stopRequested())
+                return false;
+            if (!input_.pressKey(VK_ESCAPE, errorText)
+                || !waitForAutomation(800, errorText))
+                return false;
+            emit connectionLogAppended(QStringLiteral("配装上架：未找到仓库，ESC后回调查找自定义方案"));
+            errorText.clear();
+            if (!findAndClickWithin(114, 491, 145, 40,
+                QStringLiteral("loadout_custom_plan_warehouse_retry"), QStringLiteral("自定义方案"), 4000))
+                return false;
+            if (!runCustomPlanPurchase())
+                return false;
+            emit connectionLogAppended(QStringLiteral("配装上架：已从自定义方案重新购买，继续查找仓库"));
         }
 
         const POINT loadoutPriceArea{ 1693, 282 };
-        if (!click(loadoutPriceArea) || !waitStep())
-            return false;
+        const auto findLoadoutListingItem = [&]() {
+            if (!click(loadoutPriceArea) || !waitStep())
+                return false;
 
-        OcrRegionConfig listingItemRegion;
-        listingItemRegion.enabled = true;
-        listingItemRegion.x = 540;
-        listingItemRegion.y = 309;
-        listingItemRegion.width = 190;
-        listingItemRegion.height = 55;
-        listingItemRegion.referenceWidth = ReferenceWidth;
-        listingItemRegion.referenceHeight = ReferenceHeight;
-        QElapsedTimer listingItemTimer;
-        listingItemTimer.start();
-        bool foundListingItem = false;
-        int listingAttempt = 0;
-        QString listingItemError;
-        while (listingItemTimer.elapsed() < 5000)
-        {
-            if (stopRequested())
-                return false;
-            if (!click(loadoutPriceArea))
-                return false;
-            QString ocrError;
-            const QString imagePath = captureOcrRegion(
-                listingItemRegion, QStringLiteral("loadout_listing_item_%1").arg(++listingAttempt), ocrError);
-            if (!imagePath.isEmpty())
+            OcrRegionConfig listingItemRegion;
+            listingItemRegion.enabled = true;
+            listingItemRegion.x = 540;
+            listingItemRegion.y = 309;
+            listingItemRegion.width = 190;
+            listingItemRegion.height = 55;
+            listingItemRegion.referenceWidth = ReferenceWidth;
+            listingItemRegion.referenceHeight = ReferenceHeight;
+            QElapsedTimer listingItemTimer;
+            listingItemTimer.start();
+            int listingAttempt = 0;
+            QString listingItemError;
+            while (listingItemTimer.elapsed() < 5000)
             {
-                QRect bounds;
-                foundListingItem = umiOcrRunner_.findTextBounds(
-                    imagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(),
-                    QStringLiteral("上架物品"), bounds, ocrError);
-                QFile::remove(imagePath);
+                if (stopRequested())
+                    return false;
+                if (!click(loadoutPriceArea))
+                    return false;
+                QString ocrError;
+                const QString imagePath = captureOcrRegion(
+                    listingItemRegion, QStringLiteral("loadout_listing_item_%1").arg(++listingAttempt), ocrError);
+                bool foundListingItem = false;
+                if (!imagePath.isEmpty())
+                {
+                    QRect bounds;
+                    foundListingItem = umiOcrRunner_.findTextBounds(
+                        imagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(),
+                        QStringLiteral("上架物品"), bounds, ocrError);
+                    QFile::remove(imagePath);
+                }
+                if (foundListingItem)
+                    return true;
+                listingItemError = ocrError;
+                if (!waitForAutomation(150, errorText))
+                    return false;
             }
-            if (foundListingItem)
-                break;
-            listingItemError = ocrError;
-            if (!waitForAutomation(150, errorText))
-                return false;
-        }
-        if (!foundListingItem)
-        {
             errorText = listingItemError.isEmpty()
                 ? QStringLiteral("5 秒内未识别到“上架物品”")
                 : QStringLiteral("5 秒内未识别到“上架物品”：%1").arg(listingItemError);
             return false;
+        };
+
+        // 找不到“上架物品”时关闭当前面板，等待界面回稳，从“仓库”重新执行导航。
+        for (;;)
+        {
+            if (findLoadoutListingItem())
+                break;
+            if (stopRequested())
+                return false;
+            if (!input_.pressKey(VK_ESCAPE, errorText)
+                || !waitForAutomation(800, errorText))
+                return false;
+            emit connectionLogAppended(QStringLiteral("配装上架：5秒内未找到“上架物品”，ESC后等待800ms，从“仓库”重新尝试"));
+            if (!navigateLoadoutToSell())
+                return false;
         }
+
 
         if (!enterAndVerifyPrice(POINT{ 1939, 745 }, POINT{ 1827, 858 }, listingPrice,
             QStringLiteral("loadout_listing_price")))

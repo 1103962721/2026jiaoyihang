@@ -116,6 +116,7 @@ private:
     void appendBulletOcrLog(const QString& text);
     void handleTeamCodeRequest();
     void handleTeamReadyRequest();
+    void handlePrepareRequest(int requestId);
     void handleOcrRequest(int requestId, int x, int y, int width, int height, int referenceWidth, int referenceHeight);
     void handleSelfThunderRequest(int requestId);
     void handleLoadoutRequest(int requestId, const QString& loadoutType);
@@ -134,6 +135,7 @@ private:
     bool waitForListingQuantityReady(QString& errorText, const QString& prefix,
         int timeoutMs = 10000, bool* performedDismount = nullptr);
     bool executeBossListingSequence(const QString& listingPrice, QString& errorText);
+    bool executeBossPrepareCheck(int requestId, QString& errorText);
     bool waitForAutomation(int milliseconds, QString& errorText);
     bool beginAutomationAction(const QString& actionName);
     void finishAutomationAction();

@@ -28,6 +28,8 @@ namespace Protocol
         TeamCodeRequest,
         TeamCodeResponse,
         TeamReadyRequest,
+        PrepareRequest,
+        PrepareResponse,
         RebindWindowRequest,
         ForceStopActionRequest,
         TeamReady,
@@ -183,6 +185,17 @@ namespace Protocol
     inline std::string BuildTeamReadyRequestMessage()
     {
         return "TEAM_READY_REQUEST\n";
+    }
+
+    inline std::string BuildPrepareRequestMessage(int requestId)
+    {
+        return "PREPARE_REQUEST " + std::to_string(requestId) + "\n";
+    }
+
+    inline std::string BuildPrepareResponseMessage(int requestId, const std::string& status, const std::string& payload)
+    {
+        return "PREPARE_RESPONSE " + std::to_string(requestId) + " " + status + " "
+            + NormalizeLinePayload(payload) + "\n";
     }
 
     inline std::string BuildRebindWindowRequestMessage()
@@ -352,6 +365,38 @@ namespace Protocol
         if (stream.fail())
         {
             return false;
+        }
+
+        if (command == "PREPARE_REQUEST")
+        {
+            int requestId = 0;
+            std::string extra;
+            stream >> requestId;
+            if (stream.fail() || requestId <= 0 || (stream >> extra))
+                return false;
+            message.type = MessageType::PrepareRequest;
+            message.requestId = requestId;
+            return true;
+        }
+
+        if (command == "PREPARE_RESPONSE")
+        {
+            int requestId = 0;
+            std::string status;
+            stream >> requestId >> status;
+            if (stream.fail() || requestId <= 0
+                || (status != "OK" && status != "RETRY" && status != "ERROR"))
+                return false;
+            std::string payload;
+            std::getline(stream, payload);
+            if (!payload.empty() && payload.front() == ' ')
+                payload.erase(0, 1);
+            message.type = MessageType::PrepareResponse;
+            message.requestId = requestId;
+            message.success = status == "OK";
+            message.value = status == "RETRY" ? 1 : (status == "ERROR" ? -1 : 0);
+            message.payload = payload;
+            return true;
         }
 
         if (command == "TIME_SYNC_REQUEST")

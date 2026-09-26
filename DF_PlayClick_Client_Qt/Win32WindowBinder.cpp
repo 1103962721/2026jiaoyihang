@@ -4,7 +4,7 @@
 
 #include <psapi.h>
 
-#include "../DF_PlayClick_Client/ClientBindingRules.h"
+#include "../Shared/ClientBindingRules.h"
 
 namespace
 {

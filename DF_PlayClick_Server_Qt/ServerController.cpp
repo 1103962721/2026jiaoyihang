@@ -8,7 +8,7 @@
 #include <QThread>
 
 #include "AutoStartOcrRules.h"
-#include "../DF_PlayClick_Server/ServerRules.h"
+#include "../Shared/ServerRules.h"
 #include "../Shared/Protocol.h"
 
 namespace
@@ -149,6 +149,8 @@ ServerController::ServerController(QObject* parent)
                 break;
             }
         });
+    connect(&connectionManager_, &ServerConnectionManager::prepareResponseReceived, this,
+        &ServerController::handlePrepareResponse);
     connect(&connectionManager_, &ServerConnectionManager::listeningChanged, this, &ServerController::listeningChanged);
     connect(&connectionManager_, &ServerConnectionManager::networkError, this, [this](const QString& text) {
         emit statusChanged(text, ServerStatusTone::Error);
@@ -260,10 +262,9 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
     {
         if (!client.connected || !client.ready || client.actionRunning)
             continue;
-        // 手动执行用于启动首轮，老板无需已有 OCR 准备结果；自动轮次必须准备成功。
+        // 每一轮执行都先由老板客户端完成独立的准备检查；这里仅筛选空闲老板。
         if (client.role == ClientRole::Boss
-            && client.teamReadyText != QStringLiteral("执行中")
-            && (!automatic || client.teamReadyState == 1))
+            && client.teamReadyText != QStringLiteral("执行中"))
             availableBosses.push_back(client.id);
         else if (client.role == ClientRole::Coin && client.listingStatus == QStringLiteral("成功"))
             availableCoins.push_back(client.id);
@@ -292,6 +293,41 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
     lastTriggerCoinFirst_ = coinFirst;
     lastTriggerCompensationEnabled_ = compensationEnabled;
     lastTriggerCompensationLeadText_ = compensationLeadText;
+
+    if (!dispatchingPreparedExecution_ && !availableBosses.isEmpty())
+    {
+        if (preparingExecution_)
+            return;
+        pendingCountdownText_ = countdownText;
+        pendingGroupDelayText_ = groupDelayText;
+        pendingCoinFirst_ = coinFirst;
+        pendingCompensationEnabled_ = compensationEnabled;
+        pendingCompensationLeadText_ = compensationLeadText;
+        pendingBossPriceText_ = normalizedBossPrice;
+        pendingAllowIncomplete_ = allowIncomplete;
+        pendingAutomatic_ = automatic;
+        pendingPrepareRequests_.clear();
+        preparingExecution_ = true;
+        for (quint64 bossId : availableBosses)
+        {
+            const int requestId = nextOcrRequestId_++;
+            QString prepareError;
+            if (connectionManager_.requestPrepare(bossId, requestId, prepareError))
+                pendingPrepareRequests_.insert(requestId, bossId);
+            else
+                emit connectionLogAppended(QStringLiteral("老板客户端 %1 准备请求失败：%2").arg(bossId).arg(prepareError));
+        }
+        if (pendingPrepareRequests_.isEmpty())
+        {
+            preparingExecution_ = false;
+            emit statusChanged(QStringLiteral("没有成功发送老板准备检查"), ServerStatusTone::Error);
+            return;
+        }
+        for (quint64 id : availableBosses)
+            connectionManager_.setClientTeamReadyDisplay(id, QStringLiteral("准备检查中"), -1);
+        emit statusChanged(QStringLiteral("已发送老板准备检查，等待 %1 个老板回报后下发执行").arg(pendingPrepareRequests_.size()), ServerStatusTone::Neutral);
+        return;
+    }
     // 执行开始后只清除本轮选中客户端状态，未入组的成功状态保留。
     QSet<quint64> selectedIds;
     for (quint64 id : availableBosses) selectedIds.insert(id);
@@ -530,6 +566,8 @@ void ServerController::requestForceStopAllActions()
     compensationSyncTimer_.stop();
     compensationRound_ = CompensationRound{};
     autoExecuteTriggered_ = false;
+    preparingExecution_ = false;
+    pendingPrepareRequests_.clear();
     connectionManager_.resetAllClientStates();
     emit statusChanged(QStringLiteral("已向 %1 个客户端发送强制停止指令").arg(sentCount), ServerStatusTone::Success);
 }
@@ -1269,6 +1307,60 @@ void ServerController::startListing(const QString& listingText, const QString& l
         .arg(sentCount).arg(failedCount), failedCount == 0 ? ServerStatusTone::Success : ServerStatusTone::Neutral);
 }
 
+void ServerController::startListingForClient(quint64 clientId, const QString& listingText,
+    const QString& listingPrice, bool hasExchange, int purchaseCount, bool loadoutMode)
+{
+    const QString normalizedText = listingText.trimmed();
+    const QString normalizedPrice = listingPrice.trimmed();
+    bool priceOk = false;
+    const double priceValue = normalizedPrice.toDouble(&priceOk);
+    if (!priceOk || priceValue <= 0.0)
+    {
+        emit statusChanged(QStringLiteral("请输入有效的上架价格"), ServerStatusTone::Error);
+        return;
+    }
+    if (purchaseCount <= 0 || purchaseCount > 99)
+    {
+        emit statusChanged(QStringLiteral("购买次数必须在 1 到 99 之间"), ServerStatusTone::Error);
+        return;
+    }
+
+    const auto currentClients = connectionManager_.clients();
+    const auto target = std::find_if(currentClients.cbegin(), currentClients.cend(),
+        [clientId](const ClientListItem& client) { return client.id == clientId; });
+    if (target == currentClients.cend() || !target->connected)
+    {
+        emit statusChanged(QStringLiteral("指定客户端已断开或不存在"), ServerStatusTone::Error);
+        return;
+    }
+    if (target->role != ClientRole::Coin)
+    {
+        emit statusChanged(QStringLiteral("上架功能仅对币号生效"), ServerStatusTone::Error);
+        return;
+    }
+
+    connectionManager_.resetClientListingQuantity(clientId);
+    connectionManager_.setClientListingStatus(clientId, QStringLiteral("待执行"));
+    // 与群发上架保持相同的界面稳定等待，但只向当前目标客户端发送请求。
+    QThread::msleep(1000);
+    QString errorText;
+    const int requestId = nextListingRequestId_++;
+    if (!connectionManager_.requestListing(clientId, requestId, normalizedText, normalizedPrice,
+        hasExchange, purchaseCount, loadoutMode, errorText))
+    {
+        connectionManager_.setClientListingStatus(clientId, QStringLiteral("失败"));
+        emit connectionLogAppended(QStringLiteral("币号客户端 %1 单独上架下发失败：%2")
+            .arg(clientId).arg(errorText));
+        emit statusChanged(QStringLiteral("客户端 %1 上架下发失败：%2").arg(clientId).arg(errorText),
+            ServerStatusTone::Error);
+        return;
+    }
+
+    emit connectionLogAppended(QStringLiteral("已向币号客户端 %1 单独下发上架任务，requestId=%2")
+        .arg(clientId).arg(requestId));
+    emit statusChanged(QStringLiteral("已向客户端 %1 下发单独上架任务").arg(clientId), ServerStatusTone::Success);
+}
+
 void ServerController::saveLoadout(const QString& weapon, const QString& backpack, const QString& egg,
     const QString& bulletName, int perClick, int bulletTotal)
 {
@@ -1442,6 +1534,35 @@ void ServerController::setAutoExecuteEnabled(bool enabled)
         autoExecuteTimer_.stop();
 }
 
+void ServerController::updateAutoExecuteParameters(const QString& countdownText, const QString& groupDelayText,
+    bool coinFirst, bool compensationEnabled, const QString& compensationLeadText, const QString& bossPriceText)
+{
+    const int seconds = ParseCountdownSeconds(countdownText.toStdWString().c_str());
+    bool delayOk = false;
+    const int delay = groupDelayText.toInt(&delayOk);
+    if (seconds >= 0 && delayOk && delay >= 0 && delay <= 600000)
+    {
+        lastTriggerCountdownText_ = countdownText;
+        lastTriggerGroupDelayText_ = groupDelayText;
+    }
+    bool leadOk = false;
+    const int lead = compensationLeadText.toInt(&leadOk);
+    if (!compensationEnabled || (leadOk && lead >= 0 && lead <= 600000))
+    {
+        lastTriggerCoinFirst_ = coinFirst;
+        lastTriggerCompensationEnabled_ = compensationEnabled;
+        lastTriggerCompensationLeadText_ = compensationLeadText;
+    }
+    const QString price = bossPriceText.trimmed();
+    bool priceOk = false;
+    const double value = price.toDouble(&priceOk);
+    if (price.isEmpty() || (priceOk && value > 0.0))
+    {
+        if (!price.isEmpty())
+            bossListingPrice_ = price;
+    }
+}
+
 void ServerController::processAutoExecuteTick()
 {
     if (!autoExecuteEnabled_)
@@ -1467,6 +1588,36 @@ void ServerController::processAutoExecuteTick()
     }
     if (completeGroups == 0)
         autoExecuteTriggered_ = false;
+}
+
+void ServerController::handlePrepareResponse(quint64 clientId, int requestId, int status, const QString& text)
+{
+    if (!preparingExecution_ || !pendingPrepareRequests_.contains(requestId))
+        return;
+    if (status == 1)
+    {
+        emit connectionLogAppended(QStringLiteral("老板客户端 %1 准备失败后重试：%2").arg(clientId).arg(text));
+        return;
+    }
+    pendingPrepareRequests_.remove(requestId);
+    if (status < 0)
+    {
+        preparingExecution_ = false;
+        pendingPrepareRequests_.clear();
+        autoExecuteTriggered_ = false;
+        emit statusChanged(QStringLiteral("老板客户端 %1 准备检查失败：%2").arg(clientId).arg(text), ServerStatusTone::Error);
+        return;
+    }
+    emit connectionLogAppended(QStringLiteral("老板客户端 %1 准备检查成功：%2，剩余 %3 个").arg(clientId).arg(text).arg(pendingPrepareRequests_.size()));
+    if (!pendingPrepareRequests_.isEmpty())
+        return;
+
+    preparingExecution_ = false;
+    dispatchingPreparedExecution_ = true;
+    triggerClients(pendingCountdownText_, pendingGroupDelayText_, pendingCoinFirst_,
+        pendingCompensationEnabled_, pendingCompensationLeadText_, pendingBossPriceText_,
+        pendingAllowIncomplete_, pendingAutomatic_);
+    dispatchingPreparedExecution_ = false;
 }
 void ServerController::kickClient(quint64 clientId)
 {

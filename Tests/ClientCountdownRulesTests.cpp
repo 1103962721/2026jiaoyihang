@@ -1,5 +1,5 @@
 #include <cassert>
-#include "../DF_PlayClick_Client/ClientCountdownRules.h"
+#include "../Shared/ClientCountdownRules.h"
 
 int main()
 {

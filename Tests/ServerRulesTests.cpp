@@ -1,5 +1,5 @@
 #include <cassert>
-#include "../DF_PlayClick_Server/ServerRules.h"
+#include "../Shared/ServerRules.h"
 
 int main()
 {

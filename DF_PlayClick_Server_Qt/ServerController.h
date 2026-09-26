@@ -43,6 +43,8 @@ public slots:
     void setClientRemark(quint64 clientId, const QString& remark);
     void setClientRole(quint64 clientId, ClientRole role);
     void startListing(const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, bool loadoutMode);
+    void startListingForClient(quint64 clientId, const QString& listingText, const QString& listingPrice,
+        bool hasExchange, int purchaseCount, bool loadoutMode);
     void saveLoadout(const QString& weapon, const QString& backpack, const QString& egg,
         const QString& bulletName, int perClick, int bulletTotal);
     void saveLoadoutForRole(ClientRole role, const QString& weapon, const QString& backpack, const QString& egg,
@@ -57,6 +59,9 @@ public slots:
     void setAutoExecuteThresholds(int bossCount, int coinCount);
     void setHighPriceStopThreshold(int threshold);
     void setAutoExecuteEnabled(bool enabled);
+    void updateAutoExecuteParameters(const QString& countdownText, const QString& groupDelayText,
+        bool coinFirst, bool compensationEnabled, const QString& compensationLeadText,
+        const QString& bossPriceText);
     void kickClient(quint64 clientId);
     void setBossExpectedAmount(quint64 clientId, const QString& amountText);
 
@@ -157,6 +162,17 @@ private:
     int highPriceStopThreshold_ = 3;
     bool autoExecuteEnabled_ = false;
     bool autoExecuteTriggered_ = false;
+    bool preparingExecution_ = false;
+    bool dispatchingPreparedExecution_ = false;
+    QHash<int, quint64> pendingPrepareRequests_;
+    QString pendingCountdownText_;
+    QString pendingGroupDelayText_;
+    bool pendingCoinFirst_ = true;
+    bool pendingCompensationEnabled_ = false;
+    QString pendingCompensationLeadText_;
+    QString pendingBossPriceText_;
+    bool pendingAllowIncomplete_ = false;
+    bool pendingAutomatic_ = false;
     QString bossListingPrice_;
     QString lastTriggerCountdownText_ = QStringLiteral("5");
     QString lastTriggerGroupDelayText_ = QStringLiteral("100");
@@ -164,4 +180,5 @@ private:
     bool lastTriggerCompensationEnabled_ = true;
     QString lastTriggerCompensationLeadText_ = QStringLiteral("1500");
     void processAutoExecuteTick();
+    void handlePrepareResponse(quint64 clientId, int requestId, int status, const QString& text);
 };

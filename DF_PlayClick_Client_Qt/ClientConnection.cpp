@@ -316,6 +316,19 @@ bool ClientConnection::sendTeamReady(int state, int current, int total)
     return true;
 }
 
+bool ClientConnection::sendPrepareResponse(int requestId, const QString& status, const QString& payload)
+{
+    if (!connected_ || socket_ == INVALID_SOCKET)
+        return false;
+    if (!SocketUtil::SendLine(socket_, Protocol::BuildPrepareResponseMessage(
+        requestId, status.toStdString(), payload.toUtf8().toStdString())))
+    {
+        handleConnectionLost(QStringLiteral("发送执行前准备结果失败，服务端连接已断开，错误码：%1").arg(WSAGetLastError()));
+        return false;
+    }
+    return true;
+}
+
 bool ClientConnection::sendOcrResponse(int requestId, bool success, const QString& payload)
 {
     if (!connected_ || socket_ == INVALID_SOCKET)
@@ -508,6 +521,12 @@ void ClientConnection::receiveLoop()
             {
                 QMetaObject::invokeMethod(this, [this]() {
                     emit teamReadyRequestReceived();
+                }, Qt::QueuedConnection);
+            }
+            else if (message.type == Protocol::MessageType::PrepareRequest)
+            {
+                QMetaObject::invokeMethod(this, [this, requestId = message.requestId]() {
+                    emit prepareRequestReceived(requestId);
                 }, Qt::QueuedConnection);
             }
             else if (message.type == Protocol::MessageType::RebindWindowRequest)

@@ -384,6 +384,30 @@ bool ServerConnectionManager::requestTeamReady(quint64 clientId, QString& errorT
     return true;
 }
 
+bool ServerConnectionManager::requestPrepare(quint64 clientId, int requestId, QString& errorText)
+{
+    std::shared_ptr<ClientEntry> client;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        client = findClientLocked(clientId);
+        if (!client || !client->connected) { errorText = QStringLiteral("客户端已断开"); return false; }
+        if (client->role != ClientRole::Boss) { errorText = QStringLiteral("执行前准备检查仅适用于老板"); return false; }
+        if (client->actionRunning) { errorText = QStringLiteral("该客户端正在执行：%1").arg(client->runningAction); return false; }
+        client->actionRunning = true;
+        client->runningAction = QStringLiteral("执行前准备检查");
+        client->teamReadyText = QStringLiteral("准备检查中");
+        client->teamReadyState = -1;
+    }
+    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildPrepareRequestMessage(requestId)))
+    {
+        recordDisconnectReason(client, QStringLiteral("发送 PREPARE_REQUEST 失败，错误码：%1").arg(WSAGetLastError()));
+        markClientDisconnected(client->id);
+        return false;
+    }
+    emit clientsChanged();
+    return true;
+}
+
 bool ServerConnectionManager::requestRebindWindow(quint64 clientId, QString& errorText)
 {
     std::shared_ptr<ClientEntry> client;
@@ -814,6 +838,21 @@ bool ServerConnectionManager::setClientListingStatus(quint64 clientId, const QSt
     return true;
 }
 
+bool ServerConnectionManager::resetClientListingQuantity(quint64 clientId)
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto client = findClientLocked(clientId);
+        if (!client)
+        {
+            return false;
+        }
+        client->listingQuantityX = -1;
+    }
+    emit clientsChanged();
+    return true;
+}
+
 bool ServerConnectionManager::setBossExpectedAmount(quint64 clientId, qint64 amount, QString& errorText)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1099,6 +1138,28 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
                         : QStringLiteral("[%1/%2]").arg(message.current).arg(message.total);
                 }
                 emit clientsChanged();
+            }
+            else if (message.type == Protocol::MessageType::PrepareResponse)
+            {
+                const QString responseText = QString::fromUtf8(message.payload.data(), static_cast<int>(message.payload.size()));
+                if (message.value != 1)
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    client->actionRunning = false;
+                    client->runningAction.clear();
+                    client->teamReadyState = message.success ? 1 : 0;
+                    client->teamReadyText = message.success ? QStringLiteral("准备成功") : QStringLiteral("准备失败");
+                    client->teamReadyUpdatedAtMs = QDateTime::currentMSecsSinceEpoch();
+                }
+                else
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    client->teamReadyText = QStringLiteral("准备失败，ESC 后重试");
+                    client->teamReadyState = 0;
+                    client->teamReadyUpdatedAtMs = QDateTime::currentMSecsSinceEpoch();
+                }
+                emit clientsChanged();
+                emit prepareResponseReceived(client->id, message.requestId, message.value, responseText);
             }
             else if (message.type == Protocol::MessageType::OcrResponse)
             {
