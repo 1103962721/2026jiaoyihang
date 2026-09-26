@@ -47,12 +47,15 @@ public slots:
         const QString& bulletName, int perClick, int bulletTotal);
     void saveLoadoutForRole(ClientRole role, const QString& weapon, const QString& backpack, const QString& egg,
         const QString& bulletName, int perClick, int bulletTotal);
+    void saveLoadoutForClient(quint64 clientId, ClientRole role, const QString& weapon, const QString& backpack,
+        const QString& egg, const QString& bulletName, int perClick, int bulletTotal);
     void startCoinSemiAuto(const QString& weapon, const QString& backpack, const QString& egg,
         const QString& bulletName, int perClick, int bulletTotal, const QString& listingText,
         const QString& listingPrice, int purchaseCount, bool loadoutMode);
     void requestMail(quint64 clientId);
     void requestMailAll();
     void setAutoExecuteThresholds(int bossCount, int coinCount);
+    void setHighPriceStopThreshold(int threshold);
     void setAutoExecuteEnabled(bool enabled);
     void kickClient(quint64 clientId);
     void setBossExpectedAmount(quint64 clientId, const QString& amountText);
@@ -151,6 +154,7 @@ private:
     bool autoStartCanTrigger_ = true;
     int autoExecuteBossThreshold_ = 1;
     int autoExecuteCoinThreshold_ = 1;
+    int highPriceStopThreshold_ = 3;
     bool autoExecuteEnabled_ = false;
     bool autoExecuteTriggered_ = false;
     QString bossListingPrice_;

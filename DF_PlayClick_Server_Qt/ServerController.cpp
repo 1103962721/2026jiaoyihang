@@ -140,10 +140,11 @@ ServerController::ServerController(QObject* parent)
                     requestForceStopAction(clientId);
                     emit connectionLogAppended(QStringLiteral("老板客户端 %1 已达到期望金额，停止该客户端").arg(clientId));
                 }
-                if (client.consecutiveHighPriceCount >= 3)
+                if (client.consecutiveHighPriceCount >= highPriceStopThreshold_)
                 {
                     requestForceStopAllActions();
-                    emit connectionLogAppended(QStringLiteral("老板客户端 %1 连续三次高价，停止所有客户端").arg(clientId));
+                    emit connectionLogAppended(QStringLiteral("老板客户端 %1 连续 %2 次高价，停止所有客户端")
+                        .arg(clientId).arg(highPriceStopThreshold_));
                 }
                 break;
             }
@@ -1326,6 +1327,37 @@ void ServerController::saveLoadoutForRole(ClientRole targetRole, const QString& 
         sentCount == coinCount ? ServerStatusTone::Success : ServerStatusTone::Neutral);
 }
 
+void ServerController::saveLoadoutForClient(quint64 clientId, ClientRole targetRole, const QString& weapon,
+    const QString& backpack, const QString& egg, const QString& bulletName, int perClick, int bulletTotal)
+{
+    const QStringList values = { weapon.trimmed(), backpack.trimmed(), egg.trimmed(), bulletName.trimmed() };
+    for (const QString& value : values)
+    {
+        if (value.isEmpty())
+        {
+            emit statusChanged(QStringLiteral("请完整填写配装参数"), ServerStatusTone::Error);
+            emit messageRequested(QStringLiteral("参数错误"), QStringLiteral("武器、背包、蛋挂和子弹名称均不能为空"), true);
+            return;
+        }
+    }
+    if (perClick <= 0 || bulletTotal <= 0 || bulletTotal % perClick != 0)
+    {
+        emit statusChanged(QStringLiteral("子弹参数错误"), ServerStatusTone::Error);
+        emit messageRequested(QStringLiteral("参数错误"), QStringLiteral("子弹总数必须能被单次数量整除"), true);
+        return;
+    }
+
+    QString errorText;
+    if (!connectionManager_.requestSaveLoadout(clientId, nextSaveLoadoutRequestId_++, targetRole,
+        values[0], values[1], values[2], values[3], perClick, bulletTotal, errorText))
+    {
+        emit statusChanged(errorText, ServerStatusTone::Error);
+        emit connectionLogAppended(QStringLiteral("客户端 %1 保存配装下发失败：%2").arg(clientId).arg(errorText));
+        return;
+    }
+    emit statusChanged(QStringLiteral("已向客户端 %1 发送保存配装任务").arg(clientId), ServerStatusTone::Success);
+}
+
 void ServerController::startCoinSemiAuto(const QString& weapon, const QString& backpack, const QString& egg,
     const QString& bulletName, int perClick, int bulletTotal, const QString& listingText,
     const QString& listingPrice, int purchaseCount, bool loadoutMode)
@@ -1393,6 +1425,11 @@ void ServerController::setAutoExecuteThresholds(int bossCount, int coinCount)
     autoExecuteBossThreshold_ = qMax(1, bossCount);
     autoExecuteCoinThreshold_ = qMax(1, coinCount);
     autoExecuteTriggered_ = false;
+}
+
+void ServerController::setHighPriceStopThreshold(int threshold)
+{
+    highPriceStopThreshold_ = qBound(1, threshold, 99);
 }
 
 void ServerController::setAutoExecuteEnabled(bool enabled)

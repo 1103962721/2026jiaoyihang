@@ -71,6 +71,7 @@ private:
     QSpinBox* listingPurchaseCountSpin_ = nullptr;
     QSpinBox* autoBossThresholdSpin_ = nullptr;
     QSpinBox* autoCoinThresholdSpin_ = nullptr;
+    QSpinBox* highPriceStopThresholdSpin_ = nullptr;
     QCheckBox* autoExecuteCheck_ = nullptr;
     QLabel* listingQuantityTotalLabel_ = nullptr;
     QLabel* listingSuccessClientsLabel_ = nullptr;

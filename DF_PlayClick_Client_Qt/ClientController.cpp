@@ -36,27 +36,16 @@ QString NormalizeAmountOcrText(QString text)
     text.replace(QChar(0x3002), QChar('.'));
     text.replace(QChar(0xFF0E), QChar('.'));
     // 资金 OCR 结果可能包含中文说明，只保留金额解析需要的字符。
-    text.remove(QRegularExpression(QStringLiteral("[^0-9,\.KkMm]")));
+    text.remove(QRegularExpression(QStringLiteral("[^0-9,.KkMm]")));
     return text;
 }
 
 QString NormalizeAmountNumericToken(QString value)
 {
-    value.remove(QChar(','));
-    const int dotCount = value.count(QChar('.'));
-    if (dotCount > 1)
-    {
-        value.remove(QChar('.'));
-    }
-    else if (dotCount == 1)
-    {
-        const int dotIndex = value.indexOf(QChar('.'));
-        const int fractionalDigits = value.size() - dotIndex - 1;
-        // OCR 常把千位分隔符识别为点，例如 76.103.271 或 76.103。
-        // 只有三位分组才按千位点处理，1.5 等小数仍保留小数点。
-        if (fractionalDigits == 3 && dotIndex > 0)
-            value.remove(QChar('.'));
-    }
+    // 游戏资金是整数，OCR 中的逗号、句点以及多段分组点都只是千位分隔符。
+    // 统一只保留数字，避免“11.328,573”被当成 11.328573，最终截断成 11。
+    // 例如：12.133.12 -> 1213312，随后再由服务端格式化为 1,213,312。
+    value.remove(QRegularExpression(QStringLiteral("[^0-9]")));
     return value;
 }
 }
@@ -934,15 +923,15 @@ void ClientController::clickEnabledTasks()
             .arg(success ? QStringLiteral("成功") : QStringLiteral("失败"))
             .arg(sent ? QStringLiteral("成功") : QStringLiteral("失败"), text));
     };
-    const auto reportStableAmount = [this, &errorText](POINT movePoint, int x, int y, int width, int height,
-        const QString& prefix, bool reportToServer) {
+    const auto reportStableAmount = [this, &errorText](POINT movePoint, int moveReferenceWidth, int moveReferenceHeight,
+        int x, int y, int width, int height, const QString& prefix, bool reportToServer) {
         QRegularExpression amountPattern(QStringLiteral(R"((\d[\d,.]*\d|\d)[\s]*([KkMm])?)"));
         QString previous;
         int stableCount = 0;
         QElapsedTimer timer;
         timer.start();
         // 只在进入金额区域时等待一次；后续识别按 100ms 轮询，避免每次 OCR 都额外等待 1 秒。
-        if (!input_.moveReferencePoint(boundHwnd_, movePoint, 2560, 1440, errorText))
+        if (!input_.moveReferencePoint(boundHwnd_, movePoint, moveReferenceWidth, moveReferenceHeight, errorText))
             return false;
         if (!waitForAutomation(1000, errorText))
             return false;
@@ -1055,7 +1044,24 @@ void ClientController::clickEnabledTasks()
         return;
     }
     // 币号资金区域包含货币名称和说明文字，金额解析器只提取数字及分隔符，忽略中文。
-    if (!reportStableAmount(POINT{ 1992, 70 }, 1887, 320, 450, 95,
+    int coinClientWidth = 0;
+    int coinClientHeight = 0;
+    if (!binder_.clientSize(boundHwnd_, coinClientWidth, coinClientHeight)
+        || coinClientWidth <= 0 || coinClientHeight <= 0)
+    {
+        sendAutomaticListingResponse(false, QStringLiteral("币号资金识别失败：无法获取游戏窗口客户区尺寸"));
+        setStatus(QStringLiteral("币号金额识别失败：无法获取游戏窗口客户区尺寸"));
+        return;
+    }
+    const bool isCoinWindow1K = coinClientWidth <= 1920 && coinClientHeight <= 1080;
+    const POINT coinAmountMovePoint = isCoinWindow1K ? POINT{ 1541, 49 } : POINT{ 1985, 68 };
+    const int coinMoveReferenceWidth = isCoinWindow1K ? 1920 : 2560;
+    const int coinMoveReferenceHeight = isCoinWindow1K ? 1080 : 1440;
+    emit connectionLogAppended(QStringLiteral("币号资金识别：窗口客户区 %1x%2，使用鼠标坐标 (%3,%4)" )
+        .arg(coinClientWidth).arg(coinClientHeight)
+        .arg(coinAmountMovePoint.x).arg(coinAmountMovePoint.y));
+    if (!reportStableAmount(coinAmountMovePoint, coinMoveReferenceWidth, coinMoveReferenceHeight,
+        1887, 320, 450, 95,
         QStringLiteral("coin_amount"), false))
     {
         sendAutomaticListingResponse(false, QStringLiteral("币号金额识别失败：%1").arg(errorText));

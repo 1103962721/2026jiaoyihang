@@ -230,12 +230,19 @@ void MainWindow::buildUi()
     autoCoinThresholdSpin_ = new QSpinBox(this);
     autoCoinThresholdSpin_->setRange(1, 99);
     autoCoinThresholdSpin_->setValue(1);
+    auto* highPriceStopLabel = new QLabel(QStringLiteral("连续高价停止次数"), this);
+    highPriceStopThresholdSpin_ = new QSpinBox(this);
+    highPriceStopThresholdSpin_->setRange(1, 99);
+    highPriceStopThresholdSpin_->setValue(3);
+    highPriceStopThresholdSpin_->setToolTip(QStringLiteral("老板连续达到该次数高价时停止所有客户端"));
     autoExecuteCheck_ = new QCheckBox(QStringLiteral("全自动执行"), this);
     autoExecuteCheck_->setToolTip(QStringLiteral("勾选后，老板准备区域识别到数字且币号达到阈值时自动执行"));
     listingOptionRow->addWidget(autoBossLabel);
     listingOptionRow->addWidget(autoBossThresholdSpin_);
     listingOptionRow->addWidget(autoCoinLabel);
     listingOptionRow->addWidget(autoCoinThresholdSpin_);
+    listingOptionRow->addWidget(highPriceStopLabel);
+    listingOptionRow->addWidget(highPriceStopThresholdSpin_);
     listingOptionRow->addWidget(autoExecuteCheck_);
     dispatchLayout->addLayout(listingOptionRow);
 
@@ -358,6 +365,8 @@ void MainWindow::connectSignals()
     connect(autoCoinThresholdSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         controller_.setAutoExecuteThresholds(autoBossThresholdSpin_->value(), autoCoinThresholdSpin_->value());
     });
+    connect(highPriceStopThresholdSpin_, qOverload<int>(&QSpinBox::valueChanged), &controller_,
+        &ServerController::setHighPriceStopThreshold);
     connect(autoExecuteCheck_, &QCheckBox::toggled, &controller_, &ServerController::setAutoExecuteEnabled);
     connect(clientStatusButton_, &QPushButton::clicked, this, [this]() {
         auto* dialog = new QDialog(this);
@@ -444,9 +453,9 @@ void MainWindow::connectSignals()
                 connect(stopActionButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
                     controller_.requestForceStopAction(clientId);
                 });
-                connect(loadoutButton, &QPushButton::clicked, this, [this, client]() {
-                    const bool boss = client.role == ClientRole::Boss;
-                    controller_.saveLoadoutForRole(client.role,
+                connect(loadoutButton, &QPushButton::clicked, this, [this, clientId = client.id, role = client.role]() {
+                    const bool boss = role == ClientRole::Boss;
+                    controller_.saveLoadoutForClient(clientId, role,
                         boss ? bossLoadoutWeapon_ : loadoutWeapon_,
                         boss ? bossLoadoutBackpack_ : loadoutBackpack_,
                         boss ? bossLoadoutEgg_ : loadoutEgg_,
@@ -966,9 +975,9 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
         connect(stopActionButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
             controller_.requestForceStopAction(clientId);
         });
-        connect(loadoutButton, &QPushButton::clicked, this, [this, client]() {
-            const bool boss = client.role == ClientRole::Boss;
-            controller_.saveLoadoutForRole(client.role,
+        connect(loadoutButton, &QPushButton::clicked, this, [this, clientId = client.id, role = client.role]() {
+            const bool boss = role == ClientRole::Boss;
+            controller_.saveLoadoutForClient(clientId, role,
                 boss ? bossLoadoutWeapon_ : loadoutWeapon_,
                 boss ? bossLoadoutBackpack_ : loadoutBackpack_,
                 boss ? bossLoadoutEgg_ : loadoutEgg_,
