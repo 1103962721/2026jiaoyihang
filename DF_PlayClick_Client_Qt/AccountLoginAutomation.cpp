@@ -249,15 +249,25 @@ void AccountLoginAutomation::start(const QString& username, const QString& passw
             fail(error);
             return;
         }
-        emit progress(QStringLiteral("已发送启动游戏命令，等待游戏窗口"));
+        emit progress(QStringLiteral("已发送 Steam 启动命令，等待 df_launcher"));
         if (!prepareAndStartLauncher(error))
         {
-            fail(error);
-            return;
+            if (cancelled())
+            {
+                fail(QStringLiteral("已取消"));
+                return;
+            }
+
+            emit progress(QStringLiteral("df_launcher 等待超时，正在重新发送 Steam 启动命令"));
+            if (!launchGame(error) || !prepareAndStartLauncher(error))
+            {
+                fail(cancelled() ? QStringLiteral("已取消") : error);
+                return;
+            }
         }
         if (!waitForGameWindow(60000))
         {
-            fail(QStringLiteral("未检测到 Delta Force 游戏窗口"));
+            fail(cancelled() ? QStringLiteral("已取消") : QStringLiteral("未检测到 Delta Force 游戏窗口"));
             return;
         }
         emit finished(true, QStringLiteral("游戏窗口已启动"));
