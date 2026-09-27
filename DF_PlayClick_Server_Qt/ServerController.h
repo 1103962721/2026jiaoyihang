@@ -56,6 +56,8 @@ public slots:
         const QString& listingPrice, int purchaseCount, bool loadoutMode);
     void requestMail(quint64 clientId);
     void requestMailAll();
+    void importAccounts(const QString& filePath);
+    void startAccountLogin(quint64 clientId);
     void setAutoExecuteThresholds(int bossCount, int coinCount);
     void setHighPriceStopThreshold(int threshold);
     void setAutoExecuteEnabled(bool enabled);
@@ -73,6 +75,7 @@ signals:
     void messageRequested(const QString& title, const QString& text, bool error);
     void incompleteTriggerRequested();
     void autoStartEnabledChanged(bool enabled);
+    void accountQueueChanged(int total, int remaining, int assigned);
 
 private:
     int parsePort(const QString& portText) const;
@@ -162,6 +165,9 @@ private:
     int highPriceStopThreshold_ = 3;
     bool autoExecuteEnabled_ = false;
     bool autoExecuteTriggered_ = false;
+    struct AccountCredential { QString username; QString password; bool assigned = false; quint64 clientId = 0; };
+    QVector<AccountCredential> accounts_;
+    int nextAccountLoginRequestId_ = 20000;
     bool preparingExecution_ = false;
     bool dispatchingPreparedExecution_ = false;
     QHash<int, quint64> pendingPrepareRequests_;

@@ -139,6 +139,7 @@
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="AccountLoginAutomation.cpp" />
     <ClCompile Include="BulletOcrRules.cpp" />
     <ClCompile Include="ClientConfig.cpp" />
     <ClCompile Include="ClientConnection.cpp" />
@@ -155,6 +156,16 @@
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <CustomBuild Include="AccountLoginAutomation.h">
+      <AdditionalInputs Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Release|x64&apos;">AccountLoginAutomation.h;release\moc_predefs.h;$(SolutionDir)\.qt\6.6.3\msvc2019_64_static\bin\moc.exe;%(AdditionalInputs)</AdditionalInputs>
+      <Command Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Release|x64&apos;">&quot;$(SolutionDir)\.qt\6.6.3\msvc2019_64_static\bin\moc.exe&quot; -DUNICODE -D_UNICODE -DWIN32 -DWIN64 -DQT_WIDGETS_LIB -DQT_GUI_LIB -DQT_CORE_LIB --compiler-flavor=msvc --include &quot;$(SolutionDir)/DF_PlayClick_Client_Qt/release/moc_predefs.h&quot; -I&quot;$(SolutionDir)/.qt/6.6.3/msvc2019_64_static/mkspecs/win32-msvc&quot; -I&quot;$(SolutionDir)/DF_PlayClick_Client_Qt&quot; -I&quot;$(SolutionDir)/Shared&quot; -I&quot;$(SolutionDir)/.qt/6.6.3/msvc2019_64_static/include&quot; -I&quot;$(SolutionDir)/.qt/6.6.3/msvc2019_64_static/include/QtWidgets&quot; -I&quot;$(SolutionDir)/.qt/6.6.3/msvc2019_64_static/include/QtGui&quot; -I&quot;$(SolutionDir)/.qt/6.6.3/msvc2019_64_static/include/QtCore&quot; AccountLoginAutomation.h -o release\moc_AccountLoginAutomation.cpp</Command>
+      <Message Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Release|x64&apos;">MOC AccountLoginAutomation.h</Message>
+      <Outputs Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Release|x64&apos;">release\moc_AccountLoginAutomation.cpp;%(Outputs)</Outputs>
+      <AdditionalInputs Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Debug|x64&apos;">AccountLoginAutomation.h;debug\moc_predefs.h;$(SolutionDir)\.qt\6.6.3\msvc2019_64_static\bin\moc.exe;%(AdditionalInputs)</AdditionalInputs>
+      <Command Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Debug|x64&apos;">&quot;$(SolutionDir)\.qt\6.6.3\msvc2019_64_static\bin\moc.exe&quot; -DUNICODE -D_UNICODE -DWIN32 -DWIN64 -DQT_WIDGETS_LIB -DQT_GUI_LIB -DQT_CORE_LIB --compiler-flavor=msvc --include &quot;$(SolutionDir)/DF_PlayClick_Client_Qt/debug/moc_predefs.h&quot; -I&quot;$(SolutionDir)/.qt/6.6.3/msvc2019_64_static/mkspecs/win32-msvc&quot; -I&quot;$(SolutionDir)/DF_PlayClick_Client_Qt&quot; -I&quot;$(SolutionDir)/Shared&quot; -I&quot;$(SolutionDir)/.qt/6.6.3/msvc2019_64_static/include&quot; -I&quot;$(SolutionDir)/.qt/6.6.3/msvc2019_64_static/include/QtWidgets&quot; -I&quot;$(SolutionDir)/.qt/6.6.3/msvc2019_64_static/include/QtGui&quot; -I&quot;$(SolutionDir)/.qt/6.6.3/msvc2019_64_static/include/QtCore&quot; AccountLoginAutomation.h -o debug\moc_AccountLoginAutomation.cpp</Command>
+      <Message Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Debug|x64&apos;">MOC AccountLoginAutomation.h</Message>
+      <Outputs Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Debug|x64&apos;">debug\moc_AccountLoginAutomation.cpp;%(Outputs)</Outputs>
+    </CustomBuild>
     <ClInclude Include="BulletOcrRules.h" />
     <ClInclude Include="ClientConfig.h" />
     <CustomBuild Include="ClientConnection.h">
@@ -211,6 +222,12 @@
       <ExcludedFromBuild Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Release|x64&apos;">true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="release\moc_ClientConnection.cpp">
+      <ExcludedFromBuild Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Debug|x64&apos;">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="debug\moc_AccountLoginAutomation.cpp">
+      <ExcludedFromBuild Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Release|x64&apos;">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="release\moc_AccountLoginAutomation.cpp">
       <ExcludedFromBuild Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Debug|x64&apos;">true</ExcludedFromBuild>
     </ClCompile>
     <ClCompile Include="debug\moc_ClientController.cpp">

@@ -418,6 +418,14 @@ bool ClientConnection::sendMailResponse(int requestId, bool success, const QStri
     return true;
 }
 
+bool ClientConnection::sendAccountLoginResponse(int requestId, const QString& status, const QString& payload)
+{
+    std::lock_guard<std::mutex> lock(sendMutex_);
+    if (!connected_.load()) return false;
+    return SocketUtil::SendLine(socket_, Protocol::BuildAccountLoginResponseMessage(
+        requestId, status.toStdString(), payload.toUtf8().toStdString()));
+}
+
 bool ClientConnection::sendAmountReport(qint64 amount)
 {
     if (!connected_ || socket_ == INVALID_SOCKET)
@@ -586,6 +594,18 @@ void ClientConnection::receiveLoop()
                 QMetaObject::invokeMethod(this, [this, requestId = message.requestId]() {
                     emit mailRequestReceived(requestId);
                 }, Qt::QueuedConnection);
+            }
+            else if (message.type == Protocol::MessageType::AccountLoginRequest)
+            {
+                const auto separator = message.payload.find('\n');
+                if (separator != std::string::npos)
+                {
+                    const QString username = QString::fromUtf8(message.payload.substr(0, separator).data());
+                    const QString password = QString::fromUtf8(message.payload.substr(separator + 1).data());
+                    QMetaObject::invokeMethod(this, [this, requestId = message.requestId, username, password]() {
+                        emit accountLoginRequestReceived(requestId, username, password);
+                    }, Qt::QueuedConnection);
+                }
             }
             else if (message.type == Protocol::MessageType::Pong)
             {

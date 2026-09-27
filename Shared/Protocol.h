@@ -45,7 +45,9 @@ namespace Protocol
         ListingResponse,
         MailRequest,
         MailResponse,
-        AmountReport
+        AmountReport,
+        AccountLoginRequest,
+        AccountLoginResponse
     };
 
     enum class LoadoutType
@@ -311,6 +313,18 @@ namespace Protocol
     inline std::string BuildAmountReportMessage(long long amount)
     {
         return "AMOUNT_REPORT " + std::to_string(amount) + "\n";
+    }
+
+    inline std::string BuildAccountLoginRequestMessage(int requestId, const std::string& username, const std::string& password)
+    {
+        return "ACCOUNT_LOGIN_REQUEST " + std::to_string(requestId) + " "
+            + NormalizeLinePayload(username) + " " + NormalizeLinePayload(password) + "\n";
+    }
+
+    inline std::string BuildAccountLoginResponseMessage(int requestId, const std::string& status, const std::string& payload)
+    {
+        return "ACCOUNT_LOGIN_RESPONSE " + std::to_string(requestId) + " "
+            + status + " " + NormalizeLinePayload(payload) + "\n";
     }
 
     inline bool ParseLine(const std::string& line, ParsedMessage& message)
@@ -811,6 +825,41 @@ namespace Protocol
                 return false;
             message.type = MessageType::AmountReport;
             message.timestampMs = amount;
+            return true;
+        }
+
+        if (command == "ACCOUNT_LOGIN_REQUEST")
+        {
+            int requestId = 0;
+            std::string username;
+            std::string password;
+            std::string extra;
+            stream >> requestId >> username >> password;
+            if (stream.fail() || requestId <= 0 || username.empty() || password.empty() || (stream >> extra))
+                return false;
+            message.type = MessageType::AccountLoginRequest;
+            message.requestId = requestId;
+            message.payload = username + "\n" + password;
+            return true;
+        }
+
+        if (command == "ACCOUNT_LOGIN_RESPONSE")
+        {
+            int requestId = 0;
+            std::string status;
+            stream >> requestId >> status;
+            if (stream.fail() || requestId <= 0
+                || (status != "STARTED" && status != "OK" && status != "ERROR"))
+                return false;
+            std::string payload;
+            std::getline(stream, payload);
+            if (!payload.empty() && payload.front() == ' ')
+                payload.erase(0, 1);
+            message.type = MessageType::AccountLoginResponse;
+            message.requestId = requestId;
+            message.value = status == "STARTED" ? 1 : (status == "OK" ? 2 : -1);
+            message.success = status == "OK";
+            message.payload = payload;
             return true;
         }
 

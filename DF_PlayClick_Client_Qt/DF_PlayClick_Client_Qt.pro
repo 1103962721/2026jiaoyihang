@@ -4,7 +4,7 @@ QT += widgets
 CONFIG += c++17
 DEFINES += UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
 INCLUDEPATH += ../Shared
-LIBS += -lWs2_32 -lUser32 -lGdi32 -lAdvapi32 -lShell32
+LIBS += -lWs2_32 -lUser32 -lGdi32 -lAdvapi32 -lShell32 -luiautomationcore -lole32
 
 win32:RC_ICONS = AppIcon.ico
 
@@ -16,6 +16,7 @@ SOURCES += \
     MainWindow.cpp \
     ClientController.cpp \
     ClientConnection.cpp \
+    AccountLoginAutomation.cpp \
     Win32WindowBinder.cpp \
     Win32InputDispatcher.cpp \
     HotkeyManager.cpp \
@@ -31,6 +32,7 @@ HEADERS += \
     MainWindow.h \
     ClientController.h \
     ClientConnection.h \
+    AccountLoginAutomation.h \
     Win32WindowBinder.h \
     Win32InputDispatcher.h \
     HotkeyManager.h \

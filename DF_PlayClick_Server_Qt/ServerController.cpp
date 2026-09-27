@@ -6,6 +6,8 @@
 #include <QSet>
 #include <QStringList>
 #include <QThread>
+#include <QFile>
+#include <QTextStream>
 
 #include "AutoStartOcrRules.h"
 #include "../Shared/ServerRules.h"
@@ -119,6 +121,11 @@ ServerController::ServerController(QObject* parent)
     connect(&connectionManager_, &ServerConnectionManager::clientsChanged, this, [this]() {
         emit clientsChanged(connectionManager_.clients());
     });
+    connect(&connectionManager_, &ServerConnectionManager::accountLoginResponseReceived, this,
+        [this](quint64 clientId, int, int status, const QString& text) {
+            emit connectionLogAppended(QStringLiteral("客户端 %1 上号状态：%2").arg(clientId).arg(text));
+            if (status != 1) connectionManager_.forceResetClientAction(clientId);
+        });
     connect(&connectionManager_, &ServerConnectionManager::amountReportReceived, this,
         [this](quint64 clientId, qint64 amount) {
             QString errorText;
@@ -1510,6 +1517,75 @@ void ServerController::requestMailAll()
         if (connectionManager_.requestMail(client.id, nextMailRequestId_++, errorText)) ++sent;
     }
     emit statusChanged(QStringLiteral("已向 %1 个客户端发送领取邮件指令").arg(sent), ServerStatusTone::Success);
+}
+
+void ServerController::importAccounts(const QString& filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) { emit statusChanged(QStringLiteral("账号文件打开失败"), ServerStatusTone::Error); return; }
+    QVector<AccountCredential> loaded;
+    QSet<QString> seenCredentials;
+    QTextStream stream(&file);
+    while (!stream.atEnd())
+    {
+        const QString line = stream.readLine().trimmed();
+        const int separator = line.indexOf(QStringLiteral("----"));
+        if (separator <= 0 || separator + 4 >= line.size()) continue;
+        AccountCredential item{line.left(separator).trimmed(), line.mid(separator + 4).trimmed(), false, 0};
+        const QString key = item.username + QChar(0x1f) + item.password;
+        if (!item.username.isEmpty() && !item.password.isEmpty() && !seenCredentials.contains(key))
+        {
+            seenCredentials.insert(key);
+            loaded.push_back(item);
+        }
+    }
+    accounts_ = loaded;
+    emit accountQueueChanged(accounts_.size(), accounts_.size(), 0);
+    emit statusChanged(QStringLiteral("已导入 %1 个账号").arg(accounts_.size()), ServerStatusTone::Success);
+}
+
+void ServerController::startAccountLogin(quint64 clientId)
+{
+    AccountCredential* selected = nullptr;
+    for (AccountCredential& account : accounts_)
+    {
+        if (account.assigned && account.clientId == clientId)
+        {
+            selected = &account;
+            break;
+        }
+    }
+    if (!selected)
+    {
+        for (AccountCredential& account : accounts_)
+        {
+            if (!account.assigned)
+            {
+                selected = &account;
+                break;
+            }
+        }
+    }
+    if (!selected)
+    {
+        emit statusChanged(QStringLiteral("没有可分发的账号"), ServerStatusTone::Error);
+        return;
+    }
+    QString errorText;
+    if (!connectionManager_.requestAccountLogin(clientId, nextAccountLoginRequestId_++, selected->username, selected->password, errorText))
+    {
+        emit statusChanged(errorText, ServerStatusTone::Error);
+        return;
+    }
+    if (!selected->assigned)
+    {
+        selected->assigned = true;
+        selected->clientId = clientId;
+        int assigned = 0;
+        for (const AccountCredential& value : accounts_) if (value.assigned) ++assigned;
+        emit accountQueueChanged(accounts_.size(), accounts_.size() - assigned, assigned);
+    }
+    emit statusChanged(QStringLiteral("已向币号客户端 %1 下发上号指令").arg(clientId), ServerStatusTone::Neutral);
 }
 
 void ServerController::setAutoExecuteThresholds(int bossCount, int coinCount)

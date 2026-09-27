@@ -7,6 +7,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDoubleValidator>
+#include <QFileDialog>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QGroupBox>
@@ -182,6 +183,8 @@ void MainWindow::buildUi()
     forceStopAllButton_->setObjectName(QStringLiteral("forceStopAllButton"));
     mailAllButton_ = new QPushButton(QStringLiteral("全部领取邮件"), this);
     settingsButton_ = new QPushButton(QStringLiteral("设置"), this);
+    importAccountsButton_ = new QPushButton(QStringLiteral("导入账号"), this);
+    accountQueueLabel_ = new QLabel(QStringLiteral("账号队列：0/0"), this);
     settingsButton_->setToolTip(QStringLiteral("设置发送顺序、执行模式、验证码方式和购买方式"));
     actionRow->addLayout(countdownBox, 1);
     actionRow->addLayout(delayBox, 1);
@@ -190,6 +193,8 @@ void MainWindow::buildUi()
     actionRow->addWidget(listingButton_, 0, Qt::AlignBottom);
     actionRow->addWidget(saveLoadoutButton_, 0, Qt::AlignBottom);
     actionRow->addWidget(coinSemiAutoButton_, 0, Qt::AlignBottom);
+    actionRow->addWidget(importAccountsButton_, 0, Qt::AlignBottom);
+    actionRow->addWidget(accountQueueLabel_, 0, Qt::AlignBottom);
     dispatchLayout->addLayout(actionRow);
 
     auto* listingTextRow = new QHBoxLayout();
@@ -359,6 +364,14 @@ void MainWindow::connectSignals()
     connect(mailAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestMailAll);
     connect(rebindAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestRebindAllWindows);
     connect(settingsButton_, &QPushButton::clicked, this, &MainWindow::showSettingsDialog);
+    connect(importAccountsButton_, &QPushButton::clicked, this, [this]() {
+        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("导入账号文件"), QString(), QStringLiteral("文本文件 (*.txt)"));
+        if (!path.isEmpty()) controller_.importAccounts(path);
+    });
+    connect(&controller_, &ServerController::accountQueueChanged, this, [this](int total, int remaining, int) {
+        if (accountQueueLabel_)
+            accountQueueLabel_->setText(QStringLiteral("账号队列：%1/%2").arg(remaining).arg(total));
+    });
     connect(autoBossThresholdSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         controller_.setAutoExecuteThresholds(autoBossThresholdSpin_->value(), autoCoinThresholdSpin_->value());
     });
@@ -978,6 +991,7 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
         auto* loadoutButton = new QPushButton(QStringLiteral("配装"), actionCell);
         auto* mailButton = new QPushButton(QStringLiteral("领取邮件"), actionCell);
         QPushButton* listingButton = nullptr;
+        QPushButton* accountLoginButton = nullptr;
         if (client.role == ClientRole::Coin)
         {
             listingButton = new QPushButton(QStringLiteral("上架"), actionCell);
@@ -985,6 +999,12 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
             connect(listingButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
                 controller_.startListingForClient(clientId, listingTextEdit_->text(), listingPriceEdit_->text(),
                     false, listingPurchaseCountSpin_->value(), !tradePurchase_);
+            });
+            accountLoginButton = new QPushButton(QStringLiteral("上号"), actionCell);
+            accountLoginButton->setMinimumWidth(50);
+            accountLoginButton->setEnabled(client.connected && !client.actionRunning);
+            connect(accountLoginButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
+                controller_.startAccountLogin(clientId);
             });
         }
         auto* kickButton = new QPushButton(QStringLiteral("断开"), actionCell);
@@ -1022,6 +1042,10 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
         if (listingButton)
         {
             actionLayout->addWidget(listingButton);
+        }
+        if (accountLoginButton)
+        {
+            actionLayout->addWidget(accountLoginButton);
         }
         actionLayout->addWidget(kickButton);
         clientTable_->setCellWidget(row, 7, actionCell);

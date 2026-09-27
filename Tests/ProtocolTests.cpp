@@ -216,9 +216,20 @@ int main()
 
     assert(Protocol::ParseLine("SELF_THUNDER_RESPONSE 12 ERROR 自雷失败", parsed));
     assert(parsed.type == Protocol::MessageType::SelfThunderResponse);
+
     assert(parsed.requestId == 12);
     assert(!parsed.success);
     assert(parsed.payload == "自雷失败");
+
+    assert(Protocol::ParseLine("ACCOUNT_LOGIN_REQUEST 7 user pass", parsed));
+    assert(parsed.type == Protocol::MessageType::AccountLoginRequest);
+    assert(parsed.requestId == 7);
+    assert(parsed.payload == "user\npass");
+    assert(Protocol::ParseLine("ACCOUNT_LOGIN_RESPONSE 7 STARTED launching", parsed));
+    assert(parsed.type == Protocol::MessageType::AccountLoginResponse);
+    assert(parsed.value == 1);
+    assert(Protocol::ParseLine("ACCOUNT_LOGIN_RESPONSE 7 OK game-ready", parsed));
+    assert(parsed.success);
 
     assert(!Protocol::ParseLine("READY 2", parsed));
     assert(!Protocol::ParseLine("TRIGGER -1", parsed));

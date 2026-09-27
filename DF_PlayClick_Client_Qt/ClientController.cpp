@@ -138,6 +138,22 @@ ClientController::ClientController(QObject* parent)
     connect(&connection_, &ClientConnection::saveLoadoutRequestReceived, this, &ClientController::handleSaveLoadoutRequest);
     connect(&connection_, &ClientConnection::listingRequestReceived, this, &ClientController::handleListingRequest);
     connect(&connection_, &ClientConnection::mailRequestReceived, this, &ClientController::handleMailRequest);
+    connect(&connection_, &ClientConnection::accountLoginRequestReceived, this, &ClientController::handleAccountLoginRequest);
+    connect(&accountLoginAutomation_, &AccountLoginAutomation::progress, this, [this](const QString& text) {
+        setStatus(text);
+    });
+    connect(&accountLoginAutomation_, &AccountLoginAutomation::finished, this, [this](bool success, const QString& text) {
+        bool finalSuccess = success;
+        QString resultText = text;
+        if (success && !autoBindGameWindow(false))
+        {
+            finalSuccess = false;
+            resultText = QStringLiteral("游戏已启动，但自动绑定窗口失败");
+        }
+        connection_.sendAccountLoginResponse(accountLoginRequestId_, finalSuccess ? QStringLiteral("OK") : QStringLiteral("ERROR"), resultText);
+        finishAutomationAction();
+        setStatus(resultText);
+    });
     connect(&hotkey_, &HotkeyManager::hotkeyPressed, this, &ClientController::finishHotkeyPick);
     connect(&hotkey_, &HotkeyManager::f3Pressed, this, &ClientController::toggleBulletOcrLoop);
     qApp->installNativeEventFilter(this);
@@ -280,6 +296,7 @@ void ClientController::rebindGameWindow()
 void ClientController::forceStopCurrentAction()
 {
     automationCancelRequested_ = true;
+    accountLoginAutomation_.cancel();
     countdownTimer_.stop();
     scheduledTriggerTimer_.stop();
     countdown_ = 0;
@@ -2749,6 +2766,23 @@ void ClientController::handleMailRequest(int requestId)
     }
     connection_.sendMailResponse(requestId, true, QStringLiteral("领取完成"));
     setStatus(QStringLiteral("领取邮件完成"));
+}
+
+void ClientController::handleAccountLoginRequest(int requestId, const QString& username, const QString& password)
+{
+    if (currentRole_ != ClientRole::Coin)
+    {
+        connection_.sendAccountLoginResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("仅币号客户端支持上号"));
+        return;
+    }
+    if (!beginAutomationAction(QStringLiteral("上号")))
+    {
+        connection_.sendAccountLoginResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("已有自动化流程正在执行"));
+        return;
+    }
+    accountLoginRequestId_ = requestId;
+    connection_.sendAccountLoginResponse(requestId, QStringLiteral("STARTED"), QStringLiteral("已开始上号"));
+    accountLoginAutomation_.start(username, password);
 }
 
 bool ClientController::executeMailSequence(QString& errorText)

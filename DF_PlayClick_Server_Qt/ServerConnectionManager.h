@@ -50,6 +50,7 @@ public:
         const QString& egg, const QString& bulletName, int perClick, int bulletTotal, QString& errorText);
     bool requestListing(quint64 clientId, int requestId, const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, bool loadoutMode, QString& errorText);
     bool requestMail(quint64 clientId, int requestId, QString& errorText);
+    bool requestAccountLogin(quint64 clientId, int requestId, const QString& username, const QString& password, QString& errorText);
     bool setClientTeamReadyDisplay(quint64 clientId, const QString& text, int state);
     bool resetClientTeamReadyDisplay(quint64 clientId);
     bool forceResetClientAction(quint64 clientId);
@@ -75,6 +76,7 @@ signals:
     void saveLoadoutResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void listingResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void mailResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
+    void accountLoginResponseReceived(quint64 clientId, int requestId, int status, const QString& text);
     void amountReportReceived(quint64 clientId, qint64 amount);
     void prepareResponseReceived(quint64 clientId, int requestId, int status, const QString& text);
     void timeSyncResponseReceived(quint64 clientId, int requestId, qint64 clientReceiveMs, qint64 clientSendMs,
