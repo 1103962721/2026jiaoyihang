@@ -469,6 +469,9 @@ int ServerConnectionManager::requestForceStopAllActions()
     int sentCount = 0;
     for (const ClientListItem& item : currentClients)
     {
+        // 全局停止只影响原有自动化动作；上号流程由客户端列表中的“中止上号”单独控制。
+        if (item.runningAction == QStringLiteral("上号中"))
+            continue;
         QString errorText;
         if (item.connected && requestForceStopAction(item.id, errorText))
         {
@@ -485,6 +488,8 @@ void ServerConnectionManager::resetAllClientStates()
         std::lock_guard<std::mutex> lock(mutex_);
         for (const auto& client : clients_)
         {
+            if (client->runningAction == QStringLiteral("上号中"))
+                continue;
             client->actionRunning = false;
             client->runningAction.clear();
             client->listingStatus = QStringLiteral("待执行");
