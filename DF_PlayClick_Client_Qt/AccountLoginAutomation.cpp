@@ -247,21 +247,15 @@ bool AccountLoginAutomation::acceptSteamAgreementIfPresent() const
             IUIAutomationElement* root = nullptr;
             if (FAILED(automation->ElementFromHandle(hwnd, &root)) || !root) continue;
 
-            IUIAutomationElement* agreement = FindNamed(automation, root, L"最终用户许可协议");
-            if (!agreement) agreement = FindNamed(automation, root, L"End User License Agreement");
-            if (!agreement) agreement = FindNamed(automation, root, L"Steam Subscriber Agreement");
-            if (agreement)
+            // 不依赖弹窗标题：Steam 的确认窗口标题和语言可能变化，只要窗口内出现可操作的接受按钮就处理。
+            IUIAutomationElement* accept = FindNamed(automation, root, L"接受");
+            if (!accept) accept = FindNamed(automation, root, L"Accept");
+            if (!accept) accept = FindNamed(automation, root, L"I Agree");
+            if (!accept) accept = FindNamed(automation, root, L"同意");
+            if (accept)
             {
-                IUIAutomationElement* accept = FindNamed(automation, root, L"接受");
-                if (!accept) accept = FindNamed(automation, root, L"Accept");
-                if (!accept) accept = FindNamed(automation, root, L"I Agree");
-                if (!accept) accept = FindNamed(automation, root, L"同意");
-                if (accept)
-                {
-                    accepted = Invoke(accept) || accepted;
-                    accept->Release();
-                }
-                agreement->Release();
+                accepted = Invoke(accept) || accepted;
+                accept->Release();
             }
             root->Release();
             if (accepted) break;
