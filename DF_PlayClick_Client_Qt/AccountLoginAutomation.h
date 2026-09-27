@@ -11,6 +11,7 @@ public:
     explicit AccountLoginAutomation(QObject* parent = nullptr);
     void start(const QString& username, const QString& password);
     void cancel();
+    void cancelAndStopProcesses();
 signals:
     void progress(const QString& text);
     void finished(bool success, const QString& text);

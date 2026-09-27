@@ -151,6 +151,7 @@ ClientController::ClientController(QObject* parent)
             resultText = QStringLiteral("游戏已启动，但自动绑定窗口失败");
         }
         connection_.sendAccountLoginResponse(accountLoginRequestId_, finalSuccess ? QStringLiteral("OK") : QStringLiteral("ERROR"), resultText);
+        accountLoginRunning_ = false;
         finishAutomationAction();
         setStatus(resultText);
     });
@@ -296,7 +297,10 @@ void ClientController::rebindGameWindow()
 void ClientController::forceStopCurrentAction()
 {
     automationCancelRequested_ = true;
-    accountLoginAutomation_.cancel();
+    if (accountLoginRunning_)
+        accountLoginAutomation_.cancelAndStopProcesses();
+    else
+        accountLoginAutomation_.cancel();
     countdownTimer_.stop();
     scheduledTriggerTimer_.stop();
     countdown_ = 0;
@@ -2781,6 +2785,7 @@ void ClientController::handleAccountLoginRequest(int requestId, const QString& u
         return;
     }
     accountLoginRequestId_ = requestId;
+    accountLoginRunning_ = true;
     connection_.sendAccountLoginResponse(requestId, QStringLiteral("STARTED"), QStringLiteral("已开始上号"));
     accountLoginAutomation_.start(username, password);
 }

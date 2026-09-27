@@ -2,16 +2,23 @@
 #include <basetyps.h>
 #include <uiautomation.h>
 #include <oleauto.h>
+#include <shellapi.h>
+#include <shlwapi.h>
 #include <string>
 #pragma comment(lib, "uiautomationcore.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "shlwapi.lib")
 
 #include "AccountLoginAutomation.h"
 
 #include <QProcess>
 #include <QThread>
 #include <QElapsedTimer>
-#include <QDateTime>
+#include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
+#include <QSettings>
 
 AccountLoginAutomation::AccountLoginAutomation(QObject* parent) : QObject(parent) {}
 
@@ -72,6 +79,32 @@ IUIAutomationElement* FindNamed(IUIAutomation* automation, IUIAutomationElement*
     VariantClear(&value);
     return result;
 }
+
+QStringList FindSteamExecutables()
+{
+    QStringList paths;
+    const QStringList registryKeys{
+        QStringLiteral("HKEY_CURRENT_USER\\Software\\Valve\\Steam"),
+        QStringLiteral("HKEY_LOCAL_MACHINE\\Software\\Valve\\Steam"),
+        QStringLiteral("HKEY_LOCAL_MACHINE\\Software\\WOW6432Node\\Valve\\Steam")};
+    const QStringList valueNames{QStringLiteral("InstallPath"), QStringLiteral("SteamPath")};
+    for (const QString& key : registryKeys)
+    {
+        QSettings settings(key, QSettings::NativeFormat);
+        for (const QString& valueName : valueNames)
+        {
+            const QString root = settings.value(valueName).toString().trimmed();
+            if (root.isEmpty()) continue;
+            const QString executable = QDir::fromNativeSeparators(root) + QStringLiteral("/steam.exe");
+            if (QFileInfo::exists(executable) && !paths.contains(executable, Qt::CaseInsensitive))
+                paths.push_back(executable);
+        }
+    }
+    const QString pathExecutable = QStandardPaths::findExecutable(QStringLiteral("steam.exe"));
+    if (!pathExecutable.isEmpty() && !paths.contains(pathExecutable, Qt::CaseInsensitive))
+        paths.push_back(pathExecutable);
+    return paths;
+}
 }
 
 void AccountLoginAutomation::start(const QString& username, const QString& password)
@@ -92,14 +125,12 @@ void AccountLoginAutomation::start(const QString& username, const QString& passw
             fail(cancelled_ ? QStringLiteral("已取消") : error);
             return;
         }
-        emit progress(QStringLiteral("正在启动 Steam 登录窗口"));
-        if (!launchSteam(error) || !waitForProcess(QStringLiteral("steam.exe"), 15000))
+        emit progress(QStringLiteral("正在启动 Steam，并持续等待登录窗口"));
+        if (!launchSteam(error))
         {
-            fail(error.isEmpty() ? QStringLiteral("Steam 启动失败") : error);
+            fail(error.isEmpty() ? QStringLiteral("无法发起 Steam 启动") : error);
             return;
         }
-        // 第一阶段保留 UI Automation 接入点；登录窗口识别失败时回报，服务端可复用当前账号重试。
-        emit progress(QStringLiteral("已启动 Steam，等待登录窗口"));
         if (!performSteamLogin(error))
         {
             fail(error);
@@ -139,8 +170,7 @@ void AccountLoginAutomation::start(const QString& username, const QString& passw
 
 bool AccountLoginAutomation::performSteamLogin(QString& errorText) const
 {
-    const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 30000;
-    while (!cancelled() && QDateTime::currentMSecsSinceEpoch() < deadline)
+    while (!cancelled())
     {
         HWND hwnd = FindWindowByLoginTitle();
         if (!hwnd) { QThread::msleep(300); continue; }
@@ -179,7 +209,7 @@ bool AccountLoginAutomation::performSteamLogin(QString& errorText) const
         if (success) return true;
         QThread::msleep(300);
     }
-    errorText = cancelled() ? QStringLiteral("已取消") : QStringLiteral("未找到 Steam 登录控件");
+    errorText = QStringLiteral("已取消");
     return false;
 }
 
@@ -213,6 +243,12 @@ bool AccountLoginAutomation::prepareAndStartLauncher(QString& errorText) const
 }
 
 void AccountLoginAutomation::cancel() { cancelled_ = true; }
+void AccountLoginAutomation::cancelAndStopProcesses()
+{
+    cancelled_ = true;
+    QString ignored;
+    stopProcesses(ignored);
+}
 bool AccountLoginAutomation::cancelled() const { return cancelled_.load(); }
 
 bool AccountLoginAutomation::stopProcesses(QString& errorText) const
@@ -229,9 +265,38 @@ bool AccountLoginAutomation::stopProcesses(QString& errorText) const
 
 bool AccountLoginAutomation::launchSteam(QString& errorText) const
 {
-    if (!QProcess::startDetached(QStringLiteral("steam.exe"), {}))
+    bool launchRequested = false;
+    for (const QString& executable : FindSteamExecutables())
     {
-        errorText = QStringLiteral("启动 Steam 失败");
+        launchRequested = QProcess::startDetached(executable, {});
+        if (launchRequested) break;
+    }
+
+    // steam.exe 经常不在 PATH；Steam 注册的 URI 是可靠的第二种启动入口。
+    if (!launchRequested)
+    {
+        const HINSTANCE result = ShellExecuteW(nullptr, L"open", L"steam://open/login", nullptr, nullptr, SW_SHOWNORMAL);
+        launchRequested = reinterpret_cast<INT_PTR>(result) > 32;
+    }
+
+    // 部分机器未注册 URI，但安装路径仍可从常见位置启动。
+    if (!launchRequested)
+    {
+        const QStringList candidates{
+            QStringLiteral("C:/Program Files (x86)/Steam/steam.exe"),
+            QStringLiteral("C:/Program Files/Steam/steam.exe"),
+            QStringLiteral("D:/Steam/steam.exe")};
+        for (const QString& candidate : candidates)
+        {
+            if (!QFileInfo::exists(candidate)) continue;
+            launchRequested = QProcess::startDetached(candidate, {});
+            if (launchRequested) break;
+        }
+    }
+
+    if (!launchRequested)
+    {
+        errorText = QStringLiteral("未找到 Steam 启动入口");
         return false;
     }
     return true;

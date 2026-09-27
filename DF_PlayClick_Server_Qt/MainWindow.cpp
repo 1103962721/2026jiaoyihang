@@ -987,7 +987,12 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
         actionLayout->setContentsMargins(2, 2, 2, 2);
         actionLayout->setSpacing(3);
         auto* rebindButton = new QPushButton(QStringLiteral("重新绑定"), actionCell);
-        auto* stopActionButton = new QPushButton(QStringLiteral("停止动作"), actionCell);
+        const bool accountLoginRunning = client.role == ClientRole::Coin
+            && client.actionRunning && client.runningAction == QStringLiteral("上号中");
+        auto* stopActionButton = new QPushButton(
+            accountLoginRunning ? QStringLiteral("中止上号") : QStringLiteral("停止动作"), actionCell);
+        if (accountLoginRunning)
+            stopActionButton->setToolTip(QStringLiteral("结束 Steam、df_launcher 和 Delta Force 进程，并重置上号状态"));
         auto* loadoutButton = new QPushButton(QStringLiteral("配装"), actionCell);
         auto* mailButton = new QPushButton(QStringLiteral("领取邮件"), actionCell);
         QPushButton* listingButton = nullptr;

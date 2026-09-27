@@ -182,6 +182,7 @@ private:
     bool lastListingLoadoutMode_ = false;
     int lastListingRequestId_ = 0;
     int accountLoginRequestId_ = 0;
+    bool accountLoginRunning_ = false;
     bool hasLastListingRequest_ = false;
     qint64 serverClockOffsetMs_ = 0;
     bool serverTimeSynchronized_ = false;
