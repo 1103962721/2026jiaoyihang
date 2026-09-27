@@ -145,10 +145,27 @@ ClientController::ClientController(QObject* parent)
     connect(&accountLoginAutomation_, &AccountLoginAutomation::finished, this, [this](bool success, const QString& text) {
         bool finalSuccess = success;
         QString resultText = text;
-        if (success && !autoBindGameWindow(false))
+        if (success)
         {
-            finalSuccess = false;
-            resultText = QStringLiteral("游戏已启动，但自动绑定窗口失败");
+            // 游戏进程和顶层窗口通常不是同时创建，给窗口初始化留出时间再绑定。
+            QElapsedTimer bindTimer;
+            bindTimer.start();
+            bool bound = false;
+            while (!bound && bindTimer.elapsed() < 15000)
+            {
+                bound = autoBindGameWindow(false);
+                if (bound)
+                {
+                    break;
+                }
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                QThread::msleep(250);
+            }
+            if (!bound)
+            {
+                finalSuccess = false;
+                resultText = QStringLiteral("游戏窗口已出现，但自动绑定失败");
+            }
         }
         connection_.sendAccountLoginResponse(accountLoginRequestId_, finalSuccess ? QStringLiteral("OK") : QStringLiteral("ERROR"), resultText);
         accountLoginRunning_ = false;

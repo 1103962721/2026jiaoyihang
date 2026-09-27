@@ -21,6 +21,8 @@
 #include <QStandardPaths>
 #include <QSettings>
 
+#include "../Shared/ClientBindingRules.h"
+
 AccountLoginAutomation::AccountLoginAutomation(QObject* parent) : QObject(parent) {}
 
 namespace
@@ -142,6 +144,64 @@ std::vector<HWND> FindDeltaForceWindows()
         return TRUE;
     }, reinterpret_cast<LPARAM>(&windows));
     return windows;
+}
+
+QString ProcessNameForWindow(HWND hwnd)
+{
+    DWORD processId = 0;
+    GetWindowThreadProcessId(hwnd, &processId);
+    if (processId == 0)
+    {
+        return {};
+    }
+
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (!process)
+    {
+        return {};
+    }
+
+    wchar_t path[32768]{};
+    DWORD length = static_cast<DWORD>(std::size(path));
+    QString name;
+    if (QueryFullProcessImageNameW(process, 0, path, &length))
+    {
+        const wchar_t* separator = wcsrchr(path, L'\\');
+        name = QString::fromWCharArray(separator ? separator + 1 : path);
+    }
+    CloseHandle(process);
+    return name;
+}
+
+bool IsDeltaForceGameProcess(const QString& processName)
+{
+    return IsDeltaForceGameBodyProcessName(
+        reinterpret_cast<const wchar_t*>(processName.utf16()));
+}
+
+bool HasDeltaForceGameWindow()
+{
+    bool found = false;
+    EnumWindows([](HWND hwnd, LPARAM param) -> BOOL {
+        if (!IsWindowVisible(hwnd))
+        {
+            return TRUE;
+        }
+
+        RECT client{};
+        if (!GetClientRect(hwnd, &client) || client.right <= 0 || client.bottom <= 0)
+        {
+            return TRUE;
+        }
+
+        if (IsDeltaForceGameProcess(ProcessNameForWindow(hwnd)))
+        {
+            *reinterpret_cast<bool*>(param) = true;
+            return FALSE;
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&found));
+    return found;
 }
 }
 
@@ -435,20 +495,13 @@ bool AccountLoginAutomation::waitForProcess(const QString& processName, int time
 
 bool AccountLoginAutomation::waitForGameWindow(int timeoutMs) const
 {
-    const QStringList processNames{
-        QStringLiteral("DeltaForceClient-Win64-Shipping.exe"),
-        QStringLiteral("eltaForceClient-Win64-Shipping.exe")};
     QElapsedTimer timer;
     timer.start();
     while (!cancelled() && timer.elapsed() < timeoutMs)
     {
-        for (const QString& processName : processNames)
+        if (HasDeltaForceGameWindow())
         {
-            QProcess probe;
-            probe.start(QStringLiteral("tasklist"), {QStringLiteral("/FI"), QStringLiteral("IMAGENAME eq %1").arg(processName)});
-            probe.waitForFinished(1000);
-            if (QString::fromLocal8Bit(probe.readAllStandardOutput()).contains(processName, Qt::CaseInsensitive))
-                return true;
+            return true;
         }
         QThread::msleep(250);
     }
