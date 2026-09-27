@@ -5,6 +5,7 @@
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <string>
+#include <vector>
 #pragma comment(lib, "uiautomationcore.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -104,6 +105,25 @@ QStringList FindSteamExecutables()
     if (!pathExecutable.isEmpty() && !paths.contains(pathExecutable, Qt::CaseInsensitive))
         paths.push_back(pathExecutable);
     return paths;
+}
+
+std::vector<HWND> FindSteamWindows()
+{
+    std::vector<HWND> windows;
+    EnumWindows([](HWND hwnd, LPARAM param) -> BOOL {
+        if (!IsWindowVisible(hwnd)) return TRUE;
+        wchar_t title[256]{};
+        GetWindowTextW(hwnd, title, 256);
+        const std::wstring text(title);
+        if (text.find(L"Steam") != std::wstring::npos
+            || text.find(L"最终用户许可协议") != std::wstring::npos
+            || text.find(L"End User License Agreement") != std::wstring::npos)
+        {
+            reinterpret_cast<std::vector<HWND>*>(param)->push_back(hwnd);
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&windows));
+    return windows;
 }
 }
 
@@ -213,9 +233,65 @@ bool AccountLoginAutomation::performSteamLogin(QString& errorText) const
     return false;
 }
 
+bool AccountLoginAutomation::acceptSteamAgreementIfPresent() const
+{
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(init) && init != RPC_E_CHANGED_MODE) return false;
+
+    IUIAutomation* automation = nullptr;
+    bool accepted = false;
+    if (SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation))))
+    {
+        for (const HWND hwnd : FindSteamWindows())
+        {
+            IUIAutomationElement* root = nullptr;
+            if (FAILED(automation->ElementFromHandle(hwnd, &root)) || !root) continue;
+
+            IUIAutomationElement* agreement = FindNamed(automation, root, L"最终用户许可协议");
+            if (!agreement) agreement = FindNamed(automation, root, L"End User License Agreement");
+            if (!agreement) agreement = FindNamed(automation, root, L"Steam Subscriber Agreement");
+            if (agreement)
+            {
+                IUIAutomationElement* accept = FindNamed(automation, root, L"接受");
+                if (!accept) accept = FindNamed(automation, root, L"Accept");
+                if (!accept) accept = FindNamed(automation, root, L"I Agree");
+                if (!accept) accept = FindNamed(automation, root, L"同意");
+                if (accept)
+                {
+                    accepted = Invoke(accept) || accepted;
+                    accept->Release();
+                }
+                agreement->Release();
+            }
+            root->Release();
+            if (accepted) break;
+        }
+        automation->Release();
+    }
+    if (SUCCEEDED(init)) CoUninitialize();
+    return accepted;
+}
+
 bool AccountLoginAutomation::prepareAndStartLauncher(QString& errorText) const
 {
-    if (!waitForProcess(QStringLiteral("df_launcher.exe"), 30000)) { errorText = QStringLiteral("未检测到 df_launcher"); return false; }
+    QElapsedTimer timer;
+    timer.start();
+    bool launcherReady = false;
+    while (!cancelled() && timer.elapsed() < 30000)
+    {
+        acceptSteamAgreementIfPresent();
+        if (waitForProcess(QStringLiteral("df_launcher.exe"), 250))
+        {
+            launcherReady = true;
+            break;
+        }
+    }
+    if (!launcherReady)
+    {
+        errorText = cancelled() ? QStringLiteral("已取消") : QStringLiteral("未检测到 df_launcher");
+        return false;
+    }
+    acceptSteamAgreementIfPresent();
     const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     IUIAutomation* automation = nullptr; bool success = false;
     if (SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation))))

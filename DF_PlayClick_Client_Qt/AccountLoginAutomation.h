@@ -21,6 +21,7 @@ private:
     bool launchSteam(QString& errorText) const;
     bool launchGame(QString& errorText) const;
     bool performSteamLogin(QString& errorText) const;
+    bool acceptSteamAgreementIfPresent() const;
     bool prepareAndStartLauncher(QString& errorText) const;
     QString username_;
     QString password_;
