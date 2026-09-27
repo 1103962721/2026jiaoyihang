@@ -125,6 +125,24 @@ std::vector<HWND> FindSteamWindows()
     }, reinterpret_cast<LPARAM>(&windows));
     return windows;
 }
+
+std::vector<HWND> FindDeltaForceWindows()
+{
+    std::vector<HWND> windows;
+    EnumWindows([](HWND hwnd, LPARAM param) -> BOOL {
+        if (!IsWindowVisible(hwnd)) return TRUE;
+        wchar_t title[256]{};
+        GetWindowTextW(hwnd, title, 256);
+        const std::wstring text(title);
+        if (text.find(L"Delta Force") != std::wstring::npos
+            || text.find(L"三角洲行动") != std::wstring::npos)
+        {
+            reinterpret_cast<std::vector<HWND>*>(param)->push_back(hwnd);
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&windows));
+    return windows;
+}
 }
 
 void AccountLoginAutomation::start(const QString& username, const QString& password)
@@ -270,46 +288,63 @@ bool AccountLoginAutomation::prepareAndStartLauncher(QString& errorText) const
 {
     QElapsedTimer timer;
     timer.start();
-    bool launcherReady = false;
-    while (!cancelled() && timer.elapsed() < 30000)
+    constexpr int LauncherControlTimeoutMs = 60000;
+    while (!cancelled() && timer.elapsed() < LauncherControlTimeoutMs)
     {
         acceptSteamAgreementIfPresent();
-        if (waitForProcess(QStringLiteral("df_launcher.exe"), 250))
+
+        if (!waitForProcess(QStringLiteral("df_launcher.exe"), 250))
         {
-            launcherReady = true;
-            break;
+            continue;
         }
-    }
-    if (!launcherReady)
-    {
-        errorText = cancelled() ? QStringLiteral("已取消") : QStringLiteral("未检测到 df_launcher");
-        return false;
-    }
-    acceptSteamAgreementIfPresent();
-    const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    IUIAutomation* automation = nullptr; bool success = false;
-    if (SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation))))
-    {
-        HWND hwnd = FindWindowW(nullptr, L"Delta Force");
-        if (hwnd)
+
+        const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        IUIAutomation* automation = nullptr;
+        bool started = false;
+        if (SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation))))
         {
-            IUIAutomationElement* root = nullptr;
-            if (SUCCEEDED(automation->ElementFromHandle(hwnd, &root)))
+            for (const HWND hwnd : FindDeltaForceWindows())
             {
-                VARIANT id{}; id.vt = VT_BSTR; id.bstrVal = SysAllocString(L"read-module");
-                IUIAutomationCondition* condition = nullptr; IUIAutomationElement* check = nullptr;
-                if (SUCCEEDED(automation->CreatePropertyCondition(UIA_AutomationIdPropertyId, id, &condition))) root->FindFirst(TreeScope_Descendants, condition, &check);
-                if (check) { IUIAutomationTogglePattern* toggle = nullptr; if (SUCCEEDED(check->GetCurrentPatternAs(UIA_TogglePatternId, IID_PPV_ARGS(&toggle)))) { toggle->Toggle(); toggle->Release(); } check->Release(); }
-                if (condition) condition->Release(); VariantClear(&id);
-                IUIAutomationElement* start = FindNamed(automation, root, L"开始游戏"); if (!start) start = FindNamed(automation, root, L"Start Game");
-                success = Invoke(start); if (start) start->Release(); root->Release();
+                IUIAutomationElement* root = nullptr;
+                if (FAILED(automation->ElementFromHandle(hwnd, &root)) || !root) continue;
+
+                VARIANT id{};
+                id.vt = VT_BSTR;
+                id.bstrVal = SysAllocString(L"read-module");
+                IUIAutomationCondition* condition = nullptr;
+                IUIAutomationElement* check = nullptr;
+                if (SUCCEEDED(automation->CreatePropertyCondition(UIA_AutomationIdPropertyId, id, &condition)))
+                    root->FindFirst(TreeScope_Descendants, condition, &check);
+                if (condition) condition->Release();
+                VariantClear(&id);
+
+                IUIAutomationElement* start = FindNamed(automation, root, L"开始游戏");
+                if (!start) start = FindNamed(automation, root, L"Start Game");
+                if (check && start)
+                {
+                    IUIAutomationTogglePattern* toggle = nullptr;
+                    if (SUCCEEDED(check->GetCurrentPatternAs(UIA_TogglePatternId, IID_PPV_ARGS(&toggle))))
+                    {
+                        ToggleState state = ToggleState_Off;
+                        toggle->get_CurrentToggleState(&state);
+                        if (state != ToggleState_On) toggle->Toggle();
+                        toggle->Release();
+                    }
+                    started = Invoke(start);
+                }
+                if (start) start->Release();
+                if (check) check->Release();
+                root->Release();
+                if (started) break;
             }
+            automation->Release();
         }
-        automation->Release();
+        if (SUCCEEDED(init)) CoUninitialize();
+        if (started) return true;
+        QThread::msleep(250);
     }
-    if (SUCCEEDED(init)) CoUninitialize();
-    if (!success) errorText = QStringLiteral("未找到 df_launcher 控件");
-    return success;
+    errorText = cancelled() ? QStringLiteral("已取消") : QStringLiteral("df_launcher 控件加载超时");
+    return false;
 }
 
 void AccountLoginAutomation::cancel() { cancelled_ = true; }
