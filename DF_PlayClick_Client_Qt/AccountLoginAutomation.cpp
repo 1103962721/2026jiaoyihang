@@ -359,7 +359,8 @@ bool AccountLoginAutomation::cancelled() const { return cancelled_.load(); }
 bool AccountLoginAutomation::stopProcesses(QString& errorText) const
 {
     const QStringList names{QStringLiteral("steam.exe"), QStringLiteral("steamwebhelper.exe"),
-        QStringLiteral("df_launcher.exe"), QStringLiteral("DeltaForceClient-Win64-Shipping.exe")};
+        QStringLiteral("df_launcher.exe"), QStringLiteral("DeltaForceClient-Win64-Shipping.exe"),
+        QStringLiteral("eltaForceClient-Win64-Shipping.exe")};
     for (const QString& name : names)
     {
         QProcess::execute(QStringLiteral("taskkill"), {QStringLiteral("/F"), QStringLiteral("/IM"), name});
@@ -434,5 +435,22 @@ bool AccountLoginAutomation::waitForProcess(const QString& processName, int time
 
 bool AccountLoginAutomation::waitForGameWindow(int timeoutMs) const
 {
-    return waitForProcess(QStringLiteral("DeltaForceClient-Win64-Shipping.exe"), timeoutMs);
+    const QStringList processNames{
+        QStringLiteral("DeltaForceClient-Win64-Shipping.exe"),
+        QStringLiteral("eltaForceClient-Win64-Shipping.exe")};
+    QElapsedTimer timer;
+    timer.start();
+    while (!cancelled() && timer.elapsed() < timeoutMs)
+    {
+        for (const QString& processName : processNames)
+        {
+            QProcess probe;
+            probe.start(QStringLiteral("tasklist"), {QStringLiteral("/FI"), QStringLiteral("IMAGENAME eq %1").arg(processName)});
+            probe.waitForFinished(1000);
+            if (QString::fromLocal8Bit(probe.readAllStandardOutput()).contains(processName, Qt::CaseInsensitive))
+                return true;
+        }
+        QThread::msleep(250);
+    }
+    return false;
 }

@@ -25,6 +25,7 @@ inline bool IsDeltaForceGameBodyProcessName(const wchar_t* processName)
         return false;
     }
     return lstrcmpiW(processName, L"DeltaForceClient-Win64-Shipping.exe") == 0
+        || lstrcmpiW(processName, L"eltaForceClient-Win64-Shipping.exe") == 0
         || lstrcmpiW(processName, L"DeltaForceClient.exe") == 0;
 }
 
