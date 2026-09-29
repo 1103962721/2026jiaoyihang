@@ -14,7 +14,7 @@
 
 namespace
 {
-bool IsDeltaForceProcessForWindow(HWND hwnd)
+bool IsDeltaForceProcessRunning(HWND hwnd)
 {
     if (!hwnd || !IsWindow(hwnd))
     {
@@ -118,8 +118,13 @@ QString NormalizeBanText(QString text)
 bool IsBanText(const QString& recognizedText)
 {
     const QString text = NormalizeBanText(recognizedText);
-    return text.contains(QStringLiteral("您所在的游戏环境及行为数据异常"), Qt::CaseInsensitive)
-        && text.contains(QStringLiteral("已对账号进行冻结"), Qt::CaseInsensitive);
+    const bool abnormalEnvironment = text.contains(QStringLiteral("游戏环境及行为数据异常"), Qt::CaseInsensitive)
+        || (text.contains(QStringLiteral("游戏环境"), Qt::CaseInsensitive)
+            && text.contains(QStringLiteral("行为数据异常"), Qt::CaseInsensitive));
+    const bool accountFrozen = text.contains(QStringLiteral("账号进行冻结"), Qt::CaseInsensitive)
+        || text.contains(QStringLiteral("账号冻结"), Qt::CaseInsensitive)
+        || text.contains(QStringLiteral("冻结"), Qt::CaseInsensitive);
+    return abnormalEnvironment && accountFrozen;
 }
 }
 
@@ -166,7 +171,20 @@ void AccountBanMonitor::run(HWND gameWindow, QString ocrExecutable, int ocrPort)
     const QString tempPath = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
         .filePath(QStringLiteral("df_playclick_account_ban_%1.png").arg(reinterpret_cast<quintptr>(gameWindow)));
 
-    while (!stopRequested_ && IsDeltaForceProcessForWindow(gameWindow))
+    while (!stopRequested_ && (!IsWindow(gameWindow) || !IsDeltaForceProcessRunning(gameWindow)))
+    {
+        if (!IsWindow(gameWindow))
+        {
+            return;
+        }
+        QThread::msleep(250);
+    }
+    if (!stopRequested_)
+    {
+        emit monitorStatus(QStringLiteral("封禁 OCR 已开始监测"));
+    }
+
+    while (!stopRequested_ && IsDeltaForceProcessRunning(gameWindow))
     {
         const QImage image = CaptureClientArea(gameWindow);
         if (!image.isNull() && image.save(tempPath, "PNG"))

@@ -143,6 +143,9 @@ ClientController::ClientController(QObject* parent)
         setStatus(text);
     });
     connect(&accountBanMonitor_, &AccountBanMonitor::bannedDetected, this, &ClientController::handleAccountBanned);
+    connect(&accountBanMonitor_, &AccountBanMonitor::monitorStatus, this, [this](const QString& text) {
+        setStatus(text);
+    });
     connect(&accountBanMonitor_, &AccountBanMonitor::monitorStopped, this, [this]() {
         if (!accountBanMonitor_.isRunning())
         {

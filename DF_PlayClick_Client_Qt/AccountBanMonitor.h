@@ -20,6 +20,7 @@ public:
 
 signals:
     void bannedDetected(const QString& recognizedText);
+    void monitorStatus(const QString& text);
     void monitorStopped();
 
 private:
