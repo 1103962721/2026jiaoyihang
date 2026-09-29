@@ -130,6 +130,7 @@ private:
     void handleMailRequest(int requestId);
     void handleAccountLoginRequest(int requestId, const QString& username, const QString& password);
     void handleAccountBanned(const QString& recognizedText);
+    void handleAccountStartupFailed(const QString& recognizedText);
     void handleLoginReady();
     void runLoginSuccessOcr(int stage);
     void finishLoginSuccessOcr(int stage, bool found, const QString& recognizedText = {});

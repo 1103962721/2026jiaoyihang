@@ -199,6 +199,16 @@ ServerController::ServerController(QObject* parent)
                 return;
             }
             if (status == 3) { handleAccountLoginReady(clientId); return; }
+            if (status != -2
+                && text.contains(QStringLiteral("启动器登录组件报错"), Qt::CaseInsensitive)
+                && text.contains(QStringLiteral("游戏被强制关闭"), Qt::CaseInsensitive))
+            {
+                clearPendingAccountLoginRequests(clientId);
+                connectionManager_.forceResetClientAction(clientId);
+                emit statusChanged(QStringLiteral("客户端 %1 启动器登录组件报错，准备复用当前账号重试").arg(clientId), ServerStatusTone::Error);
+                startAccountLogin(clientId);
+                return;
+            }
             if (status != 1) connectionManager_.forceResetClientAction(clientId);
         });
     connect(&connectionManager_, &ServerConnectionManager::amountReportReceived, this,

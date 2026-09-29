@@ -235,6 +235,7 @@ ClientController::ClientController(QObject* parent)
         setStatus(text);
     });
     connect(&accountBanMonitor_, &AccountBanMonitor::bannedDetected, this, &ClientController::handleAccountBanned);
+    connect(&accountBanMonitor_, &AccountBanMonitor::startupFailedDetected, this, &ClientController::handleAccountStartupFailed);
     connect(&accountBanMonitor_, &AccountBanMonitor::monitorStatus, this, [this](const QString& text) {
         setStatus(text);
     });
@@ -308,6 +309,7 @@ ClientController::ClientController(QObject* parent)
                 accountBanMonitoringEnabled_ = true;
                 accountLoginReadyReported_ = false;
                 accountLoginSuccessMonitor_.start(boundHwnd_, config_.loadUmiOcrPath(), config_.loadUmiOcrPort());
+                accountBanMonitor_.start(boundHwnd_, config_.loadUmiOcrPath(), config_.loadUmiOcrPort());
             }
         }
         if (!finalSuccess)
@@ -3002,6 +3004,36 @@ void ClientController::handleAccountBanned(const QString& recognizedText)
     automationActionRunning_ = false;
     connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("BANNED"), QStringLiteral("检测到账号封号/冻结"));
     setStatus(QStringLiteral("检测到账号封号/冻结，已结束相关进程，等待服务端切换账号"));
+}
+
+void ClientController::handleAccountStartupFailed(const QString& recognizedText)
+{
+    Q_UNUSED(recognizedText);
+    if (!accountBanMonitoringEnabled_ || accountBanHandled_)
+    {
+        return;
+    }
+
+    accountBanHandled_ = true;
+    accountBanMonitoringEnabled_ = false;
+    accountLoginStopExcluded_ = false;
+    accountBanMonitor_.stop();
+    accountLoginSuccessMonitor_.stop();
+    loginOcrRunning_ = false;
+    automationCancelRequested_.store(true);
+    accountLoginAutomation_.cancelAndStopProcesses();
+    countdownTimer_.stop();
+    scheduledTriggerTimer_.stop();
+    countdown_ = 0;
+    if (bulletOcrRunning_)
+    {
+        finishBulletOcrLoop(false, QStringLiteral("启动器登录组件报错，游戏被强制关闭"));
+    }
+    accountLoginRunning_ = false;
+    automationActionRunning_ = false;
+    connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("ERROR"),
+        QStringLiteral("启动器登录组件报错，游戏被强制关闭，准备复用当前账号重试"));
+    setStatus(QStringLiteral("启动器登录组件报错，已结束相关进程，准备复用当前账号重试"));
 }
 
 void ClientController::handleLoginReady()

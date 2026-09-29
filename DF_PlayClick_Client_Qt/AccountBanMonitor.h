@@ -23,6 +23,7 @@ public:
 
 signals:
     void bannedDetected(const QString& recognizedText);
+    void startupFailedDetected(const QString& recognizedText);
     void monitorStatus(const QString& text);
     void monitorStopped();
 

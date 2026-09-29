@@ -127,6 +127,13 @@ bool IsBanText(const QString& recognizedText)
         || text.contains(QStringLiteral("冻结"), Qt::CaseInsensitive);
     return abnormalEnvironment && accountFrozen;
 }
+
+bool IsStartupFailureText(const QString& recognizedText)
+{
+    const QString text = NormalizeBanText(recognizedText);
+    return text.contains(QStringLiteral("启动器登录组件报错"), Qt::CaseInsensitive)
+        && text.contains(QStringLiteral("游戏被强制关闭"), Qt::CaseInsensitive);
+}
 }
 
 std::atomic_bool AccountBanMonitor::loginOcrInFlight{false};
@@ -222,6 +229,11 @@ void AccountBanMonitor::run(HWND gameWindow, QString ocrExecutable, int ocrPort,
             QString errorText;
             const QString recognizedText = ocrRunner.recognizeImage(tempPath, ocrExecutable, ocrPort, errorText);
             QFile::remove(tempPath);
+            if (!token->load() && IsStartupFailureText(recognizedText))
+            {
+                emit startupFailedDetected(recognizedText);
+                return;
+            }
             if (!token->load() && IsBanText(recognizedText))
             {
                 emit bannedDetected(recognizedText);
