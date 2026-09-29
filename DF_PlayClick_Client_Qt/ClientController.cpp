@@ -22,6 +22,7 @@
 #include <QThread>
 
 #include <cmath>
+#include <thread>
 
 #include "../Shared/ClientBindingRules.h"
 #include "../Shared/ClientCountdownRules.h"
@@ -262,7 +263,22 @@ ClientController::ClientController(QObject* parent)
         QString error; input_.pressKey(VK_TAB, error);
     });
     connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::retrySpace, this, [this]() {
-        QTimer::singleShot(0, this, [this]() { QString error; input_.holdKey(VK_SPACE, 3000, error); });
+        // holdKey() waits for the complete hold interval. Run it away from the
+        // Qt UI thread so the 3-second fallback cannot make the window hang.
+        QPointer<ClientController> controller(this);
+        std::thread([controller]() {
+            Win32InputDispatcher dispatcher;
+            QString error;
+            if (!dispatcher.holdKey(VK_SPACE, 3000, error) && controller)
+            {
+                QMetaObject::invokeMethod(controller, [controller, error]() {
+                    if (controller)
+                    {
+                        controller->setStatus(QStringLiteral("空格保底输入失败：%1").arg(error));
+                    }
+                }, Qt::QueuedConnection);
+            }
+        }).detach();
     });
     connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::monitorStatus, this, [this](const QString& text) { setStatus(text); });
     connect(&accountLoginAutomation_, &AccountLoginAutomation::finished, this, [this](bool success, const QString& text) {
@@ -3007,7 +3023,8 @@ void ClientController::runLoginSuccessOcr(int stage)
         || !boundHwnd_ || !binder_.isValid(boundHwnd_)) return;
     if (loginOcrRunning_.exchange(true)) return;
     OcrRegionConfig region;
-    if (stage == 0) { region = {true, 262, 144, 520, 60, 2560, 1440}; }
+    // 常驻与封禁都读取完整客户区，避免固定小区域随窗口布局或缩放变化而偏移。
+    if (stage == 0) { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
     else if (stage == 1) { region = {true, 994, 1145, 500, 255, 2560, 1440}; }
     else if (stage == 2) { region = {true, 1946, 1262, 500, 56, 2560, 1440}; }
     else { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
