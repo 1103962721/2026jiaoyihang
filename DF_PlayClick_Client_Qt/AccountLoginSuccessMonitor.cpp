@@ -65,7 +65,10 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
             phaseStage = changedStage;
             continue;
         }
-        phaseStage = phaseStage == 3 ? 0 : 3;
+        if (phaseStage != 3)
+        {
+            phaseStage = 3;
+        }
         stage_.store(phaseStage);
     }
 }

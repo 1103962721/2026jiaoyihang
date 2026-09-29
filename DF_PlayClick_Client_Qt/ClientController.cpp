@@ -50,6 +50,85 @@ QString NormalizeAmountNumericToken(QString value)
     return value;
 }
 
+QString CaptureDesktopOcrRegion(HWND hwnd, const OcrRegionConfig& region, const QString& filePrefix, QString& errorText)
+{
+    errorText.clear();
+    if (!hwnd || !IsWindow(hwnd))
+    {
+        errorText = QStringLiteral("游戏窗口无效");
+        return {};
+    }
+    RECT clientRect{};
+    if (!GetClientRect(hwnd, &clientRect))
+    {
+        errorText = QStringLiteral("读取游戏客户区失败");
+        return {};
+    }
+    const QSize clientSize(clientRect.right - clientRect.left, clientRect.bottom - clientRect.top);
+    const QRect scaledRegion = ScaleReferenceRect(
+        QRect(region.x, region.y, region.width, region.height),
+        QSize(region.referenceWidth, region.referenceHeight), clientSize);
+    if (!IsRectInsideClient(scaledRegion, clientSize))
+    {
+        errorText = QStringLiteral("OCR 截图区域超出游戏客户区");
+        return {};
+    }
+    POINT origin{0, 0};
+    if (!ClientToScreen(hwnd, &origin))
+    {
+        errorText = QStringLiteral("客户区坐标转屏幕坐标失败");
+        return {};
+    }
+    HDC screen = GetDC(nullptr);
+    HDC memory = screen ? CreateCompatibleDC(screen) : nullptr;
+    HBITMAP bitmap = (screen && memory)
+        ? CreateCompatibleBitmap(screen, scaledRegion.width(), scaledRegion.height()) : nullptr;
+    if (!screen || !memory || !bitmap)
+    {
+        if (bitmap) DeleteObject(bitmap);
+        if (memory) DeleteDC(memory);
+        if (screen) ReleaseDC(nullptr, screen);
+        errorText = QStringLiteral("创建桌面截图失败");
+        return {};
+    }
+    HGDIOBJ previous = SelectObject(memory, bitmap);
+    const BOOL copied = BitBlt(memory, 0, 0, scaledRegion.width(), scaledRegion.height(), screen,
+        origin.x + scaledRegion.x(), origin.y + scaledRegion.y(), SRCCOPY | CAPTUREBLT);
+    QImage image;
+    if (copied)
+    {
+        image = QImage(scaledRegion.width(), scaledRegion.height(), QImage::Format_RGB32);
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = scaledRegion.width();
+        info.bmiHeader.biHeight = -scaledRegion.height();
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        if (GetDIBits(memory, bitmap, 0, static_cast<UINT>(scaledRegion.height()), image.bits(), &info, DIB_RGB_COLORS) == 0)
+        {
+            image = {};
+        }
+    }
+    SelectObject(memory, previous);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+    if (image.isNull())
+    {
+        errorText = QStringLiteral("桌面截图失败");
+        return {};
+    }
+    const QString imagePath = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
+        .filePath(QStringLiteral("df_playclick_%1_%2.png").arg(filePrefix).arg(reinterpret_cast<quintptr>(hwnd)));
+    if (!image.save(imagePath, "PNG"))
+    {
+        errorText = QStringLiteral("保存 OCR 截图失败");
+        return {};
+    }
+    return imagePath;
+}
+
 QString NormalizeBanOcrText(QString text)
 {
     text.remove(QRegularExpression(QStringLiteral("[\\s\\p{P}]")));
@@ -2911,7 +2990,8 @@ void ClientController::handleLoginReady()
 {
     if (accountLoginReadyReported_ || !accountLoginRunning_ || !boundHwnd_) return;
     accountLoginReadyReported_ = true;
-    accountLoginSuccessMonitor_.stop();
+    // 登录成功后停止“常驻/TAB/行前备战”判断，继续保留同一个监测线程做封禁 OCR。
+    accountLoginSuccessMonitor_.setStage(3);
     loginOcrRunning_ = false;
     rebindGameWindow();
     QTimer::singleShot(500, this, [this]() {
@@ -2923,35 +3003,59 @@ void ClientController::handleLoginReady()
 
 void ClientController::runLoginSuccessOcr(int stage)
 {
-    if (!accountLoginRunning_ || !boundHwnd_ || !binder_.isValid(boundHwnd_)) return;
+    if ((!accountLoginRunning_ && stage != 3) || (!accountBanMonitoringEnabled_ && stage == 3)
+        || !boundHwnd_ || !binder_.isValid(boundHwnd_)) return;
     if (loginOcrRunning_.exchange(true)) return;
     OcrRegionConfig region;
     if (stage == 0) { region = {true, 262, 144, 520, 60, 2560, 1440}; }
     else if (stage == 1) { region = {true, 994, 1145, 500, 255, 2560, 1440}; }
     else if (stage == 2) { region = {true, 1946, 1262, 500, 56, 2560, 1440}; }
     else { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
-    QString error;
-    const QString imagePath = captureOcrRegion(region, QStringLiteral("login_success_%1").arg(stage), error);
-    if (imagePath.isEmpty()) { loginOcrRunning_ = false; return; }
     const QString executable = config_.loadUmiOcrPath();
     const int port = config_.loadUmiOcrPort();
     const QString keyword = stage == 0 ? QStringLiteral("常驻") : stage == 1 ? QStringLiteral("TAB开始游戏") : QStringLiteral("行前备战");
+    const HWND gameWindow = boundHwnd_;
     QPointer<ClientController> controller(this);
-    std::thread([controller, stage, imagePath, executable, port, keyword]() {
+    std::thread([controller, gameWindow, region, stage, executable, port, keyword]() {
+        const qint64 startedAt = QDateTime::currentMSecsSinceEpoch();
         AccountBanMonitor::loginOcrInFlight = true;
         UmiOcrRunner runner;
-        QString error; QRect bounds;
+        QString error;
+        const QString imagePath = CaptureDesktopOcrRegion(gameWindow, region,
+            QStringLiteral("login_success_%1").arg(stage), error);
         QString recognizedText;
-        const bool found = stage == 3
-            ? !(recognizedText = runner.recognizeImage(imagePath, executable, port, error)).trimmed().isEmpty()
-            : runner.findTextBounds(imagePath, executable, port, keyword, bounds, error);
-        QFile::remove(imagePath);
+        QRect bounds;
+        bool found = false;
+        if (!imagePath.isEmpty())
+        {
+            found = stage == 3
+                ? !(recognizedText = runner.recognizeImage(imagePath, executable, port, error)).trimmed().isEmpty()
+                : runner.findTextBounds(imagePath, executable, port, keyword, bounds, error, false, &recognizedText);
+            QFile::remove(imagePath);
+        }
         AccountBanMonitor::loginOcrInFlight = false;
+        const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - startedAt;
+        if (controller)
+        {
+            const QString stageName = stage == 0 ? QStringLiteral("常驻")
+                : stage == 1 ? QStringLiteral("TAB开始游戏")
+                : stage == 2 ? QStringLiteral("行前备战") : QStringLiteral("封禁");
+            QMetaObject::invokeMethod(controller, [controller, stageName, found, recognizedText, error, elapsed]() {
+                if (controller)
+                {
+                    emit controller->connectionLogAppended(QStringLiteral("上号OCR[%1]：%2，耗时%3ms，文本：%4，错误：%5")
+                        .arg(stageName, found ? QStringLiteral("找到") : QStringLiteral("未找到"))
+                        .arg(elapsed)
+                        .arg(recognizedText.trimmed().isEmpty() ? QStringLiteral("<空>") : recognizedText.simplified(),
+                             error.isEmpty() ? QStringLiteral("<无>") : error));
+                }
+            }, Qt::QueuedConnection);
+        }
         if (stage == 3) {
             const QString normalized = recognizedText;
             if (IsBanOcrText(normalized)) {
                 QMetaObject::invokeMethod(controller, [controller, normalized]() {
-                    if (controller) emit controller->accountLoginSuccessMonitor_.bannedDetected(normalized);
+                    if (controller) controller->handleAccountBanned(normalized);
                 }, Qt::QueuedConnection);
             }
         }
@@ -2964,15 +3068,13 @@ void ClientController::runLoginSuccessOcr(int stage)
 
 void ClientController::finishLoginSuccessOcr(int stage, bool found, const QString& recognizedText)
 {
+    Q_UNUSED(recognizedText);
     loginOcrRunning_ = false;
     if (!accountLoginRunning_ || !boundHwnd_) return;
     if (stage == 3)
     {
-        if (found && !recognizedText.trimmed().isEmpty())
-        {
-            // 封禁 OCR 未命中目标文案时，返回常驻阶段继续轮换。
-            accountLoginSuccessMonitor_.setStage(0);
-        }
+        // 封禁 OCR 未命中目标文案（包括空文本）时，返回常驻阶段继续轮换。
+        accountLoginSuccessMonitor_.setStage(0);
         return;
     }
     if (!found)
@@ -4575,21 +4677,18 @@ QString ClientController::captureOcrRegion(const OcrRegionConfig& region, const 
         return {};
     }
 
-    POINT screenPoint{ scaledRegion.x(), scaledRegion.y() };
+    POINT screenPoint{scaledRegion.x(), scaledRegion.y()};
     if (!ClientToScreen(boundHwnd_, &screenPoint))
     {
         errorText = QStringLiteral("客户区坐标转屏幕坐标失败");
         return {};
     }
-
     QScreen* screen = QGuiApplication::primaryScreen();
     if (!screen)
     {
         errorText = QStringLiteral("未找到屏幕对象");
         return {};
     }
-
-    // OCR 区域按参考客户区坐标缩放后从屏幕截图，后续只识别这块小图。
     const QPixmap pixmap = screen->grabWindow(0, screenPoint.x, screenPoint.y, scaledRegion.width(), scaledRegion.height());
     if (pixmap.isNull())
     {

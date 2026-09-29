@@ -193,7 +193,7 @@ QString UmiOcrRunner::recognizeImage(const QString& imagePath, const QString& ex
 }
 
 bool UmiOcrRunner::findTextBounds(const QString& imagePath, const QString& executablePath, int port, const QString& keyword,
-    QRect& bounds, QString& errorText, bool exactMatch) const
+    QRect& bounds, QString& errorText, bool exactMatch, QString* recognizedText) const
 {
     bounds = {};
     QJsonObject responseObject;
@@ -257,15 +257,23 @@ bool UmiOcrRunner::findTextBounds(const QString& imagePath, const QString& execu
         }
         if (hasPoint && maxX > minX && maxY > minY)
         {
+            if (recognizedText)
+            {
+                *recognizedText = allTexts.join(QLatin1Char('\n'));
+            }
             bounds = QRect(QPoint(minX, minY), QPoint(maxX, maxY)).normalized();
             return true;
         }
     }
 
-    const QString recognizedText = allTexts.join(QLatin1Char('\n'));
-    errorText = recognizedText.isEmpty()
+    const QString recognizedTextValue = allTexts.join(QLatin1Char('\n'));
+    if (recognizedText)
+    {
+        *recognizedText = recognizedTextValue;
+    }
+    errorText = recognizedTextValue.isEmpty()
         ? QStringLiteral("OCR未识别到文字，未找到“%1”").arg(keyword)
-        : QStringLiteral("OCR未找到“%1”，原文：%2").arg(keyword, recognizedText);
+        : QStringLiteral("OCR未找到“%1”，原文：%2").arg(keyword, recognizedTextValue);
     return false;
 }
 
