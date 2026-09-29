@@ -1315,7 +1315,8 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
                         client->runningAction.clear();
                     }
                     client->teamReadyText = message.value == 1 ? QStringLiteral("上号中")
-                        : (message.success ? QStringLiteral("上号成功") : QStringLiteral("上号失败"));
+                        : (message.value == -2 ? QStringLiteral("封号/冻结")
+                            : (message.success ? QStringLiteral("上号成功") : QStringLiteral("上号失败")));
                 }
                 emit clientsChanged();
                 emit accountLoginResponseReceived(client->id, message.requestId, message.value, responseText);

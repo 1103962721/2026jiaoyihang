@@ -849,7 +849,7 @@ namespace Protocol
             std::string status;
             stream >> requestId >> status;
             if (stream.fail() || requestId <= 0
-                || (status != "STARTED" && status != "OK" && status != "ERROR"))
+                || (status != "STARTED" && status != "OK" && status != "ERROR" && status != "BANNED"))
                 return false;
             std::string payload;
             std::getline(stream, payload);
@@ -857,7 +857,8 @@ namespace Protocol
                 payload.erase(0, 1);
             message.type = MessageType::AccountLoginResponse;
             message.requestId = requestId;
-            message.value = status == "STARTED" ? 1 : (status == "OK" ? 2 : -1);
+            message.value = status == "STARTED" ? 1
+                : (status == "OK" ? 2 : (status == "BANNED" ? -2 : -1));
             message.success = status == "OK";
             message.payload = payload;
             return true;

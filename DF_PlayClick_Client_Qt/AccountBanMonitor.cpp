@@ -1,0 +1,191 @@
+#include "AccountBanMonitor.h"
+
+#include <QDir>
+#include <QFile>
+#include <QImage>
+#include <QRegularExpression>
+#include <QStandardPaths>
+#include <QThread>
+
+#include <cwchar>
+
+#include "UmiOcrRunner.h"
+#include "../Shared/ClientBindingRules.h"
+
+namespace
+{
+bool IsDeltaForceProcessForWindow(HWND hwnd)
+{
+    if (!hwnd || !IsWindow(hwnd))
+    {
+        return false;
+    }
+
+    DWORD processId = 0;
+    GetWindowThreadProcessId(hwnd, &processId);
+    if (processId == 0)
+    {
+        return false;
+    }
+
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, processId);
+    if (!process)
+    {
+        return false;
+    }
+
+    wchar_t path[32768]{};
+    DWORD length = static_cast<DWORD>(_countof(path));
+    const bool nameRead = QueryFullProcessImageNameW(process, 0, path, &length) != FALSE;
+    DWORD exitCode = 0;
+    const bool running = GetExitCodeProcess(process, &exitCode) != FALSE && exitCode == STILL_ACTIVE;
+    CloseHandle(process);
+    if (!nameRead || !running)
+    {
+        return false;
+    }
+
+    const wchar_t* separator = wcsrchr(path, L'\\');
+    const wchar_t* processName = separator ? separator + 1 : path;
+    return IsDeltaForceGameBodyProcessName(processName);
+}
+
+QImage CaptureClientArea(HWND hwnd)
+{
+    RECT clientRect{};
+    if (!GetClientRect(hwnd, &clientRect))
+    {
+        return {};
+    }
+
+    const int width = clientRect.right - clientRect.left;
+    const int height = clientRect.bottom - clientRect.top;
+    if (width <= 0 || height <= 0)
+    {
+        return {};
+    }
+
+    POINT origin{0, 0};
+    if (!ClientToScreen(hwnd, &origin))
+    {
+        return {};
+    }
+
+    HDC screen = GetDC(nullptr);
+    HDC memory = screen ? CreateCompatibleDC(screen) : nullptr;
+    HBITMAP bitmap = (screen && memory) ? CreateCompatibleBitmap(screen, width, height) : nullptr;
+    if (!screen || !memory || !bitmap)
+    {
+        if (bitmap) DeleteObject(bitmap);
+        if (memory) DeleteDC(memory);
+        if (screen) ReleaseDC(nullptr, screen);
+        return {};
+    }
+
+    HGDIOBJ previous = SelectObject(memory, bitmap);
+    const BOOL copied = BitBlt(memory, 0, 0, width, height, screen, origin.x, origin.y, SRCCOPY | CAPTUREBLT);
+
+    QImage image;
+    if (copied)
+    {
+        image = QImage(width, height, QImage::Format_RGB32);
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        if (GetDIBits(memory, bitmap, 0, static_cast<UINT>(height), image.bits(), &info, DIB_RGB_COLORS) == 0)
+        {
+            image = {};
+        }
+    }
+
+    SelectObject(memory, previous);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+    return image;
+}
+
+QString NormalizeBanText(QString text)
+{
+    text.remove(QRegularExpression(QStringLiteral("[\\s\\p{P}]")));
+    return text;
+}
+
+bool IsBanText(const QString& recognizedText)
+{
+    const QString text = NormalizeBanText(recognizedText);
+    return text.contains(QStringLiteral("您所在的游戏环境及行为数据异常"), Qt::CaseInsensitive)
+        && text.contains(QStringLiteral("已对账号进行冻结"), Qt::CaseInsensitive);
+}
+}
+
+AccountBanMonitor::AccountBanMonitor(QObject* parent)
+    : QObject(parent)
+{
+}
+
+AccountBanMonitor::~AccountBanMonitor()
+{
+    stop();
+}
+
+void AccountBanMonitor::start(HWND gameWindow, const QString& ocrExecutable, int ocrPort)
+{
+    stop();
+    stopRequested_ = false;
+    running_ = true;
+    worker_ = std::thread([this, gameWindow, ocrExecutable, ocrPort]() {
+        run(gameWindow, ocrExecutable, ocrPort);
+        running_ = false;
+        emit monitorStopped();
+    });
+}
+
+void AccountBanMonitor::stop()
+{
+    stopRequested_ = true;
+    if (worker_.joinable())
+    {
+        worker_.join();
+    }
+    running_ = false;
+}
+
+bool AccountBanMonitor::isRunning() const
+{
+    return running_.load();
+}
+
+void AccountBanMonitor::run(HWND gameWindow, QString ocrExecutable, int ocrPort)
+{
+    UmiOcrRunner ocrRunner;
+    const QString tempPath = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
+        .filePath(QStringLiteral("df_playclick_account_ban_%1.png").arg(reinterpret_cast<quintptr>(gameWindow)));
+
+    while (!stopRequested_ && IsDeltaForceProcessForWindow(gameWindow))
+    {
+        const QImage image = CaptureClientArea(gameWindow);
+        if (!image.isNull() && image.save(tempPath, "PNG"))
+        {
+            QString errorText;
+            const QString recognizedText = ocrRunner.recognizeImage(tempPath, ocrExecutable, ocrPort, errorText);
+            QFile::remove(tempPath);
+            if (!stopRequested_ && IsBanText(recognizedText))
+            {
+                emit bannedDetected(recognizedText);
+                return;
+            }
+        }
+
+        // 封禁监测是独立的低频后台任务，避免持续 OCR 占用机器资源。
+        for (int elapsed = 0; elapsed < 3000 && !stopRequested_; elapsed += 100)
+        {
+            QThread::msleep(100);
+        }
+    }
+    QFile::remove(tempPath);
+}

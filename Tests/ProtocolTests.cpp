@@ -230,6 +230,11 @@ int main()
     assert(parsed.value == 1);
     assert(Protocol::ParseLine("ACCOUNT_LOGIN_RESPONSE 7 OK game-ready", parsed));
     assert(parsed.success);
+    assert(Protocol::ParseLine("ACCOUNT_LOGIN_RESPONSE 7 BANNED account-frozen", parsed));
+    assert(parsed.type == Protocol::MessageType::AccountLoginResponse);
+    assert(parsed.value == -2);
+    assert(!parsed.success);
+    assert(parsed.payload == "account-frozen");
 
     assert(!Protocol::ParseLine("READY 2", parsed));
     assert(!Protocol::ParseLine("TRIGGER -1", parsed));

@@ -1,7 +1,9 @@
 ﻿#include "ServerController.h"
 
 #include <algorithm>
+#include <QCoreApplication>
 #include <QDateTime>
+#include <QDir>
 #include <QList>
 #include <QSet>
 #include <QStringList>
@@ -124,6 +126,28 @@ ServerController::ServerController(QObject* parent)
     connect(&connectionManager_, &ServerConnectionManager::accountLoginResponseReceived, this,
         [this](quint64 clientId, int, int status, const QString& text) {
             emit connectionLogAppended(QStringLiteral("客户端 %1 上号状态：%2").arg(clientId).arg(text));
+            if (status == -2)
+            {
+                QString accountLine;
+                if (markAccountBanned(clientId, accountLine))
+                {
+                    if (appendBannedAccount(accountLine))
+                    {
+                        emit statusChanged(QStringLiteral("客户端 %1 检测到封号，已写入封号.txt，准备切换下一账号").arg(clientId), ServerStatusTone::Error);
+                    }
+                    else
+                    {
+                        emit statusChanged(QStringLiteral("客户端 %1 检测到封号，但封号.txt 写入失败").arg(clientId), ServerStatusTone::Error);
+                    }
+                }
+                else
+                {
+                    emit statusChanged(QStringLiteral("客户端 %1 检测到封号，但未找到对应账号记录").arg(clientId), ServerStatusTone::Error);
+                }
+                connectionManager_.forceResetClientAction(clientId);
+                startAccountLogin(clientId);
+                return;
+            }
             if (status != 1) connectionManager_.forceResetClientAction(clientId);
         });
     connect(&connectionManager_, &ServerConnectionManager::amountReportReceived, this,
@@ -1531,7 +1555,7 @@ void ServerController::importAccounts(const QString& filePath)
         const QString line = stream.readLine().trimmed();
         const int separator = line.indexOf(QStringLiteral("----"));
         if (separator <= 0 || separator + 4 >= line.size()) continue;
-        AccountCredential item{line.left(separator).trimmed(), line.mid(separator + 4).trimmed(), false, 0};
+        AccountCredential item{line.left(separator).trimmed(), line.mid(separator + 4).trimmed(), false, false, 0};
         const QString key = item.username + QChar(0x1f) + item.password;
         if (!item.username.isEmpty() && !item.password.isEmpty() && !seenCredentials.contains(key))
         {
@@ -1549,7 +1573,7 @@ void ServerController::startAccountLogin(quint64 clientId)
     AccountCredential* selected = nullptr;
     for (AccountCredential& account : accounts_)
     {
-        if (account.assigned && account.clientId == clientId)
+        if (account.assigned && !account.banned && account.clientId == clientId)
         {
             selected = &account;
             break;
@@ -1559,7 +1583,7 @@ void ServerController::startAccountLogin(quint64 clientId)
     {
         for (AccountCredential& account : accounts_)
         {
-            if (!account.assigned)
+            if (!account.assigned && !account.banned)
             {
                 selected = &account;
                 break;
@@ -1586,6 +1610,48 @@ void ServerController::startAccountLogin(quint64 clientId)
         emit accountQueueChanged(accounts_.size(), accounts_.size() - assigned, assigned);
     }
     emit statusChanged(QStringLiteral("已向币号客户端 %1 下发上号指令").arg(clientId), ServerStatusTone::Neutral);
+}
+
+bool ServerController::markAccountBanned(quint64 clientId, QString& accountLine)
+{
+    for (AccountCredential& account : accounts_)
+    {
+        if (!account.assigned || account.banned || account.clientId != clientId)
+        {
+            continue;
+        }
+        account.banned = true;
+        accountLine = account.username + QStringLiteral("----") + account.password;
+        return true;
+    }
+    return false;
+}
+
+bool ServerController::appendBannedAccount(const QString& accountLine)
+{
+    const QString filePath = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("封号.txt"));
+    QFile existing(filePath);
+    if (existing.exists() && existing.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        while (!existing.atEnd())
+        {
+            if (QString::fromUtf8(existing.readLine()).trimmed() == accountLine)
+            {
+                existing.close();
+                return true;
+            }
+        }
+        existing.close();
+    }
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+    {
+        return false;
+    }
+    file.write(accountLine.toUtf8());
+    file.write("\n");
+    return file.flush();
 }
 
 void ServerController::setAutoExecuteThresholds(int bossCount, int coinCount)

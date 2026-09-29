@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QTimer>
 #include <QString>
 #include <QVector>
@@ -117,6 +118,8 @@ private:
     bool requestSelfThunder(quint64 clientId, AutoStartClientState& state);
     bool requestLoadout(quint64 clientId, AutoStartClientState& state);
     void executeSelfThunderPlaceholder(quint64 clientId);
+    bool markAccountBanned(quint64 clientId, QString& accountLine);
+    bool appendBannedAccount(const QString& accountLine);
 
     ServerConnectionManager connectionManager_;
     QTimer autoStartTimer_;
@@ -165,7 +168,14 @@ private:
     int highPriceStopThreshold_ = 3;
     bool autoExecuteEnabled_ = false;
     bool autoExecuteTriggered_ = false;
-    struct AccountCredential { QString username; QString password; bool assigned = false; quint64 clientId = 0; };
+    struct AccountCredential
+    {
+        QString username;
+        QString password;
+        bool assigned = false;
+        bool banned = false;
+        quint64 clientId = 0;
+    };
     QVector<AccountCredential> accounts_;
     int nextAccountLoginRequestId_ = 20000;
     bool preparingExecution_ = false;

@@ -142,6 +142,13 @@ ClientController::ClientController(QObject* parent)
     connect(&accountLoginAutomation_, &AccountLoginAutomation::progress, this, [this](const QString& text) {
         setStatus(text);
     });
+    connect(&accountBanMonitor_, &AccountBanMonitor::bannedDetected, this, &ClientController::handleAccountBanned);
+    connect(&accountBanMonitor_, &AccountBanMonitor::monitorStopped, this, [this]() {
+        if (!accountBanMonitor_.isRunning())
+        {
+            accountBanMonitoringEnabled_ = false;
+        }
+    });
     connect(&accountLoginAutomation_, &AccountLoginAutomation::finished, this, [this](bool success, const QString& text) {
         bool finalSuccess = success;
         QString resultText = text;
@@ -166,6 +173,16 @@ ClientController::ClientController(QObject* parent)
                 finalSuccess = false;
                 resultText = QStringLiteral("游戏窗口已出现，但自动绑定失败");
             }
+            else
+            {
+                accountBanHandled_ = false;
+                accountBanMonitoringEnabled_ = true;
+                accountBanMonitor_.start(boundHwnd_, config_.loadUmiOcrPath(), config_.loadUmiOcrPort());
+            }
+        }
+        if (!finalSuccess)
+        {
+            stopAccountBanMonitor();
         }
         connection_.sendAccountLoginResponse(accountLoginRequestId_, finalSuccess ? QStringLiteral("OK") : QStringLiteral("ERROR"), resultText);
         accountLoginRunning_ = false;
@@ -314,8 +331,12 @@ void ClientController::rebindGameWindow()
 void ClientController::forceStopCurrentAction()
 {
     automationCancelRequested_ = true;
-    if (accountLoginRunning_)
+    if (accountLoginRunning_ || accountBanMonitoringEnabled_ || accountBanMonitor_.isRunning())
+    {
+        accountBanMonitoringEnabled_ = false;
+        accountBanMonitor_.stop();
         accountLoginAutomation_.cancelAndStopProcesses();
+    }
     else
         accountLoginAutomation_.cancel();
     countdownTimer_.stop();
@@ -2796,6 +2817,11 @@ void ClientController::handleAccountLoginRequest(int requestId, const QString& u
         connection_.sendAccountLoginResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("仅币号客户端支持上号"));
         return;
     }
+    if (accountBanMonitoringEnabled_ || accountBanMonitor_.isRunning())
+    {
+        connection_.sendAccountLoginResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("已有账号正在进行封禁监测"));
+        return;
+    }
     if (!beginAutomationAction(QStringLiteral("上号")))
     {
         connection_.sendAccountLoginResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("已有自动化流程正在执行"));
@@ -2803,8 +2829,41 @@ void ClientController::handleAccountLoginRequest(int requestId, const QString& u
     }
     accountLoginRequestId_ = requestId;
     accountLoginRunning_ = true;
+    accountBanHandled_ = false;
     connection_.sendAccountLoginResponse(requestId, QStringLiteral("STARTED"), QStringLiteral("已开始上号"));
     accountLoginAutomation_.start(username, password);
+}
+
+void ClientController::handleAccountBanned(const QString& recognizedText)
+{
+    Q_UNUSED(recognizedText);
+    if (!accountBanMonitoringEnabled_ || accountBanHandled_)
+    {
+        return;
+    }
+
+    accountBanHandled_ = true;
+    accountBanMonitoringEnabled_ = false;
+    accountBanMonitor_.stop();
+    automationCancelRequested_.store(true);
+    accountLoginAutomation_.cancelAndStopProcesses();
+    countdownTimer_.stop();
+    scheduledTriggerTimer_.stop();
+    countdown_ = 0;
+    if (bulletOcrRunning_)
+    {
+        finishBulletOcrLoop(false, QStringLiteral("检测到账号封号/冻结"));
+    }
+    accountLoginRunning_ = false;
+    automationActionRunning_ = false;
+    connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("BANNED"), QStringLiteral("检测到账号封号/冻结"));
+    setStatus(QStringLiteral("检测到账号封号/冻结，已结束相关进程，等待服务端切换账号"));
+}
+
+void ClientController::stopAccountBanMonitor()
+{
+    accountBanMonitoringEnabled_ = false;
+    accountBanMonitor_.stop();
 }
 
 bool ClientController::executeMailSequence(QString& errorText)
