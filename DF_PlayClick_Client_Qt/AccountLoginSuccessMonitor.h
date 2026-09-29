@@ -1,0 +1,29 @@
+#pragma once
+
+#include <windows.h>
+#include <QObject>
+#include <QString>
+#include <atomic>
+#include <thread>
+
+class AccountLoginSuccessMonitor : public QObject
+{
+    Q_OBJECT
+public:
+    explicit AccountLoginSuccessMonitor(QObject* parent = nullptr);
+    ~AccountLoginSuccessMonitor() override;
+    void start(HWND gameWindow, const QString& ocrExecutable, int ocrPort);
+    void stop();
+    bool isRunning() const;
+signals:
+    void loginReady();
+    void residentFound();
+    void tabFound();
+    void retrySpace();
+    void monitorStatus(const QString& text);
+private:
+    void run(HWND gameWindow, QString ocrExecutable, int ocrPort);
+    std::atomic_bool stopRequested_{false};
+    std::atomic_bool running_{false};
+    std::thread worker_;
+};

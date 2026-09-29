@@ -18,6 +18,7 @@ SOURCES += \
     ClientConnection.cpp \
     AccountLoginAutomation.cpp \
     AccountBanMonitor.cpp \
+    AccountLoginSuccessMonitor.cpp \
     Win32WindowBinder.cpp \
     Win32InputDispatcher.cpp \
     HotkeyManager.cpp \
@@ -35,6 +36,7 @@ HEADERS += \
     ClientConnection.h \
     AccountLoginAutomation.h \
     AccountBanMonitor.h \
+    AccountLoginSuccessMonitor.h \
     Win32WindowBinder.h \
     Win32InputDispatcher.h \
     HotkeyManager.h \

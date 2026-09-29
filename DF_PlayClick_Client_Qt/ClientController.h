@@ -18,6 +18,7 @@
 #include "Win32WindowBinder.h"
 #include "AccountLoginAutomation.h"
 #include "AccountBanMonitor.h"
+#include "AccountLoginSuccessMonitor.h"
 
 struct ClickTask
 {
@@ -128,6 +129,7 @@ private:
     void handleMailRequest(int requestId);
     void handleAccountLoginRequest(int requestId, const QString& username, const QString& password);
     void handleAccountBanned(const QString& recognizedText);
+    void handleLoginReady();
     void stopAccountBanMonitor();
     bool executeSelfThunderSequence(QString& errorText);
     bool executeLoadoutSequence(const QString& loadoutType, QString& errorText);
@@ -152,6 +154,7 @@ private:
     ClientConnection connection_;
     AccountLoginAutomation accountLoginAutomation_;
     AccountBanMonitor accountBanMonitor_;
+    AccountLoginSuccessMonitor accountLoginSuccessMonitor_;
     Win32WindowBinder binder_;
     Win32InputDispatcher input_;
     HotkeyManager hotkey_;
@@ -189,6 +192,7 @@ private:
     bool accountLoginRunning_ = false;
     bool accountBanMonitoringEnabled_ = false;
     bool accountBanHandled_ = false;
+    bool accountLoginReadyReported_ = false;
     bool hasLastListingRequest_ = false;
     qint64 serverClockOffsetMs_ = 0;
     bool serverTimeSynchronized_ = false;

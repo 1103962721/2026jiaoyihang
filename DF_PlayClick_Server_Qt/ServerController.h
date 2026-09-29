@@ -120,6 +120,7 @@ private:
     void executeSelfThunderPlaceholder(quint64 clientId);
     bool markAccountBanned(quint64 clientId, QString& accountLine);
     bool appendBannedAccount(const QString& accountLine);
+    void handleAccountLoginReady(quint64 clientId);
 
     ServerConnectionManager connectionManager_;
     QTimer autoStartTimer_;
@@ -130,6 +131,9 @@ private:
     QHash<int, quint64> pendingOcrRequests_;
     QHash<int, quint64> pendingSelfThunderRequests_;
     QHash<int, quint64> pendingLoadoutRequests_;
+    struct LoginReadyState { QString listingText; QString listingPrice; int purchaseCount = 1; bool loadoutMode = false; };
+    QHash<int, LoginReadyState> pendingLoginReadyLoadouts_;
+    QHash<quint64, LoginReadyState> loginReadyStates_;
     struct SemiAutoState
     {
         QString listingText;
@@ -143,6 +147,7 @@ private:
     qint64 autoStartCycleStartedAtMs_ = 0;
     int nextOcrRequestId_ = 1;
     int nextListingRequestId_ = 1;
+    int nextLoginLoadoutRequestId_ = 30000;
     int nextMailRequestId_ = 1;
     int nextSaveLoadoutRequestId_ = 1;
     int nextTimeSyncRequestId_ = 1000;

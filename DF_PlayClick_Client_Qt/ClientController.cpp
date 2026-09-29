@@ -152,6 +152,19 @@ ClientController::ClientController(QObject* parent)
             accountBanMonitoringEnabled_ = false;
         }
     });
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::loginReady, this, &ClientController::handleLoginReady);
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::residentFound, this, [this]() {
+        if (!boundHwnd_) return; QString error;
+        POINT p{386, 1192}; input_.clickReferencePoint(boundHwnd_, p, 2560, 1440, 0, error);
+        QTimer::singleShot(1500, this, []() {});
+    });
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::tabFound, this, [this]() {
+        QString error; input_.pressKey(VK_TAB, error);
+    });
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::retrySpace, this, [this]() {
+        QString error; input_.holdKey(VK_SPACE, 3000, error);
+    });
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::monitorStatus, this, [this](const QString& text) { setStatus(text); });
     connect(&accountLoginAutomation_, &AccountLoginAutomation::finished, this, [this](bool success, const QString& text) {
         bool finalSuccess = success;
         QString resultText = text;
@@ -181,6 +194,8 @@ ClientController::ClientController(QObject* parent)
                 accountBanHandled_ = false;
                 accountBanMonitoringEnabled_ = true;
                 accountBanMonitor_.start(boundHwnd_, config_.loadUmiOcrPath(), config_.loadUmiOcrPort());
+                accountLoginReadyReported_ = false;
+                accountLoginSuccessMonitor_.start(boundHwnd_, config_.loadUmiOcrPath(), config_.loadUmiOcrPort());
             }
         }
         if (!finalSuccess)
@@ -2848,6 +2863,7 @@ void ClientController::handleAccountBanned(const QString& recognizedText)
     accountBanHandled_ = true;
     accountBanMonitoringEnabled_ = false;
     accountBanMonitor_.stop();
+    accountLoginSuccessMonitor_.stop();
     automationCancelRequested_.store(true);
     accountLoginAutomation_.cancelAndStopProcesses();
     countdownTimer_.stop();
@@ -2863,10 +2879,23 @@ void ClientController::handleAccountBanned(const QString& recognizedText)
     setStatus(QStringLiteral("检测到账号封号/冻结，已结束相关进程，等待服务端切换账号"));
 }
 
+void ClientController::handleLoginReady()
+{
+    if (accountLoginReadyReported_ || !accountLoginRunning_ || !boundHwnd_) return;
+    accountLoginReadyReported_ = true;
+    accountLoginSuccessMonitor_.stop();
+    rebindGameWindow();
+    QTimer::singleShot(500, this, [this]() {
+        connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("READY"), QStringLiteral("行前备战，登录成功"));
+        setStatus(QStringLiteral("已识别行前备战，登录成功"));
+    });
+}
+
 void ClientController::stopAccountBanMonitor()
 {
     accountBanMonitoringEnabled_ = false;
     accountBanMonitor_.stop();
+    accountLoginSuccessMonitor_.stop();
 }
 
 bool ClientController::executeMailSequence(QString& errorText)

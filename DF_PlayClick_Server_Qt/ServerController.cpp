@@ -148,6 +148,7 @@ ServerController::ServerController(QObject* parent)
                 startAccountLogin(clientId);
                 return;
             }
+            if (status == 3) { handleAccountLoginReady(clientId); return; }
             if (status != 1) connectionManager_.forceResetClientAction(clientId);
         });
     connect(&connectionManager_, &ServerConnectionManager::amountReportReceived, this,
@@ -797,6 +798,20 @@ void ServerController::handleLoadoutResponse(quint64 clientId, int requestId, bo
         return;
     }
     pendingLoadoutRequests_.remove(requestId);
+
+    if (loginReadyStates_.contains(clientId))
+    {
+        const LoginReadyState state = loginReadyStates_.take(clientId);
+        if (success && !state.listingText.isEmpty() && !state.listingPrice.isEmpty())
+        {
+            QString errorText;
+            connectionManager_.requestListing(clientId, nextListingRequestId_++, state.listingText,
+                state.listingPrice, false, state.purchaseCount, state.loadoutMode, errorText);
+        }
+        emit connectionLogAppended(QStringLiteral("客户端 %1 登录成功后的配装%2，已执行一次上架链路")
+            .arg(clientId).arg(success ? QStringLiteral("完成") : QStringLiteral("失败")));
+        return;
+    }
 
     auto stateIterator = autoStartClientStates_.find(clientId);
     if (stateIterator != autoStartClientStates_.end() && stateIterator->pendingLoadoutRequestId == requestId)
@@ -1610,6 +1625,26 @@ void ServerController::startAccountLogin(quint64 clientId)
         emit accountQueueChanged(accounts_.size(), accounts_.size() - assigned, assigned);
     }
     emit statusChanged(QStringLiteral("已向币号客户端 %1 下发上号指令").arg(clientId), ServerStatusTone::Neutral);
+}
+
+void ServerController::handleAccountLoginReady(quint64 clientId)
+{
+    connectionManager_.forceResetClientAction(clientId);
+    emit statusChanged(QStringLiteral("客户端 %1 登录成功，500ms 后开始配装").arg(clientId), ServerStatusTone::Success);
+    QTimer::singleShot(500, this, [this, clientId]() {
+        QString error;
+        if (!connectionManager_.requestRebindWindow(clientId, error)) {
+            emit statusChanged(QStringLiteral("客户端 %1 重绑窗口失败：%2").arg(clientId).arg(error), ServerStatusTone::Error);
+            return;
+        }
+        QTimer::singleShot(500, this, [this, clientId]() {
+            QString error;
+            const int requestId = nextLoginLoadoutRequestId_++;
+            if (!connectionManager_.requestLoadout(clientId, requestId, QStringLiteral("COIN"), error)) return;
+            pendingLoadoutRequests_.insert(requestId, clientId);
+            loginReadyStates_.insert(clientId, LoginReadyState{});
+        });
+    });
 }
 
 bool ServerController::markAccountBanned(quint64 clientId, QString& accountLine)
