@@ -49,6 +49,24 @@ QString NormalizeAmountNumericToken(QString value)
     value.remove(QRegularExpression(QStringLiteral("[^0-9]")));
     return value;
 }
+
+QString NormalizeBanOcrText(QString text)
+{
+    text.remove(QRegularExpression(QStringLiteral("[\\s\\p{P}]")));
+    return text;
+}
+
+bool IsBanOcrText(const QString& recognizedText)
+{
+    const QString text = NormalizeBanOcrText(recognizedText);
+    const bool abnormalEnvironment = text.contains(QStringLiteral("游戏环境及行为数据异常"), Qt::CaseInsensitive)
+        || (text.contains(QStringLiteral("游戏环境"), Qt::CaseInsensitive)
+            && text.contains(QStringLiteral("行为数据异常"), Qt::CaseInsensitive));
+    const bool accountFrozen = text.contains(QStringLiteral("账号进行冻结"), Qt::CaseInsensitive)
+        || text.contains(QStringLiteral("账号冻结"), Qt::CaseInsensitive)
+        || text.contains(QStringLiteral("冻结"), Qt::CaseInsensitive);
+    return abnormalEnvironment && accountFrozen;
+}
 }
 
 ClientController::ClientController(QObject* parent)
@@ -154,6 +172,7 @@ ClientController::ClientController(QObject* parent)
         }
     });
     connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::loginReady, this, &ClientController::handleLoginReady);
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::bannedDetected, this, &ClientController::handleAccountBanned);
     connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::ocrRequested, this, &ClientController::runLoginSuccessOcr, Qt::QueuedConnection);
     connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::residentFound, this, [this]() {
         if (!boundHwnd_) return; QString error;
@@ -195,7 +214,6 @@ ClientController::ClientController(QObject* parent)
             {
                 accountBanHandled_ = false;
                 accountBanMonitoringEnabled_ = true;
-                accountBanMonitor_.start(boundHwnd_, config_.loadUmiOcrPath(), config_.loadUmiOcrPort());
                 accountLoginReadyReported_ = false;
                 accountLoginSuccessMonitor_.start(boundHwnd_, config_.loadUmiOcrPath(), config_.loadUmiOcrPort());
             }
@@ -2910,7 +2928,8 @@ void ClientController::runLoginSuccessOcr(int stage)
     OcrRegionConfig region;
     if (stage == 0) { region = {true, 262, 144, 520, 60, 2560, 1440}; }
     else if (stage == 1) { region = {true, 994, 1145, 500, 255, 2560, 1440}; }
-    else { region = {true, 1946, 1262, 500, 56, 2560, 1440}; }
+    else if (stage == 2) { region = {true, 1946, 1262, 500, 56, 2560, 1440}; }
+    else { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
     QString error;
     const QString imagePath = captureOcrRegion(region, QStringLiteral("login_success_%1").arg(stage), error);
     if (imagePath.isEmpty()) { loginOcrRunning_ = false; return; }
@@ -2922,20 +2941,40 @@ void ClientController::runLoginSuccessOcr(int stage)
         AccountBanMonitor::loginOcrInFlight = true;
         UmiOcrRunner runner;
         QString error; QRect bounds;
-        const bool found = runner.findTextBounds(imagePath, executable, port, keyword, bounds, error);
+        QString recognizedText;
+        const bool found = stage == 3
+            ? !(recognizedText = runner.recognizeImage(imagePath, executable, port, error)).trimmed().isEmpty()
+            : runner.findTextBounds(imagePath, executable, port, keyword, bounds, error);
         QFile::remove(imagePath);
         AccountBanMonitor::loginOcrInFlight = false;
+        if (stage == 3) {
+            const QString normalized = recognizedText;
+            if (IsBanOcrText(normalized)) {
+                QMetaObject::invokeMethod(controller, [controller, normalized]() {
+                    if (controller) emit controller->accountLoginSuccessMonitor_.bannedDetected(normalized);
+                }, Qt::QueuedConnection);
+            }
+        }
         if (!controller) return;
-        QMetaObject::invokeMethod(controller, [controller, stage, found]() {
-            if (controller) controller->finishLoginSuccessOcr(stage, found);
+        QMetaObject::invokeMethod(controller, [controller, stage, found, recognizedText]() {
+            if (controller) controller->finishLoginSuccessOcr(stage, found, recognizedText);
         }, Qt::QueuedConnection);
     }).detach();
 }
 
-void ClientController::finishLoginSuccessOcr(int stage, bool found)
+void ClientController::finishLoginSuccessOcr(int stage, bool found, const QString& recognizedText)
 {
     loginOcrRunning_ = false;
     if (!accountLoginRunning_ || !boundHwnd_) return;
+    if (stage == 3)
+    {
+        if (found && !recognizedText.trimmed().isEmpty())
+        {
+            // 封禁 OCR 未命中目标文案时，返回常驻阶段继续轮换。
+            accountLoginSuccessMonitor_.setStage(0);
+        }
+        return;
+    }
     if (!found)
     {
         // 进入游戏或行前备战未出现时，回到常驻检测，避免卡在中间阶段。

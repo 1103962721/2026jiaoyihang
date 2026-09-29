@@ -19,6 +19,7 @@ public:
 signals:
     void ocrRequested(int stage);
     void loginReady();
+    void bannedDetected(const QString& recognizedText);
     void residentFound();
     void tabFound();
     void retrySpace();

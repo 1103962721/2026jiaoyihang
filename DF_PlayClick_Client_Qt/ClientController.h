@@ -132,7 +132,7 @@ private:
     void handleAccountBanned(const QString& recognizedText);
     void handleLoginReady();
     void runLoginSuccessOcr(int stage);
-    void finishLoginSuccessOcr(int stage, bool found);
+    void finishLoginSuccessOcr(int stage, bool found, const QString& recognizedText = {});
     void stopAccountBanMonitor();
     bool executeSelfThunderSequence(QString& errorText);
     bool executeLoadoutSequence(const QString& loadoutType, QString& errorText);
