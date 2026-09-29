@@ -3023,14 +3023,14 @@ void ClientController::runLoginSuccessOcr(int stage)
         || !boundHwnd_ || !binder_.isValid(boundHwnd_)) return;
     if (loginOcrRunning_.exchange(true)) return;
     OcrRegionConfig region;
-    // 常驻与封禁都读取完整客户区，避免固定小区域随窗口布局或缩放变化而偏移。
+    // 常驻、Tab 和封禁都读取完整客户区，避免固定小区域随窗口布局或缩放变化而偏移。
     if (stage == 0) { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
-    else if (stage == 1) { region = {true, 994, 1145, 500, 255, 2560, 1440}; }
+    else if (stage == 1) { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
     else if (stage == 2) { region = {true, 1946, 1262, 500, 56, 2560, 1440}; }
     else { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
     const QString executable = config_.loadUmiOcrPath();
     const int port = config_.loadUmiOcrPort();
-    const QString keyword = stage == 0 ? QStringLiteral("常驻") : stage == 1 ? QStringLiteral("TAB开始游戏") : QStringLiteral("行前备战");
+    const QString keyword = stage == 0 ? QStringLiteral("常驻") : stage == 1 ? QStringLiteral("Tab") : QStringLiteral("行前备战");
     const HWND gameWindow = boundHwnd_;
     QPointer<ClientController> controller(this);
     std::thread([controller, gameWindow, region, stage, executable, port, keyword]() {
@@ -3097,7 +3097,8 @@ void ClientController::finishLoginSuccessOcr(int stage, bool found, const QStrin
     if (!found)
     {
         // 进入游戏或行前备战未出现时，回到常驻检测，避免卡在中间阶段。
-        if (stage != 0)
+        // Tab 阶段由监测线程连续保留 10 秒，不能因单轮 OCR 未命中立即回退。
+        if (stage != 0 && stage != 1)
         {
             accountLoginSuccessMonitor_.setStage(0);
         }

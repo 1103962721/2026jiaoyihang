@@ -42,15 +42,24 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
     Q_UNUSED(exe); Q_UNUSED(port);
     emit monitorStatus(QStringLiteral("登录成功 OCR 已开始监测"));
     qint64 lastSpace = 0;
+    qint64 tabStageStartedAt = 0;
     int phaseStage = stage_.load();
     while (!stopRequested_ && gameProcessAlive(hwnd)) {
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const qint64 cycleStartedAt = QDateTime::currentMSecsSinceEpoch();
         const int requestedStage = stage_.load();
         if (requestedStage >= 0 && requestedStage <= 3) {
+            if (requestedStage != phaseStage && requestedStage == 1) {
+                tabStageStartedAt = cycleStartedAt;
+            } else if (requestedStage != 1) {
+                tabStageStartedAt = 0;
+            }
             phaseStage = requestedStage;
         }
-        if (phaseStage == 0 && now - lastSpace >= 5000) {
-            lastSpace = now;
+        if (phaseStage == 1 && tabStageStartedAt == 0) {
+            tabStageStartedAt = cycleStartedAt;
+        }
+        if (phaseStage == 0 && cycleStartedAt - lastSpace >= 5000) {
+            lastSpace = cycleStartedAt;
             emit retrySpace();
         }
         // 每个阶段只发起一次 OCR，保持 2 秒后再切换，避免常驻和封禁 OCR 并发。
@@ -60,9 +69,25 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
         }
         if (stopRequested_ || !gameProcessAlive(hwnd)) break;
 
+        const qint64 cycleFinishedAt = QDateTime::currentMSecsSinceEpoch();
         const int changedStage = stage_.load();
         if (changedStage >= 0 && changedStage <= 3 && changedStage != phaseStage) {
             phaseStage = changedStage;
+            if (phaseStage == 1) {
+                tabStageStartedAt = cycleFinishedAt;
+            } else {
+                tabStageStartedAt = 0;
+            }
+            continue;
+        }
+        if (phaseStage == 1) {
+            if (cycleFinishedAt - tabStageStartedAt < 10000) {
+                continue;
+            }
+            // Tab 阶段连续识别 10 秒仍未命中，才回到常驻阶段。
+            phaseStage = 0;
+            tabStageStartedAt = 0;
+            stage_.store(phaseStage);
             continue;
         }
         if (phaseStage != 3)
