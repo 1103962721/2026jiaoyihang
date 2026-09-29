@@ -2,6 +2,7 @@
 
 #include <cstring>
 #include <vector>
+#include <QThread>
 
 namespace
 {
@@ -369,6 +370,26 @@ bool Win32InputDispatcher::pressKey(WORD virtualKey, QString& errorText) const
     if (SendInput(2, inputs, sizeof(INPUT)) != 2)
     {
         errorText = QStringLiteral("发送键盘输入失败");
+        return false;
+    }
+    return true;
+}
+
+bool Win32InputDispatcher::holdKey(WORD virtualKey, int durationMs, QString& errorText) const
+{
+    INPUT input{};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = virtualKey;
+    if (SendInput(1, &input, sizeof(INPUT)) != 1)
+    {
+        errorText = QStringLiteral("按键按下失败：%1").arg(GetLastError());
+        return false;
+    }
+    QThread::msleep(qMax(0, durationMs));
+    input.ki.dwFlags = KEYEVENTF_KEYUP;
+    if (SendInput(1, &input, sizeof(INPUT)) != 1)
+    {
+        errorText = QStringLiteral("按键释放失败：%1").arg(GetLastError());
         return false;
     }
     return true;

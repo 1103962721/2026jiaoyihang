@@ -48,6 +48,7 @@ int main()
     assert(point.y == 22);
 
     assert(IsDeltaForceGameBodyProcessName(L"DeltaForceClient-Win64-Shipping.exe"));
+    assert(IsDeltaForceGameBodyProcessName(L"eltaForceClient-Win64-Shipping.exe"));
     assert(IsDeltaForceGameBodyProcessName(L"DeltaForceClient.exe"));
     assert(!IsDeltaForceGameBodyProcessName(L"UnrealCEFSubProcess.exe"));
 

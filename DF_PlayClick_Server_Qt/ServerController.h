@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QTimer>
 #include <QString>
 #include <QVector>
@@ -53,6 +54,11 @@ public slots:
         const QString& egg, const QString& bulletName, int perClick, int bulletTotal);
     void requestMail(quint64 clientId);
     void requestMailAll();
+    void importAccounts(const QString& filePath);
+    void setAccountLoginConfig(quint64 clientId, const QString& weapon, const QString& backpack,
+        const QString& egg, const QString& bulletName, int perClick, int bulletTotal,
+        const QString& listingText, const QString& listingPrice, int purchaseCount);
+    void startAccountLogin(quint64 clientId);
     void setAutoExecuteThresholds(int bossCount, int coinCount);
     void setHighPriceStopThreshold(int threshold);
     void setAutoExecuteEnabled(bool enabled);
@@ -70,6 +76,7 @@ signals:
     void messageRequested(const QString& title, const QString& text, bool error);
     void incompleteTriggerRequested();
     void autoStartEnabledChanged(bool enabled);
+    void accountQueueChanged(int total, int remaining, int assigned);
 
 private:
     int parsePort(const QString& portText) const;
@@ -111,6 +118,10 @@ private:
     bool requestSelfThunder(quint64 clientId, AutoStartClientState& state);
     bool requestLoadout(quint64 clientId, AutoStartClientState& state);
     void executeSelfThunderPlaceholder(quint64 clientId);
+    bool markAccountBanned(quint64 clientId, QString& accountLine);
+    bool appendBannedAccount(const QString& accountLine);
+    void handleAccountLoginReady(quint64 clientId);
+    void clearPendingAccountLoginRequests(quint64 clientId);
 
     ServerConnectionManager connectionManager_;
     QTimer autoStartTimer_;
@@ -121,9 +132,26 @@ private:
     QHash<int, quint64> pendingOcrRequests_;
     QHash<int, quint64> pendingSelfThunderRequests_;
     QHash<int, quint64> pendingLoadoutRequests_;
+    struct LoginReadyState
+    {
+        QString weapon;
+        QString backpack;
+        QString egg;
+        QString bulletName;
+        int perClick = 0;
+        int bulletTotal = 0;
+        QString listingText;
+        QString listingPrice;
+        int purchaseCount = 1;
+        bool loadoutMode = true;
+    };
+    QHash<int, LoginReadyState> pendingLoginReadyLoadouts_;
+    QHash<int, quint64> pendingLoginReadyListings_;
+    QHash<quint64, LoginReadyState> loginReadyStates_;
     qint64 autoStartCycleStartedAtMs_ = 0;
     int nextOcrRequestId_ = 1;
     int nextListingRequestId_ = 1;
+    int nextLoginLoadoutRequestId_ = 30000;
     int nextMailRequestId_ = 1;
     int nextSaveLoadoutRequestId_ = 1;
     int nextTimeSyncRequestId_ = 1000;
@@ -149,6 +177,16 @@ private:
     int highPriceStopThreshold_ = 3;
     bool autoExecuteEnabled_ = false;
     bool autoExecuteTriggered_ = false;
+    struct AccountCredential
+    {
+        QString username;
+        QString password;
+        bool assigned = false;
+        bool banned = false;
+        quint64 clientId = 0;
+    };
+    QVector<AccountCredential> accounts_;
+    int nextAccountLoginRequestId_ = 20000;
     bool preparingExecution_ = false;
     bool dispatchingPreparedExecution_ = false;
     QHash<int, quint64> pendingPrepareRequests_;

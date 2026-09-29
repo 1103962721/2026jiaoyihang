@@ -3,6 +3,7 @@
 #include <winsock2.h>
 
 #include <atomic>
+#include <mutex>
 #include <thread>
 
 #include <QObject>
@@ -37,6 +38,7 @@ public:
     bool sendMailResponse(int requestId, bool success, const QString& payload);
     bool sendAmountReport(qint64 amount);
     bool sendTimeSyncResponse(int requestId, qint64 clientReceiveMs, qint64 clientSendMs);
+    bool sendAccountLoginResponse(int requestId, const QString& status, const QString& payload);
 
 signals:
     void connectedChanged(bool connected);
@@ -61,6 +63,7 @@ signals:
         const QString& egg, const QString& bulletName, int perClick, int bulletTotal);
     void listingRequestReceived(int requestId, bool hasExchange, int purchaseCount, bool loadoutMode, const QString& listingPrice, const QString& listingText);
     void mailRequestReceived(int requestId);
+    void accountLoginRequestReceived(int requestId, const QString& username, const QString& password);
 
 private slots:
     void sendHeartbeat();
@@ -78,6 +81,7 @@ private:
     SocketUtil::WsaSession wsa_;
     SOCKET socket_ = INVALID_SOCKET;
     std::thread receiveThread_;
+    std::mutex sendMutex_;
     QTimer heartbeatTimer_;
     QTimer reconnectTimer_;
     QString serverIp_;

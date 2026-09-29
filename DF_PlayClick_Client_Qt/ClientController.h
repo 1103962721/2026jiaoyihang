@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <thread>
 #include <QObject>
 #include <QTimer>
 #include <QVector>
@@ -16,6 +17,9 @@
 #include "UmiOcrRunner.h"
 #include "Win32InputDispatcher.h"
 #include "Win32WindowBinder.h"
+#include "AccountLoginAutomation.h"
+#include "AccountBanMonitor.h"
+#include "AccountLoginSuccessMonitor.h"
 
 struct ClickTask
 {
@@ -124,6 +128,13 @@ private:
         const QString& egg, const QString& bulletName, int perClick, int bulletTotal);
     void handleListingRequest(int requestId, bool hasExchange, int purchaseCount, bool loadoutMode, const QString& listingPrice, const QString& listingText);
     void handleMailRequest(int requestId);
+    void handleAccountLoginRequest(int requestId, const QString& username, const QString& password);
+    void handleAccountBanned(const QString& recognizedText);
+    void handleAccountStartupFailed(const QString& recognizedText);
+    void handleLoginReady();
+    void runLoginSuccessOcr(int stage);
+    void finishLoginSuccessOcr(int stage, bool found, const QString& recognizedText = {});
+    void stopAccountBanMonitor();
     bool executeSelfThunderSequence(QString& errorText);
     bool executeLoadoutSequence(const QString& loadoutType, QString& errorText);
     bool executeSaveLoadoutSequence(const QString& weapon, const QString& backpack, const QString& egg,
@@ -145,6 +156,9 @@ private:
 
     ClientConfig config_;
     ClientConnection connection_;
+    AccountLoginAutomation accountLoginAutomation_;
+    AccountBanMonitor accountBanMonitor_;
+    AccountLoginSuccessMonitor accountLoginSuccessMonitor_;
     Win32WindowBinder binder_;
     Win32InputDispatcher input_;
     HotkeyManager hotkey_;
@@ -178,6 +192,13 @@ private:
     int lastListingPurchaseCount_ = 0;
     bool lastListingLoadoutMode_ = false;
     int lastListingRequestId_ = 0;
+    int accountLoginRequestId_ = 0;
+    bool accountLoginRunning_ = false;
+    std::atomic_bool accountLoginStopExcluded_ = false;
+    bool accountBanMonitoringEnabled_ = false;
+    bool accountBanHandled_ = false;
+    bool accountLoginReadyReported_ = false;
+    std::atomic_bool loginOcrRunning_{false};
     bool hasLastListingRequest_ = false;
     qint64 serverClockOffsetMs_ = 0;
     bool serverTimeSynchronized_ = false;

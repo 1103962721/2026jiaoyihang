@@ -33,5 +33,6 @@ public:
     bool pasteText(HWND hwnd, const QString& text, QString& errorText) const;
     bool moveReferencePointBezier(HWND hwnd, POINT from, POINT to, int referenceWidth, int referenceHeight, int durationMs, QString& errorText) const;
     bool pressKey(WORD virtualKey, QString& errorText) const;
+    bool holdKey(WORD virtualKey, int durationMs, QString& errorText) const;
     QString readClipboardText(QString& errorText) const;
 };

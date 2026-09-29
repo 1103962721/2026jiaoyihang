@@ -14,13 +14,16 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QPixmap>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QRandomGenerator>
 #include <QScreen>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QThread>
 
 #include <cmath>
+#include <thread>
 
 #include "../Shared/ClientBindingRules.h"
 #include "../Shared/ClientCountdownRules.h"
@@ -48,6 +51,92 @@ QString NormalizeAmountNumericToken(QString value)
     value.remove(QRegularExpression(QStringLiteral("[^0-9]")));
     return value;
 }
+
+QString NormalizeLoginOcrText(QString value)
+{
+    value.remove(QRegularExpression(QStringLiteral("[\\s\\p{P}]")));
+    return value.toCaseFolded();
+}
+
+QString CaptureDesktopOcrRegion(HWND hwnd, const OcrRegionConfig& region, const QString& filePrefix, QString& errorText)
+{
+    errorText.clear();
+    if (!hwnd || !IsWindow(hwnd))
+    {
+        errorText = QStringLiteral("游戏窗口无效");
+        return {};
+    }
+    RECT clientRect{};
+    if (!GetClientRect(hwnd, &clientRect))
+    {
+        errorText = QStringLiteral("读取游戏客户区失败");
+        return {};
+    }
+    const QSize clientSize(clientRect.right - clientRect.left, clientRect.bottom - clientRect.top);
+    const QRect scaledRegion = ScaleReferenceRect(
+        QRect(region.x, region.y, region.width, region.height),
+        QSize(region.referenceWidth, region.referenceHeight), clientSize);
+    if (!IsRectInsideClient(scaledRegion, clientSize))
+    {
+        errorText = QStringLiteral("OCR 截图区域超出游戏客户区");
+        return {};
+    }
+    POINT origin{0, 0};
+    if (!ClientToScreen(hwnd, &origin))
+    {
+        errorText = QStringLiteral("客户区坐标转屏幕坐标失败");
+        return {};
+    }
+    HDC screen = GetDC(nullptr);
+    HDC memory = screen ? CreateCompatibleDC(screen) : nullptr;
+    HBITMAP bitmap = (screen && memory)
+        ? CreateCompatibleBitmap(screen, scaledRegion.width(), scaledRegion.height()) : nullptr;
+    if (!screen || !memory || !bitmap)
+    {
+        if (bitmap) DeleteObject(bitmap);
+        if (memory) DeleteDC(memory);
+        if (screen) ReleaseDC(nullptr, screen);
+        errorText = QStringLiteral("创建桌面截图失败");
+        return {};
+    }
+    HGDIOBJ previous = SelectObject(memory, bitmap);
+    const BOOL copied = BitBlt(memory, 0, 0, scaledRegion.width(), scaledRegion.height(), screen,
+        origin.x + scaledRegion.x(), origin.y + scaledRegion.y(), SRCCOPY | CAPTUREBLT);
+    QImage image;
+    if (copied)
+    {
+        image = QImage(scaledRegion.width(), scaledRegion.height(), QImage::Format_RGB32);
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = scaledRegion.width();
+        info.bmiHeader.biHeight = -scaledRegion.height();
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        if (GetDIBits(memory, bitmap, 0, static_cast<UINT>(scaledRegion.height()), image.bits(), &info, DIB_RGB_COLORS) == 0)
+        {
+            image = {};
+        }
+    }
+    SelectObject(memory, previous);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+    if (image.isNull())
+    {
+        errorText = QStringLiteral("桌面截图失败");
+        return {};
+    }
+    const QString imagePath = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
+        .filePath(QStringLiteral("df_playclick_%1_%2.png").arg(filePrefix).arg(reinterpret_cast<quintptr>(hwnd)));
+    if (!image.save(imagePath, "PNG"))
+    {
+        errorText = QStringLiteral("保存 OCR 截图失败");
+        return {};
+    }
+    return imagePath;
+}
+
 }
 
 ClientController::ClientController(QObject* parent)
@@ -131,7 +220,10 @@ ClientController::ClientController(QObject* parent)
     connect(&connection_, &ClientConnection::rebindWindowRequestReceived, this, &ClientController::rebindGameWindow);
     connect(&connection_, &ClientConnection::forceStopActionRequestReceived, this, &ClientController::forceStopCurrentAction);
     connect(&connection_, &ClientConnection::forceStopActionImmediate, this, [this]() {
-        automationCancelRequested_.store(true);
+        if (!accountLoginStopExcluded_.load())
+        {
+            automationCancelRequested_.store(true);
+        }
     }, Qt::DirectConnection);
     connect(&connection_, &ClientConnection::ocrRequestReceived, this, &ClientController::handleOcrRequest);
     connect(&connection_, &ClientConnection::selfThunderRequestReceived, this, &ClientController::handleSelfThunderRequest);
@@ -139,6 +231,103 @@ ClientController::ClientController(QObject* parent)
     connect(&connection_, &ClientConnection::saveLoadoutRequestReceived, this, &ClientController::handleSaveLoadoutRequest);
     connect(&connection_, &ClientConnection::listingRequestReceived, this, &ClientController::handleListingRequest);
     connect(&connection_, &ClientConnection::mailRequestReceived, this, &ClientController::handleMailRequest);
+    connect(&connection_, &ClientConnection::accountLoginRequestReceived, this, &ClientController::handleAccountLoginRequest);
+    connect(&accountLoginAutomation_, &AccountLoginAutomation::progress, this, [this](const QString& text) {
+        setStatus(text);
+    });
+    connect(&accountBanMonitor_, &AccountBanMonitor::bannedDetected, this, &ClientController::handleAccountBanned);
+    connect(&accountBanMonitor_, &AccountBanMonitor::startupFailedDetected, this, &ClientController::handleAccountStartupFailed);
+    connect(&accountBanMonitor_, &AccountBanMonitor::monitorStatus, this, [this](const QString& text) {
+        setStatus(text);
+    });
+    connect(&accountBanMonitor_, &AccountBanMonitor::monitorStopped, this, [this]() {
+        if (!accountBanMonitor_.isRunning())
+        {
+            accountBanMonitoringEnabled_ = false;
+        }
+    });
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::loginReady, this, &ClientController::handleLoginReady);
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::bannedDetected, this, &ClientController::handleAccountBanned);
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::ocrRequested, this, &ClientController::runLoginSuccessOcr, Qt::QueuedConnection);
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::residentFound, this, [this]() {
+        if (!boundHwnd_) return; QString error;
+        POINT p{386, 1192}; input_.clickReferencePoint(boundHwnd_, p, 2560, 1440, 0, error);
+        QTimer::singleShot(1500, this, [this]() { setStatus(QStringLiteral("常驻点击完成，继续检测登录界面")); });
+    });
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::tabFound, this, [this]() {
+        QString error; input_.pressKey(VK_TAB, error);
+    });
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::retrySpace, this, [this]() {
+        // holdKey() waits for the complete hold interval. Run it away from the
+        // Qt UI thread so the 3-second fallback cannot make the window hang.
+        QPointer<ClientController> controller(this);
+        std::thread([controller]() {
+            Win32InputDispatcher dispatcher;
+            QString error;
+            if (!dispatcher.holdKey(VK_SPACE, 3000, error) && controller)
+            {
+                QMetaObject::invokeMethod(controller, [controller, error]() {
+                    if (controller)
+                    {
+                        controller->setStatus(QStringLiteral("空格保底输入失败：%1").arg(error));
+                    }
+                }, Qt::QueuedConnection);
+            }
+        }).detach();
+    });
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::monitorFinished, this, [this]() {
+        loginOcrRunning_ = false;
+        accountLoginStopExcluded_ = false;
+    });
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::monitorStatus, this, [this](const QString& text) { setStatus(text); });
+    connect(&accountLoginAutomation_, &AccountLoginAutomation::finished, this, [this](bool success, const QString& text) {
+        bool finalSuccess = success;
+        QString resultText = text;
+        if (success)
+        {
+            // 游戏进程和顶层窗口通常不是同时创建，给窗口初始化留出时间再绑定。
+            QElapsedTimer bindTimer;
+            bindTimer.start();
+            bool bound = false;
+            while (!bound && bindTimer.elapsed() < 15000)
+            {
+                bound = autoBindGameWindow(false);
+                if (bound)
+                {
+                    break;
+                }
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                QThread::msleep(250);
+            }
+            if (!bound)
+            {
+                finalSuccess = false;
+                resultText = QStringLiteral("游戏窗口已出现，但自动绑定失败");
+            }
+            else
+            {
+                accountBanHandled_ = false;
+                accountBanMonitoringEnabled_ = true;
+                accountLoginReadyReported_ = false;
+                accountLoginSuccessMonitor_.start(boundHwnd_, config_.loadUmiOcrPath(), config_.loadUmiOcrPort());
+                accountBanMonitor_.start(boundHwnd_, config_.loadUmiOcrPath(), config_.loadUmiOcrPort());
+            }
+        }
+        if (!finalSuccess)
+        {
+            stopAccountBanMonitor();
+        }
+        connection_.sendAccountLoginResponse(accountLoginRequestId_, finalSuccess ? QStringLiteral("OK") : QStringLiteral("ERROR"), resultText);
+        // 成功拉起游戏只表示自动化启动阶段完成。登录成功/封禁监测仍属于本次上号流程，
+        // 必须保持 accountLoginRunning_，否则后续 OCR 请求会被直接丢弃。
+        if (!finalSuccess)
+        {
+            accountLoginRunning_ = false;
+            accountLoginStopExcluded_ = false;
+        }
+        finishAutomationAction();
+        setStatus(resultText);
+    });
     connect(&hotkey_, &HotkeyManager::hotkeyPressed, this, &ClientController::finishHotkeyPick);
     connect(&hotkey_, &HotkeyManager::f3Pressed, this, &ClientController::toggleBulletOcrLoop);
     qApp->installNativeEventFilter(this);
@@ -280,7 +469,19 @@ void ClientController::rebindGameWindow()
 
 void ClientController::forceStopCurrentAction()
 {
+    // “停止全部动作”不应打断上号及其封禁/登录成功监测流程。
+    if (accountLoginStopExcluded_.load())
+    {
+        countdownTimer_.stop();
+        scheduledTriggerTimer_.stop();
+        countdown_ = 0;
+        setStatus(QStringLiteral("当前正在上号，已忽略停止全部动作"));
+        return;
+    }
     automationCancelRequested_ = true;
+    accountBanMonitoringEnabled_ = false;
+    accountBanMonitor_.stop();
+    accountLoginAutomation_.cancel();
     countdownTimer_.stop();
     scheduledTriggerTimer_.stop();
     countdown_ = 0;
@@ -2761,6 +2962,260 @@ void ClientController::handleMailRequest(int requestId)
     setStatus(QStringLiteral("领取邮件完成"));
 }
 
+void ClientController::handleAccountLoginRequest(int requestId, const QString& username, const QString& password)
+{
+    if (currentRole_ != ClientRole::Coin)
+    {
+        connection_.sendAccountLoginResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("仅币号客户端支持上号"));
+        return;
+    }
+    if (accountBanMonitoringEnabled_ || accountBanMonitor_.isRunning())
+    {
+        connection_.sendAccountLoginResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("已有账号正在进行封禁监测"));
+        return;
+    }
+    if (!beginAutomationAction(QStringLiteral("上号")))
+    {
+        connection_.sendAccountLoginResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("已有自动化流程正在执行"));
+        return;
+    }
+    accountLoginRequestId_ = requestId;
+    accountLoginRunning_ = true;
+    accountLoginStopExcluded_ = true;
+    accountBanHandled_ = false;
+    connection_.sendAccountLoginResponse(requestId, QStringLiteral("STARTED"), QStringLiteral("已开始上号"));
+    accountLoginAutomation_.start(username, password);
+}
+
+void ClientController::handleAccountBanned(const QString& recognizedText)
+{
+    Q_UNUSED(recognizedText);
+    if (!accountBanMonitoringEnabled_ || accountBanHandled_)
+    {
+        return;
+    }
+
+    accountBanHandled_ = true;
+    accountBanMonitoringEnabled_ = false;
+    accountLoginStopExcluded_ = false;
+    accountBanMonitor_.stop();
+    accountLoginSuccessMonitor_.stop();
+    loginOcrRunning_ = false;
+    automationCancelRequested_.store(true);
+    accountLoginAutomation_.cancelAndStopProcesses();
+    countdownTimer_.stop();
+    scheduledTriggerTimer_.stop();
+    countdown_ = 0;
+    if (bulletOcrRunning_)
+    {
+        finishBulletOcrLoop(false, QStringLiteral("检测到账号封号/冻结"));
+    }
+    accountLoginRunning_ = false;
+    automationActionRunning_ = false;
+    connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("BANNED"), QStringLiteral("检测到账号封号/冻结"));
+    setStatus(QStringLiteral("检测到账号封号/冻结，已结束相关进程，等待服务端切换账号"));
+}
+
+void ClientController::handleAccountStartupFailed(const QString& recognizedText)
+{
+    Q_UNUSED(recognizedText);
+    if (!accountBanMonitoringEnabled_ || accountBanHandled_)
+    {
+        return;
+    }
+
+    accountBanHandled_ = true;
+    accountBanMonitoringEnabled_ = false;
+    accountLoginStopExcluded_ = false;
+    accountBanMonitor_.stop();
+    accountLoginSuccessMonitor_.stop();
+    loginOcrRunning_ = false;
+    automationCancelRequested_.store(true);
+    accountLoginAutomation_.cancelAndStopProcesses();
+    countdownTimer_.stop();
+    scheduledTriggerTimer_.stop();
+    countdown_ = 0;
+    if (bulletOcrRunning_)
+    {
+        finishBulletOcrLoop(false, QStringLiteral("启动器登录组件报错，游戏被强制关闭"));
+    }
+    accountLoginRunning_ = false;
+    automationActionRunning_ = false;
+    connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("ERROR"),
+        QStringLiteral("启动器登录组件报错，游戏被强制关闭，准备复用当前账号重试"));
+    setStatus(QStringLiteral("启动器登录组件报错，已结束相关进程，准备复用当前账号重试"));
+}
+
+void ClientController::handleLoginReady()
+{
+    if (accountLoginReadyReported_ || !accountLoginRunning_ || !boundHwnd_) return;
+    accountLoginReadyReported_ = true;
+    // “行前备战”已经证明登录成功。停止登录成功判定线程，封禁监测由
+    // AccountBanMonitor 独立负责，避免同一张截图被两个 OCR 流程重复处理。
+    accountLoginSuccessMonitor_.stop();
+    loginOcrRunning_ = false;
+    rebindGameWindow();
+    QTimer::singleShot(500, this, [this]() {
+        connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("READY"), QStringLiteral("行前备战，登录成功"));
+        accountLoginRunning_ = false;
+        setStatus(QStringLiteral("已识别行前备战，登录成功"));
+    });
+}
+
+void ClientController::runLoginSuccessOcr(int stage)
+{
+    // stage 3 曾用于第二条封禁 OCR。封禁现在始终由 AccountBanMonitor 负责，
+    // 不再启动这条登录成功 OCR，也不再输出“上号OCR[封禁]”日志。
+    if (stage == 3 || accountLoginReadyReported_ || !accountLoginRunning_
+        || !boundHwnd_ || !binder_.isValid(boundHwnd_)) return;
+    if (loginOcrRunning_.exchange(true)) return;
+    OcrRegionConfig region;
+    // 常驻、菜单和确认阶段读取完整客户区，避免固定小区域随窗口布局或缩放变化而偏移。
+    if (stage == 0) { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
+    else if (stage == 1) { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
+    else if (stage == 2) { region = {true, 1946, 1262, 500, 56, 2560, 1440}; }
+    else { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
+    const QString executable = config_.loadUmiOcrPath();
+    const int port = config_.loadUmiOcrPort();
+    const QString keyword = stage == 0 ? QStringLiteral("常驻")
+        : stage == 1 ? QStringLiteral("Tab/战术部门/研发部门/医疗部门")
+        : stage == 2 ? QStringLiteral("行前备战")
+        : stage == 4 ? QStringLiteral("继续/参加/跳转/前往参加/前往跳转") : QStringLiteral("行前备战");
+    const HWND gameWindow = boundHwnd_;
+    QPointer<ClientController> controller(this);
+    std::thread([controller, gameWindow, region, stage, executable, port, keyword]() {
+        const qint64 startedAt = QDateTime::currentMSecsSinceEpoch();
+        AccountBanMonitor::loginOcrInFlight = true;
+        UmiOcrRunner runner;
+        QString error;
+        const QString imagePath = CaptureDesktopOcrRegion(gameWindow, region,
+            QStringLiteral("login_success_%1").arg(stage), error);
+        QString recognizedText;
+        QRect bounds;
+        bool found = false;
+        if (!imagePath.isEmpty())
+        {
+            if (stage == 1 || stage == 4)
+            {
+                // 同一张截图一次 OCR 同时接受多个候选词，
+                // 避免为多个候选词重复请求 OCR。
+                recognizedText = runner.recognizeImage(imagePath, executable, port, error);
+                const QString normalizedRecognizedText = NormalizeLoginOcrText(recognizedText);
+                const QStringList keywords = stage == 1 ? QStringList{
+                    QStringLiteral("Tab"), QStringLiteral("战术部门"),
+                    QStringLiteral("研发部门"), QStringLiteral("医疗部门")
+                } : QStringList{
+                    QStringLiteral("继续"), QStringLiteral("参加"), QStringLiteral("跳转"),
+                    QStringLiteral("前往参加"), QStringLiteral("前往跳转"),
+                    QStringLiteral("前往获取"), QStringLiteral("前往")
+                };
+                for (const QString& candidate : keywords)
+                {
+                    if (normalizedRecognizedText.contains(NormalizeLoginOcrText(candidate)))
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!error.isEmpty())
+                {
+                    found = false;
+                }
+            }
+            else
+            {
+                found = runner.findTextBounds(imagePath, executable, port, keyword, bounds, error, false, &recognizedText);
+            }
+            QFile::remove(imagePath);
+        }
+        AccountBanMonitor::loginOcrInFlight = false;
+        const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - startedAt;
+        if (controller)
+        {
+            const QString stageName = stage == 0 ? QStringLiteral("常驻")
+                : stage == 1 ? QStringLiteral("菜单")
+                : stage == 2 ? QStringLiteral("行前备战")
+                : QStringLiteral("前往获取");
+            QMetaObject::invokeMethod(controller, [controller, stageName, found, recognizedText, error, elapsed]() {
+                if (controller)
+                {
+                    emit controller->connectionLogAppended(QStringLiteral("上号OCR[%1]：%2，耗时%3ms，文本：%4，错误：%5")
+                        .arg(stageName, found ? QStringLiteral("找到") : QStringLiteral("未找到"))
+                        .arg(elapsed)
+                        .arg(recognizedText.trimmed().isEmpty() ? QStringLiteral("<空>") : recognizedText.simplified(),
+                             error.isEmpty() ? QStringLiteral("<无>") : error));
+                }
+            }, Qt::QueuedConnection);
+        }
+        if (!controller) return;
+        QMetaObject::invokeMethod(controller, [controller, stage, found, recognizedText]() {
+            if (controller) controller->finishLoginSuccessOcr(stage, found, recognizedText);
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+void ClientController::finishLoginSuccessOcr(int stage, bool found, const QString& recognizedText)
+{
+    Q_UNUSED(recognizedText);
+    loginOcrRunning_ = false;
+    if (accountLoginReadyReported_ || !accountLoginRunning_ || !boundHwnd_) return;
+    if (!found)
+    {
+        // 进入游戏或行前备战未出现时，回到常驻检测，避免卡在中间阶段。
+        // Tab 阶段由监测线程连续保留 10 秒，不能因单轮 OCR 未命中立即回退。
+        if (stage != 0 && stage != 1 && stage != 4)
+        {
+            accountLoginSuccessMonitor_.setStage(0);
+        }
+        return;
+    }
+    QString error;
+    if (stage == 0)
+    {
+        POINT p{386, 1192};
+        input_.clickReferencePoint(boundHwnd_, p, 2560, 1440, 0, error);
+        // 常驻点击后由监测线程等待 5 秒，再执行最多 15 秒的确认 OCR。
+        accountLoginSuccessMonitor_.setStage(4);
+    }
+    else if (stage == 4)
+    {
+        input_.pressKey(VK_SPACE, error);
+        accountLoginSuccessMonitor_.setStage(5);
+    }
+    else if (stage == 1)
+    {
+        // 菜单文字命中后先等待 2 秒，给界面完成切换的时间，再按 Tab。
+        accountLoginSuccessMonitor_.setStage(6);
+        setStatus(QStringLiteral("已识别菜单，2 秒后按 Tab"));
+        QTimer::singleShot(2000, this, [this]() {
+            if (!accountLoginRunning_ || accountLoginReadyReported_ || !boundHwnd_
+                || !binder_.isValid(boundHwnd_))
+            {
+                return;
+            }
+            QString delayedError;
+            if (!input_.pressKey(VK_TAB, delayedError))
+            {
+                setStatus(QStringLiteral("按 Tab 失败：%1").arg(delayedError));
+                accountLoginSuccessMonitor_.setStage(0);
+                return;
+            }
+            accountLoginSuccessMonitor_.setStage(2);
+        });
+    }
+    else
+    {
+        handleLoginReady();
+    }
+}
+
+void ClientController::stopAccountBanMonitor()
+{
+    accountBanMonitoringEnabled_ = false;
+    accountBanMonitor_.stop();
+    accountLoginSuccessMonitor_.stop();
+}
+
 bool ClientController::executeMailSequence(QString& errorText)
 {
     if (!boundHwnd_ || !binder_.isValid(boundHwnd_))
@@ -4326,21 +4781,18 @@ QString ClientController::captureOcrRegion(const OcrRegionConfig& region, const 
         return {};
     }
 
-    POINT screenPoint{ scaledRegion.x(), scaledRegion.y() };
+    POINT screenPoint{scaledRegion.x(), scaledRegion.y()};
     if (!ClientToScreen(boundHwnd_, &screenPoint))
     {
         errorText = QStringLiteral("客户区坐标转屏幕坐标失败");
         return {};
     }
-
     QScreen* screen = QGuiApplication::primaryScreen();
     if (!screen)
     {
         errorText = QStringLiteral("未找到屏幕对象");
         return {};
     }
-
-    // OCR 区域按参考客户区坐标缩放后从屏幕截图，后续只识别这块小图。
     const QPixmap pixmap = screen->grabWindow(0, screenPoint.x, screenPoint.y, scaledRegion.width(), scaledRegion.height());
     if (pixmap.isNull())
     {

@@ -469,6 +469,9 @@ int ServerConnectionManager::requestForceStopAllActions()
     int sentCount = 0;
     for (const ClientListItem& item : currentClients)
     {
+        // 全局停止只影响原有自动化动作；上号流程由客户端列表中的“中止上号”单独控制。
+        if (item.runningAction == QStringLiteral("上号中"))
+            continue;
         QString errorText;
         if (item.connected && requestForceStopAction(item.id, errorText))
         {
@@ -485,6 +488,8 @@ void ServerConnectionManager::resetAllClientStates()
         std::lock_guard<std::mutex> lock(mutex_);
         for (const auto& client : clients_)
         {
+            if (client->runningAction == QStringLiteral("上号中"))
+                continue;
             client->actionRunning = false;
             client->runningAction.clear();
             client->listingStatus = QStringLiteral("待执行");
@@ -697,6 +702,29 @@ bool ServerConnectionManager::requestMail(quint64 clientId, int requestId, QStri
     {
         recordDisconnectReason(client, QStringLiteral("发送 MAIL_REQUEST 失败，错误码：%1").arg(WSAGetLastError()));
         markClientDisconnected(client->id);
+        return false;
+    }
+    emit clientsChanged();
+    return true;
+}
+
+bool ServerConnectionManager::requestAccountLogin(quint64 clientId, int requestId, const QString& username, const QString& password, QString& errorText)
+{
+    std::shared_ptr<ClientEntry> client;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        client = findClientLocked(clientId);
+        if (!client || !client->connected) { errorText = QStringLiteral("客户端已断开"); return false; }
+        if (client->role != ClientRole::Coin) { errorText = QStringLiteral("仅币号客户端支持上号"); return false; }
+        if (client->actionRunning) { errorText = QStringLiteral("该客户端正在执行：%1").arg(client->runningAction); return false; }
+        client->actionRunning = true;
+        client->runningAction = QStringLiteral("上号中");
+    }
+    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildAccountLoginRequestMessage(
+        requestId, username.toUtf8().toStdString(), password.toUtf8().toStdString())))
+    {
+        errorText = QStringLiteral("发送上号指令失败");
+        markClientDisconnected(clientId);
         return false;
     }
     emit clientsChanged();
@@ -1281,6 +1309,23 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
                 }
                 emit clientsChanged();
                 emit mailResponseReceived(client->id, message.requestId, message.success, responseText);
+            }
+            else if (message.type == Protocol::MessageType::AccountLoginResponse)
+            {
+                const QString responseText = QString::fromUtf8(message.payload.data(), static_cast<int>(message.payload.size()));
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (message.value != 1)
+                    {
+                        client->actionRunning = false;
+                        client->runningAction.clear();
+                    }
+                    client->teamReadyText = message.value == 1 ? QStringLiteral("上号中")
+                        : (message.value == -2 ? QStringLiteral("封号/冻结")
+                            : (message.success ? QStringLiteral("上号成功") : QStringLiteral("上号失败")));
+                }
+                emit clientsChanged();
+                emit accountLoginResponseReceived(client->id, message.requestId, message.value, responseText);
             }
             else if (message.type == Protocol::MessageType::AmountReport)
             {

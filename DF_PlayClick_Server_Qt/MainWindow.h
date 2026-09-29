@@ -76,6 +76,7 @@ private:
     QCheckBox* autoExecuteCheck_ = nullptr;
     QLabel* listingQuantityTotalLabel_ = nullptr;
     QLabel* listingSuccessClientsLabel_ = nullptr;
+    QLabel* accountQueueLabel_ = nullptr;
     bool coinFirst_ = true;
     bool compensationEnabled_ = true;
     bool bruteCaptcha_ = true;
@@ -89,6 +90,7 @@ private:
     QPushButton* forceStopAllButton_ = nullptr;
     QPushButton* mailAllButton_ = nullptr;
     QPushButton* settingsButton_ = nullptr;
+    QPushButton* importAccountsButton_ = nullptr;
     QTableWidget* clientTable_ = nullptr;
     QHash<QString, QString> clientNotes_;
     QTextEdit* connectionLogEdit_ = nullptr;

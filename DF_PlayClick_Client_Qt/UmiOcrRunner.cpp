@@ -14,13 +14,17 @@
 #include <QStringList>
 #include <QThread>
 
+#include <mutex>
+
 #include "../Shared/SocketUtil.h"
 
 namespace
 {
 constexpr int OcrReadyWaitRounds = 20;
 constexpr int OcrReadyWaitMs = 250;
-constexpr int OcrHttpTimeoutMs = 15000;
+// OCR 请求在后台线程执行；较短的网络超时可以避免停止监测时长时间占用 OCR 调度。
+constexpr int OcrHttpTimeoutMs = 5000;
+std::mutex g_ocrRequestMutex;
 
 bool ConnectLocalSocket(SOCKET& socketHandle, int port)
 {
@@ -76,6 +80,8 @@ QString NormalizeOcrMatchText(const QString& value)
 bool UmiOcrRunner::requestOcr(const QString& imagePath, const QString& executablePath, int port, const QString& dataFormat,
     QJsonObject& responseObject, QString& errorText) const
 {
+    // UmiOCR 本地接口在并发截图请求时会明显增加延迟，登录成功和封禁检测统一排队。
+    std::unique_lock<std::mutex> requestLock(g_ocrRequestMutex);
     errorText.clear();
     QFile imageFile(imagePath);
     if (!imageFile.open(QIODevice::ReadOnly))
@@ -187,7 +193,7 @@ QString UmiOcrRunner::recognizeImage(const QString& imagePath, const QString& ex
 }
 
 bool UmiOcrRunner::findTextBounds(const QString& imagePath, const QString& executablePath, int port, const QString& keyword,
-    QRect& bounds, QString& errorText, bool exactMatch) const
+    QRect& bounds, QString& errorText, bool exactMatch, QString* recognizedText) const
 {
     bounds = {};
     QJsonObject responseObject;
@@ -251,15 +257,23 @@ bool UmiOcrRunner::findTextBounds(const QString& imagePath, const QString& execu
         }
         if (hasPoint && maxX > minX && maxY > minY)
         {
+            if (recognizedText)
+            {
+                *recognizedText = allTexts.join(QLatin1Char('\n'));
+            }
             bounds = QRect(QPoint(minX, minY), QPoint(maxX, maxY)).normalized();
             return true;
         }
     }
 
-    const QString recognizedText = allTexts.join(QLatin1Char('\n'));
-    errorText = recognizedText.isEmpty()
+    const QString recognizedTextValue = allTexts.join(QLatin1Char('\n'));
+    if (recognizedText)
+    {
+        *recognizedText = recognizedTextValue;
+    }
+    errorText = recognizedTextValue.isEmpty()
         ? QStringLiteral("OCR未识别到文字，未找到“%1”").arg(keyword)
-        : QStringLiteral("OCR未找到“%1”，原文：%2").arg(keyword, recognizedText);
+        : QStringLiteral("OCR未找到“%1”，原文：%2").arg(keyword, recognizedTextValue);
     return false;
 }
 

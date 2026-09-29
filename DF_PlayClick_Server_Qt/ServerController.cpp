@@ -1,11 +1,15 @@
 ﻿#include "ServerController.h"
 
 #include <algorithm>
+#include <QCoreApplication>
 #include <QDateTime>
+#include <QDir>
 #include <QList>
 #include <QSet>
 #include <QStringList>
 #include <QThread>
+#include <QFile>
+#include <QTextStream>
 
 #include "AutoStartOcrRules.h"
 #include "../Shared/ServerRules.h"
@@ -20,6 +24,40 @@ namespace
 
     const OcrRequestRegion ActionRegion{ 1945, 1261, 500, 60, AutoStartReferenceWidth, AutoStartReferenceHeight };
     const OcrRequestRegion MapTypeRegion{ 0, 0, 300, 60, AutoStartReferenceWidth, AutoStartReferenceHeight };
+
+    QString AccountCredentialKey(const QString& username, const QString& password)
+    {
+        return username.trimmed() + QChar(0x1f) + password.trimmed();
+    }
+
+    QSet<QString> LoadBannedAccountKeys()
+    {
+        QSet<QString> keys;
+        const QString filePath = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("封号.txt"));
+        QFile file(filePath);
+        if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text))
+        {
+            return keys;
+        }
+
+        QTextStream stream(&file);
+        while (!stream.atEnd())
+        {
+            const QString line = stream.readLine().trimmed();
+            const int separator = line.indexOf(QStringLiteral("----"));
+            if (separator <= 0 || separator + 4 >= line.size())
+            {
+                continue;
+            }
+            const QString username = line.left(separator).trimmed();
+            const QString password = line.mid(separator + 4).trimmed();
+            if (!username.isEmpty() && !password.isEmpty())
+            {
+                keys.insert(AccountCredentialKey(username, password));
+            }
+        }
+        return keys;
+    }
 }
 
 ServerController::ServerController(QObject* parent)
@@ -38,9 +76,58 @@ ServerController::ServerController(QObject* parent)
         [this](quint64 clientId, int requestId, bool success, const QString& text) {
             emit connectionLogAppended(QStringLiteral("币号客户端 %1 保存配装%2：%3")
                 .arg(clientId).arg(success ? QStringLiteral("完成") : QStringLiteral("失败"), text));
+            if (pendingLoginReadyLoadouts_.contains(requestId))
+            {
+                const LoginReadyState state = pendingLoginReadyLoadouts_.take(requestId);
+                pendingLoadoutRequests_.remove(requestId);
+                if (!success)
+                {
+                    emit statusChanged(QStringLiteral("客户端 %1 登录成功后的保存配装失败：%2")
+                        .arg(clientId).arg(text), ServerStatusTone::Error);
+                    return;
+                }
+                if (state.listingText.trimmed().isEmpty() || state.listingPrice.trimmed().isEmpty()
+                    || state.purchaseCount <= 0 || state.purchaseCount > 99)
+                {
+                    emit statusChanged(QStringLiteral("客户端 %1 登录成功，但上架参数不完整")
+                        .arg(clientId), ServerStatusTone::Error);
+                    connectionManager_.forceResetClientAction(clientId);
+                    return;
+                }
+
+                QString errorText;
+                const int listingRequestId = nextListingRequestId_++;
+                pendingLoginReadyListings_.insert(listingRequestId, clientId);
+                if (connectionManager_.requestListing(clientId, listingRequestId,
+                    state.listingText.trimmed(), state.listingPrice.trimmed(), false,
+                    state.purchaseCount, state.loadoutMode, errorText))
+                {
+                    emit connectionLogAppended(QStringLiteral("客户端 %1 登录成功后的配装已完成，已下发上架")
+                        .arg(clientId));
+                }
+                else
+                {
+                    pendingLoginReadyListings_.remove(listingRequestId);
+                    emit statusChanged(QStringLiteral("客户端 %1 登录成功后的上架下发失败：%2")
+                        .arg(clientId).arg(errorText), ServerStatusTone::Error);
+                    connectionManager_.forceResetClientAction(clientId);
+                }
+                return;
+            }
         });
     connect(&connectionManager_, &ServerConnectionManager::listingResponseReceived, this,
         [this](quint64 clientId, int requestId, bool success, const QString& text) {
+            if (pendingLoginReadyListings_.contains(requestId))
+            {
+                pendingLoginReadyListings_.remove(requestId);
+                emit connectionLogAppended(QStringLiteral("客户端 %1 登录成功后的上架%2：%3")
+                    .arg(clientId).arg(success ? QStringLiteral("完成") : QStringLiteral("失败"), text));
+                emit statusChanged(success
+                    ? QStringLiteral("客户端 %1 登录成功后的配装和上架已完成").arg(clientId)
+                    : QStringLiteral("客户端 %1 登录成功后的上架失败：%2").arg(clientId).arg(text),
+                    success ? ServerStatusTone::Success : ServerStatusTone::Error);
+                return;
+            }
             const QString resultLabel = success
                 ? QStringLiteral("成功")
                 : text.contains(QStringLiteral("使用量少")) ? QStringLiteral("少")
@@ -80,6 +167,45 @@ ServerController::ServerController(QObject* parent)
     connect(&connectionManager_, &ServerConnectionManager::clientsChanged, this, [this]() {
         emit clientsChanged(connectionManager_.clients());
     });
+    connect(&connectionManager_, &ServerConnectionManager::accountLoginResponseReceived, this,
+        [this](quint64 clientId, int, int status, const QString& text) {
+            emit connectionLogAppended(QStringLiteral("客户端 %1 上号状态：%2").arg(clientId).arg(text));
+            if (status == -2)
+            {
+                QString accountLine;
+                if (markAccountBanned(clientId, accountLine))
+                {
+                    if (appendBannedAccount(accountLine))
+                    {
+                        emit statusChanged(QStringLiteral("客户端 %1 检测到封号，已写入封号.txt，准备切换下一账号").arg(clientId), ServerStatusTone::Error);
+                    }
+                    else
+                    {
+                        emit statusChanged(QStringLiteral("客户端 %1 检测到封号，但封号.txt 写入失败").arg(clientId), ServerStatusTone::Error);
+                    }
+                }
+                else
+                {
+                    emit statusChanged(QStringLiteral("客户端 %1 检测到封号，但未找到对应账号记录").arg(clientId), ServerStatusTone::Error);
+                }
+                clearPendingAccountLoginRequests(clientId);
+                connectionManager_.forceResetClientAction(clientId);
+                startAccountLogin(clientId);
+                return;
+            }
+            if (status == 3) { handleAccountLoginReady(clientId); return; }
+            if (status != -2
+                && text.contains(QStringLiteral("启动器登录组件报错"), Qt::CaseInsensitive)
+                && text.contains(QStringLiteral("游戏被强制关闭"), Qt::CaseInsensitive))
+            {
+                clearPendingAccountLoginRequests(clientId);
+                connectionManager_.forceResetClientAction(clientId);
+                emit statusChanged(QStringLiteral("客户端 %1 启动器登录组件报错，准备复用当前账号重试").arg(clientId), ServerStatusTone::Error);
+                startAccountLogin(clientId);
+                return;
+            }
+            if (status != 1) connectionManager_.forceResetClientAction(clientId);
+        });
     connect(&connectionManager_, &ServerConnectionManager::amountReportReceived, this,
         [this](quint64 clientId, qint64 amount) {
             QString errorText;
@@ -1417,6 +1543,222 @@ void ServerController::requestMailAll()
         if (connectionManager_.requestMail(client.id, nextMailRequestId_++, errorText)) ++sent;
     }
     emit statusChanged(QStringLiteral("已向 %1 个客户端发送领取邮件指令").arg(sent), ServerStatusTone::Success);
+}
+
+void ServerController::importAccounts(const QString& filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) { emit statusChanged(QStringLiteral("账号文件打开失败"), ServerStatusTone::Error); return; }
+    QVector<AccountCredential> loaded;
+    QSet<QString> seenCredentials;
+    const QSet<QString> bannedCredentials = LoadBannedAccountKeys();
+    int skippedBanned = 0;
+    QTextStream stream(&file);
+    while (!stream.atEnd())
+    {
+        const QString line = stream.readLine().trimmed();
+        const int separator = line.indexOf(QStringLiteral("----"));
+        if (separator <= 0 || separator + 4 >= line.size()) continue;
+        AccountCredential item{line.left(separator).trimmed(), line.mid(separator + 4).trimmed(), false, false, 0};
+        const QString key = AccountCredentialKey(item.username, item.password);
+        if (!item.username.isEmpty() && !item.password.isEmpty() && !seenCredentials.contains(key))
+        {
+            seenCredentials.insert(key);
+            if (bannedCredentials.contains(key))
+            {
+                ++skippedBanned;
+                continue;
+            }
+            loaded.push_back(item);
+        }
+    }
+    accounts_ = loaded;
+    emit accountQueueChanged(accounts_.size(), accounts_.size(), 0);
+    emit statusChanged(skippedBanned > 0
+        ? QStringLiteral("已导入 %1 个账号，跳过 %2 个封禁账号").arg(accounts_.size()).arg(skippedBanned)
+        : QStringLiteral("已导入 %1 个账号").arg(accounts_.size()), ServerStatusTone::Success);
+}
+
+void ServerController::setAccountLoginConfig(quint64 clientId, const QString& weapon, const QString& backpack,
+    const QString& egg, const QString& bulletName, int perClick, int bulletTotal,
+    const QString& listingText, const QString& listingPrice, int purchaseCount)
+{
+    LoginReadyState state;
+    state.weapon = weapon.trimmed();
+    state.backpack = backpack.trimmed();
+    state.egg = egg.trimmed();
+    state.bulletName = bulletName.trimmed();
+    state.perClick = perClick;
+    state.bulletTotal = bulletTotal;
+    state.listingText = listingText.trimmed();
+    state.listingPrice = listingPrice.trimmed();
+    state.purchaseCount = purchaseCount;
+    state.loadoutMode = true;
+    loginReadyStates_.insert(clientId, state);
+}
+
+void ServerController::startAccountLogin(quint64 clientId)
+{
+    if (!loginReadyStates_.contains(clientId))
+    {
+        // 兼容没有经过新 UI 配置入口的调用方；客户端随后会返回缺少配装参数，
+        // 但不会误用旧的固定坐标 LOADOUT_REQUEST。
+        loginReadyStates_.insert(clientId, LoginReadyState{});
+    }
+    const QSet<QString> bannedCredentials = LoadBannedAccountKeys();
+    for (AccountCredential& account : accounts_)
+    {
+        if (bannedCredentials.contains(AccountCredentialKey(account.username, account.password)))
+        {
+            account.banned = true;
+        }
+    }
+
+    AccountCredential* selected = nullptr;
+    for (AccountCredential& account : accounts_)
+    {
+        if (account.assigned && !account.banned && account.clientId == clientId)
+        {
+            selected = &account;
+            break;
+        }
+    }
+    if (!selected)
+    {
+        for (AccountCredential& account : accounts_)
+        {
+            if (!account.assigned && !account.banned)
+            {
+                selected = &account;
+                break;
+            }
+        }
+    }
+    if (!selected)
+    {
+        emit statusChanged(QStringLiteral("没有可分发的账号"), ServerStatusTone::Error);
+        return;
+    }
+    QString errorText;
+    if (!connectionManager_.requestAccountLogin(clientId, nextAccountLoginRequestId_++, selected->username, selected->password, errorText))
+    {
+        emit statusChanged(errorText, ServerStatusTone::Error);
+        return;
+    }
+    if (!selected->assigned)
+    {
+        selected->assigned = true;
+        selected->clientId = clientId;
+        int assigned = 0;
+        for (const AccountCredential& value : accounts_) if (value.assigned) ++assigned;
+        emit accountQueueChanged(accounts_.size(), accounts_.size() - assigned, assigned);
+    }
+    emit statusChanged(QStringLiteral("已向币号客户端 %1 下发上号指令").arg(clientId), ServerStatusTone::Neutral);
+}
+
+void ServerController::handleAccountLoginReady(quint64 clientId)
+{
+    connectionManager_.forceResetClientAction(clientId);
+    clearPendingAccountLoginRequests(clientId);
+    emit statusChanged(QStringLiteral("客户端 %1 登录成功，500ms 后开始配装").arg(clientId), ServerStatusTone::Success);
+    QTimer::singleShot(500, this, [this, clientId]() {
+        QString error;
+        if (!connectionManager_.requestRebindWindow(clientId, error)) {
+            emit statusChanged(QStringLiteral("客户端 %1 重绑窗口失败：%2").arg(clientId).arg(error), ServerStatusTone::Error);
+            return;
+        }
+        QTimer::singleShot(500, this, [this, clientId]() {
+            QString error;
+            const int requestId = nextLoginLoadoutRequestId_++;
+            const LoginReadyState state = loginReadyStates_.value(clientId);
+            pendingLoadoutRequests_.insert(requestId, clientId);
+            pendingLoginReadyLoadouts_.insert(requestId, state);
+            if (!connectionManager_.requestSaveLoadout(clientId, requestId, ClientRole::Coin,
+                state.weapon, state.backpack, state.egg, state.bulletName,
+                state.perClick, state.bulletTotal, error))
+            {
+                pendingLoadoutRequests_.remove(requestId);
+                pendingLoginReadyLoadouts_.remove(requestId);
+                emit statusChanged(QStringLiteral("客户端 %1 登录成功后的保存配装下发失败：%2")
+                    .arg(clientId).arg(error), ServerStatusTone::Error);
+                connectionManager_.forceResetClientAction(clientId);
+                return;
+            }
+        });
+    });
+}
+
+void ServerController::clearPendingAccountLoginRequests(quint64 clientId)
+{
+    // 清除同一客户端可能遗留的旧登录配装/上架请求，避免旧账号回包串到新账号。
+    QList<int> staleLoginLoadoutRequests;
+    for (auto iterator = pendingLoginReadyLoadouts_.cbegin(); iterator != pendingLoginReadyLoadouts_.cend(); ++iterator)
+    {
+        if (pendingLoadoutRequests_.value(iterator.key(), 0) == clientId)
+        {
+            staleLoginLoadoutRequests.push_back(iterator.key());
+        }
+    }
+    for (int requestId : staleLoginLoadoutRequests)
+    {
+        pendingLoginReadyLoadouts_.remove(requestId);
+        pendingLoadoutRequests_.remove(requestId);
+    }
+
+    QList<int> staleLoginListingRequests;
+    for (auto iterator = pendingLoginReadyListings_.cbegin(); iterator != pendingLoginReadyListings_.cend(); ++iterator)
+    {
+        if (iterator.value() == clientId)
+        {
+            staleLoginListingRequests.push_back(iterator.key());
+        }
+    }
+    for (int requestId : staleLoginListingRequests)
+    {
+        pendingLoginReadyListings_.remove(requestId);
+    }
+}
+
+bool ServerController::markAccountBanned(quint64 clientId, QString& accountLine)
+{
+    for (AccountCredential& account : accounts_)
+    {
+        if (!account.assigned || account.banned || account.clientId != clientId)
+        {
+            continue;
+        }
+        account.banned = true;
+        accountLine = account.username + QStringLiteral("----") + account.password;
+        return true;
+    }
+    return false;
+}
+
+bool ServerController::appendBannedAccount(const QString& accountLine)
+{
+    const QString filePath = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("封号.txt"));
+    QFile existing(filePath);
+    if (existing.exists() && existing.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        while (!existing.atEnd())
+        {
+            if (QString::fromUtf8(existing.readLine()).trimmed() == accountLine)
+            {
+                existing.close();
+                return true;
+            }
+        }
+        existing.close();
+    }
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+    {
+        return false;
+    }
+    file.write(accountLine.toUtf8());
+    file.write("\n");
+    return file.flush();
 }
 
 void ServerController::setAutoExecuteThresholds(int bossCount, int coinCount)
