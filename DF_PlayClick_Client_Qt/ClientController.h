@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <thread>
 #include <QObject>
 #include <QTimer>
 #include <QVector>
@@ -131,6 +132,7 @@ private:
     void handleAccountBanned(const QString& recognizedText);
     void handleLoginReady();
     void runLoginSuccessOcr(int stage);
+    void finishLoginSuccessOcr(int stage, bool found);
     void stopAccountBanMonitor();
     bool executeSelfThunderSequence(QString& errorText);
     bool executeLoadoutSequence(const QString& loadoutType, QString& errorText);
@@ -194,6 +196,7 @@ private:
     bool accountBanMonitoringEnabled_ = false;
     bool accountBanHandled_ = false;
     bool accountLoginReadyReported_ = false;
+    std::atomic_bool loginOcrRunning_{false};
     bool hasLastListingRequest_ = false;
     qint64 serverClockOffsetMs_ = 0;
     bool serverTimeSynchronized_ = false;

@@ -2865,6 +2865,7 @@ void ClientController::handleAccountBanned(const QString& recognizedText)
     accountBanMonitoringEnabled_ = false;
     accountBanMonitor_.stop();
     accountLoginSuccessMonitor_.stop();
+    loginOcrRunning_ = false;
     automationCancelRequested_.store(true);
     accountLoginAutomation_.cancelAndStopProcesses();
     countdownTimer_.stop();
@@ -2885,6 +2886,7 @@ void ClientController::handleLoginReady()
     if (accountLoginReadyReported_ || !accountLoginRunning_ || !boundHwnd_) return;
     accountLoginReadyReported_ = true;
     accountLoginSuccessMonitor_.stop();
+    loginOcrRunning_ = false;
     rebindGameWindow();
     QTimer::singleShot(500, this, [this]() {
         connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("READY"), QStringLiteral("行前备战，登录成功"));
@@ -2895,25 +2897,34 @@ void ClientController::handleLoginReady()
 void ClientController::runLoginSuccessOcr(int stage)
 {
     if (!accountLoginRunning_ || !boundHwnd_ || !binder_.isValid(boundHwnd_)) return;
+    if (loginOcrRunning_.exchange(true)) return;
     OcrRegionConfig region;
     if (stage == 0) { region = {true, 262, 144, 520, 60, 2560, 1440}; }
     else if (stage == 1) { region = {true, 994, 1145, 500, 255, 2560, 1440}; }
     else { region = {true, 1946, 1262, 500, 56, 2560, 1440}; }
     QString error;
     const QString imagePath = captureOcrRegion(region, QStringLiteral("login_success_%1").arg(stage), error);
-    if (imagePath.isEmpty()) return;
-    QRect bounds;
+    if (imagePath.isEmpty()) { loginOcrRunning_ = false; return; }
+    const QString executable = config_.loadUmiOcrPath();
+    const int port = config_.loadUmiOcrPort();
     const QString keyword = stage == 0 ? QStringLiteral("常驻") : stage == 1 ? QStringLiteral("TAB开始游戏") : QStringLiteral("行前备战");
-    const bool found = umiOcrRunner_.findTextBounds(imagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), keyword, bounds, error);
-    QFile::remove(imagePath);
-    if (!found) return;
-    if (stage == 0) {
-        if (boundHwnd_) { POINT p{386, 1192}; input_.clickReferencePoint(boundHwnd_, p, 2560, 1440, 0, error); }
-    } else if (stage == 1) {
-        input_.pressKey(VK_TAB, error);
-    } else {
-        handleLoginReady();
-    }
+    std::thread([this, stage, imagePath, executable, port, keyword]() {
+        UmiOcrRunner runner;
+        QString error; QRect bounds;
+        const bool found = runner.findTextBounds(imagePath, executable, port, keyword, bounds, error);
+        QFile::remove(imagePath);
+        QMetaObject::invokeMethod(this, [this, stage, found]() { finishLoginSuccessOcr(stage, found); }, Qt::QueuedConnection);
+    }).detach();
+}
+
+void ClientController::finishLoginSuccessOcr(int stage, bool found)
+{
+    loginOcrRunning_ = false;
+    if (!found || !accountLoginRunning_ || !boundHwnd_) return;
+    QString error;
+    if (stage == 0) { POINT p{386, 1192}; input_.clickReferencePoint(boundHwnd_, p, 2560, 1440, 0, error); }
+    else if (stage == 1) { input_.pressKey(VK_TAB, error); }
+    else { handleLoginReady(); }
 }
 
 void ClientController::stopAccountBanMonitor()
