@@ -24,6 +24,7 @@ signals:
     void tabFound();
     void retrySpace();
     void monitorStatus(const QString& text);
+    void monitorFinished();
 private:
     void run(HWND gameWindow, QString ocrExecutable, int ocrPort);
     std::atomic_bool stopRequested_{false};

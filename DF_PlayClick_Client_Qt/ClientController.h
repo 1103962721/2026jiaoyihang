@@ -193,6 +193,7 @@ private:
     int lastListingRequestId_ = 0;
     int accountLoginRequestId_ = 0;
     bool accountLoginRunning_ = false;
+    std::atomic_bool accountLoginStopExcluded_ = false;
     bool accountBanMonitoringEnabled_ = false;
     bool accountBanHandled_ = false;
     bool accountLoginReadyReported_ = false;
