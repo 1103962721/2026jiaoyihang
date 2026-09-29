@@ -133,10 +133,8 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
             stage_.store(phaseStage);
             continue;
         }
-        if (phaseStage != 3 && phaseStage != 4 && phaseStage != 5 && phaseStage != 6)
-        {
-            phaseStage = 3;
-        }
+        // 阶段 3 曾用于封禁 OCR，封禁监测现已由 AccountBanMonitor 独立负责。
+        // 常驻阶段未命中时必须保持阶段 0，继续 OCR 并执行空格保底，不能落入废弃阶段。
         stage_.store(phaseStage);
     }
     emit monitorFinished();

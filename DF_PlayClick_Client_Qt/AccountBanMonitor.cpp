@@ -217,12 +217,22 @@ void AccountBanMonitor::run(HWND gameWindow, QString ocrExecutable, int ocrPort,
     while (!token->load() && IsDeltaForceProcessRunning(gameWindow))
     {
         // 登录成功 OCR 与封禁 OCR 共用 UmiOCR 服务，登录阶段避免并发请求导致界面和 OCR 服务拥塞。
-        while (!token->load() && IsDeltaForceProcessRunning(gameWindow)
-            && loginOcrInFlight.load())
+        bool ocrLockAcquired = false;
+        while (!token->load() && IsDeltaForceProcessRunning(gameWindow))
         {
+            bool expected = false;
+            if (loginOcrInFlight.compare_exchange_weak(expected, true))
+            {
+                ocrLockAcquired = true;
+                break;
+            }
             QThread::msleep(100);
         }
-        if (token->load() || !IsDeltaForceProcessRunning(gameWindow)) break;
+        if (!ocrLockAcquired)
+        {
+            break;
+        }
+
         const QImage image = CaptureClientArea(gameWindow);
         if (!image.isNull() && image.save(tempPath, "PNG"))
         {
@@ -231,15 +241,18 @@ void AccountBanMonitor::run(HWND gameWindow, QString ocrExecutable, int ocrPort,
             QFile::remove(tempPath);
             if (!token->load() && IsStartupFailureText(recognizedText))
             {
+                loginOcrInFlight.store(false);
                 emit startupFailedDetected(recognizedText);
                 return;
             }
             if (!token->load() && IsBanText(recognizedText))
             {
+                loginOcrInFlight.store(false);
                 emit bannedDetected(recognizedText);
                 return;
             }
         }
+        loginOcrInFlight.store(false);
 
         // 封禁监测是独立的低频后台任务，避免持续 OCR 占用机器资源。
         for (int elapsed = 0; elapsed < 3000 && !token->load(); elapsed += 100)
