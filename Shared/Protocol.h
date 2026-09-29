@@ -840,9 +840,8 @@ namespace Protocol
             int requestId = 0;
             std::string username;
             std::string password;
-            std::string extra;
             stream >> requestId >> username >> password;
-            if (stream.fail() || requestId <= 0 || username.empty() || password.empty() || (stream >> extra))
+            if (stream.fail() || requestId <= 0 || username.empty() || password.empty())
                 return false;
             message.type = MessageType::AccountLoginRequest;
             message.requestId = requestId;

@@ -611,6 +611,19 @@ void ClientConnection::receiveLoop()
                         emit accountLoginRequestReceived(requestId, username, password);
                     }, Qt::QueuedConnection);
                 }
+                else
+                {
+                    // 协议字段已按空格编码时，解析器仍会提供 username/password 两段。
+                    const auto separator = message.payload.find(' ');
+                    if (separator != std::string::npos)
+                    {
+                        const QString username = QString::fromUtf8(message.payload.substr(0, separator).data());
+                        const QString password = QString::fromUtf8(message.payload.substr(separator + 1).data());
+                        QMetaObject::invokeMethod(this, [this, requestId = message.requestId, username, password]() {
+                            emit accountLoginRequestReceived(requestId, username, password);
+                        }, Qt::QueuedConnection);
+                    }
+                }
             }
             else if (message.type == Protocol::MessageType::Pong)
             {
