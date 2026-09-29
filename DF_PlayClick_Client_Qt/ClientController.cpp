@@ -14,6 +14,7 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QPixmap>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QRandomGenerator>
 #include <QScreen>
@@ -204,7 +205,12 @@ ClientController::ClientController(QObject* parent)
             stopAccountBanMonitor();
         }
         connection_.sendAccountLoginResponse(accountLoginRequestId_, finalSuccess ? QStringLiteral("OK") : QStringLiteral("ERROR"), resultText);
-        accountLoginRunning_ = false;
+        // 成功拉起游戏只表示自动化启动阶段完成。登录成功/封禁监测仍属于本次上号流程，
+        // 必须保持 accountLoginRunning_，否则后续 OCR 请求会被直接丢弃。
+        if (!finalSuccess)
+        {
+            accountLoginRunning_ = false;
+        }
         finishAutomationAction();
         setStatus(resultText);
     });
@@ -354,6 +360,8 @@ void ClientController::forceStopCurrentAction()
     {
         accountBanMonitoringEnabled_ = false;
         accountBanMonitor_.stop();
+        accountLoginSuccessMonitor_.stop();
+        accountLoginRunning_ = false;
         accountLoginAutomation_.cancelAndStopProcesses();
     }
     else
@@ -2890,6 +2898,7 @@ void ClientController::handleLoginReady()
     rebindGameWindow();
     QTimer::singleShot(500, this, [this]() {
         connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("READY"), QStringLiteral("行前备战，登录成功"));
+        accountLoginRunning_ = false;
         setStatus(QStringLiteral("已识别行前备战，登录成功"));
     });
 }
@@ -2908,25 +2917,50 @@ void ClientController::runLoginSuccessOcr(int stage)
     const QString executable = config_.loadUmiOcrPath();
     const int port = config_.loadUmiOcrPort();
     const QString keyword = stage == 0 ? QStringLiteral("常驻") : stage == 1 ? QStringLiteral("TAB开始游戏") : QStringLiteral("行前备战");
-    std::thread([this, stage, imagePath, executable, port, keyword]() {
+    QPointer<ClientController> controller(this);
+    std::thread([controller, stage, imagePath, executable, port, keyword]() {
         AccountBanMonitor::loginOcrInFlight = true;
         UmiOcrRunner runner;
         QString error; QRect bounds;
         const bool found = runner.findTextBounds(imagePath, executable, port, keyword, bounds, error);
         QFile::remove(imagePath);
         AccountBanMonitor::loginOcrInFlight = false;
-        QMetaObject::invokeMethod(this, [this, stage, found]() { finishLoginSuccessOcr(stage, found); }, Qt::QueuedConnection);
+        if (!controller) return;
+        QMetaObject::invokeMethod(controller, [controller, stage, found]() {
+            if (controller) controller->finishLoginSuccessOcr(stage, found);
+        }, Qt::QueuedConnection);
     }).detach();
 }
 
 void ClientController::finishLoginSuccessOcr(int stage, bool found)
 {
     loginOcrRunning_ = false;
-    if (!found || !accountLoginRunning_ || !boundHwnd_) return;
+    if (!accountLoginRunning_ || !boundHwnd_) return;
+    if (!found)
+    {
+        // 进入游戏或行前备战未出现时，回到常驻检测，避免卡在中间阶段。
+        if (stage != 0)
+        {
+            accountLoginSuccessMonitor_.setStage(0);
+        }
+        return;
+    }
     QString error;
-    if (stage == 0) { POINT p{386, 1192}; input_.clickReferencePoint(boundHwnd_, p, 2560, 1440, 0, error); }
-    else if (stage == 1) { input_.pressKey(VK_TAB, error); }
-    else { handleLoginReady(); }
+    if (stage == 0)
+    {
+        POINT p{386, 1192};
+        input_.clickReferencePoint(boundHwnd_, p, 2560, 1440, 0, error);
+        accountLoginSuccessMonitor_.setStage(1);
+    }
+    else if (stage == 1)
+    {
+        input_.pressKey(VK_TAB, error);
+        accountLoginSuccessMonitor_.setStage(2);
+    }
+    else
+    {
+        handleLoginReady();
+    }
 }
 
 void ClientController::stopAccountBanMonitor()

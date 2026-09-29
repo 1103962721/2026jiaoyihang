@@ -14,6 +14,7 @@ public:
     ~AccountLoginSuccessMonitor() override;
     void start(HWND gameWindow, const QString& ocrExecutable, int ocrPort);
     void stop();
+    void setStage(int stage);
     bool isRunning() const;
 signals:
     void ocrRequested(int stage);
@@ -26,5 +27,6 @@ private:
     void run(HWND gameWindow, QString ocrExecutable, int ocrPort);
     std::atomic_bool stopRequested_{false};
     std::atomic_bool running_{false};
+    std::atomic_int stage_{0};
     std::thread worker_;
 };

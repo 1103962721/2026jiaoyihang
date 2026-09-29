@@ -144,20 +144,42 @@ AccountBanMonitor::~AccountBanMonitor()
 void AccountBanMonitor::start(HWND gameWindow, const QString& ocrExecutable, int ocrPort)
 {
     stop();
-    detachedStop_ = false;
-    stopRequested_ = false;
+    const StopToken token = std::make_shared<std::atomic_bool>(false);
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        activeToken_ = token;
+    }
     running_ = true;
-    worker_ = std::thread([this, gameWindow, ocrExecutable, ocrPort]() {
-        run(gameWindow, ocrExecutable, ocrPort);
-        running_ = false;
-        if (!detachedStop_.load()) emit monitorStopped();
+    worker_ = std::thread([this, gameWindow, ocrExecutable, ocrPort, token]() {
+        run(gameWindow, ocrExecutable, ocrPort, token);
+        bool current = false;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            current = activeToken_ == token;
+        }
+        if (current)
+        {
+            running_ = false;
+            if (!token->load()) emit monitorStopped();
+        }
     });
 }
 
 void AccountBanMonitor::stop()
 {
-    stopRequested_ = true;
-    if (worker_.joinable()) { detachedStop_ = true; worker_.detach(); }
+    StopToken token;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        token = activeToken_;
+    }
+    if (token)
+    {
+        token->store(true);
+    }
+    if (worker_.joinable())
+    {
+        worker_.detach();
+    }
     running_ = false;
 }
 
@@ -166,13 +188,13 @@ bool AccountBanMonitor::isRunning() const
     return running_.load();
 }
 
-void AccountBanMonitor::run(HWND gameWindow, QString ocrExecutable, int ocrPort)
+void AccountBanMonitor::run(HWND gameWindow, QString ocrExecutable, int ocrPort, const StopToken& token)
 {
     UmiOcrRunner ocrRunner;
     const QString tempPath = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
         .filePath(QStringLiteral("df_playclick_account_ban_%1.png").arg(reinterpret_cast<quintptr>(gameWindow)));
 
-    while (!stopRequested_ && (!IsWindow(gameWindow) || !IsDeltaForceProcessRunning(gameWindow)))
+    while (!token->load() && (!IsWindow(gameWindow) || !IsDeltaForceProcessRunning(gameWindow)))
     {
         if (!IsWindow(gameWindow))
         {
@@ -180,27 +202,27 @@ void AccountBanMonitor::run(HWND gameWindow, QString ocrExecutable, int ocrPort)
         }
         QThread::msleep(250);
     }
-    if (!stopRequested_)
+    if (!token->load())
     {
         emit monitorStatus(QStringLiteral("封禁 OCR 已开始监测"));
     }
 
-    while (!stopRequested_ && IsDeltaForceProcessRunning(gameWindow))
+    while (!token->load() && IsDeltaForceProcessRunning(gameWindow))
     {
         // 登录成功 OCR 与封禁 OCR 共用 UmiOCR 服务，登录阶段避免并发请求导致界面和 OCR 服务拥塞。
-        while (!stopRequested_ && IsDeltaForceProcessRunning(gameWindow)
+        while (!token->load() && IsDeltaForceProcessRunning(gameWindow)
             && loginOcrInFlight.load())
         {
             QThread::msleep(100);
         }
-        if (stopRequested_ || !IsDeltaForceProcessRunning(gameWindow)) break;
+        if (token->load() || !IsDeltaForceProcessRunning(gameWindow)) break;
         const QImage image = CaptureClientArea(gameWindow);
         if (!image.isNull() && image.save(tempPath, "PNG"))
         {
             QString errorText;
             const QString recognizedText = ocrRunner.recognizeImage(tempPath, ocrExecutable, ocrPort, errorText);
             QFile::remove(tempPath);
-            if (!stopRequested_ && IsBanText(recognizedText))
+            if (!token->load() && IsBanText(recognizedText))
             {
                 emit bannedDetected(recognizedText);
                 return;
@@ -208,7 +230,7 @@ void AccountBanMonitor::run(HWND gameWindow, QString ocrExecutable, int ocrPort)
         }
 
         // 封禁监测是独立的低频后台任务，避免持续 OCR 占用机器资源。
-        for (int elapsed = 0; elapsed < 3000 && !stopRequested_; elapsed += 100)
+        for (int elapsed = 0; elapsed < 3000 && !token->load(); elapsed += 100)
         {
             QThread::msleep(100);
         }
