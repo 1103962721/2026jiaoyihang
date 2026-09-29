@@ -27,18 +27,18 @@ void AccountLoginSuccessMonitor::start(HWND hwnd, const QString& exe, int port) 
     stop(); stopRequested_ = false; running_ = true;
     worker_ = std::thread([this, hwnd, exe, port] { run(hwnd, exe, port); running_ = false; });
 }
-void AccountLoginSuccessMonitor::stop() { stopRequested_ = true; if (worker_.joinable()) worker_.join(); running_ = false; }
+void AccountLoginSuccessMonitor::stop() { stopRequested_ = true; if (worker_.joinable()) worker_.detach(); running_ = false; }
 bool AccountLoginSuccessMonitor::isRunning() const { return running_.load(); }
 
 void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
     Q_UNUSED(exe); Q_UNUSED(port);
     emit monitorStatus(QStringLiteral("登录成功 OCR 已开始监测"));
     enum class Stage { Resident, Tab, Prepare } stage = Stage::Resident;
-    qint64 lastSpace = 0, stageDeadline = 0;
+    qint64 lastSpace = 0;
     while (!stopRequested_ && gameProcessAlive(hwnd)) {
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
         if (stage == Stage::Resident && now - lastSpace >= 5000) { lastSpace = now; emit retrySpace(); }
         emit ocrRequested(static_cast<int>(stage));
-        for (int i=0; i<10 && !stopRequested_; ++i) QThread::msleep(500);
+        for (int i=0; i<50 && !stopRequested_; ++i) QThread::msleep(100);
     }
 }

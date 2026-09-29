@@ -11,6 +11,7 @@ class AccountBanMonitor : public QObject
 {
     Q_OBJECT
 public:
+    static std::atomic_bool loginOcrInFlight;
     explicit AccountBanMonitor(QObject* parent = nullptr);
     ~AccountBanMonitor() override;
 
@@ -29,4 +30,5 @@ private:
     std::atomic_bool stopRequested_{false};
     std::atomic_bool running_{false};
     std::thread worker_;
+    std::atomic_bool detachedStop_{false};
 };

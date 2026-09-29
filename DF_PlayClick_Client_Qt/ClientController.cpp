@@ -2909,10 +2909,12 @@ void ClientController::runLoginSuccessOcr(int stage)
     const int port = config_.loadUmiOcrPort();
     const QString keyword = stage == 0 ? QStringLiteral("常驻") : stage == 1 ? QStringLiteral("TAB开始游戏") : QStringLiteral("行前备战");
     std::thread([this, stage, imagePath, executable, port, keyword]() {
+        AccountBanMonitor::loginOcrInFlight = true;
         UmiOcrRunner runner;
         QString error; QRect bounds;
         const bool found = runner.findTextBounds(imagePath, executable, port, keyword, bounds, error);
         QFile::remove(imagePath);
+        AccountBanMonitor::loginOcrInFlight = false;
         QMetaObject::invokeMethod(this, [this, stage, found]() { finishLoginSuccessOcr(stage, found); }, Qt::QueuedConnection);
     }).detach();
 }

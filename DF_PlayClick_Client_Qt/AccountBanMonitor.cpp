@@ -6,6 +6,7 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QThread>
+#include <QDateTime>
 
 #include <cwchar>
 
@@ -128,6 +129,8 @@ bool IsBanText(const QString& recognizedText)
 }
 }
 
+std::atomic_bool AccountBanMonitor::loginOcrInFlight{false};
+
 AccountBanMonitor::AccountBanMonitor(QObject* parent)
     : QObject(parent)
 {
@@ -141,22 +144,20 @@ AccountBanMonitor::~AccountBanMonitor()
 void AccountBanMonitor::start(HWND gameWindow, const QString& ocrExecutable, int ocrPort)
 {
     stop();
+    detachedStop_ = false;
     stopRequested_ = false;
     running_ = true;
     worker_ = std::thread([this, gameWindow, ocrExecutable, ocrPort]() {
         run(gameWindow, ocrExecutable, ocrPort);
         running_ = false;
-        emit monitorStopped();
+        if (!detachedStop_.load()) emit monitorStopped();
     });
 }
 
 void AccountBanMonitor::stop()
 {
     stopRequested_ = true;
-    if (worker_.joinable())
-    {
-        worker_.join();
-    }
+    if (worker_.joinable()) { detachedStop_ = true; worker_.detach(); }
     running_ = false;
 }
 
@@ -186,6 +187,13 @@ void AccountBanMonitor::run(HWND gameWindow, QString ocrExecutable, int ocrPort)
 
     while (!stopRequested_ && IsDeltaForceProcessRunning(gameWindow))
     {
+        // 登录成功 OCR 与封禁 OCR 共用 UmiOCR 服务，登录阶段避免并发请求导致界面和 OCR 服务拥塞。
+        while (!stopRequested_ && IsDeltaForceProcessRunning(gameWindow)
+            && loginOcrInFlight.load())
+        {
+            QThread::msleep(100);
+        }
+        if (stopRequested_ || !IsDeltaForceProcessRunning(gameWindow)) break;
         const QImage image = CaptureClientArea(gameWindow);
         if (!image.isNull() && image.save(tempPath, "PNG"))
         {
