@@ -137,23 +137,6 @@ QString CaptureDesktopOcrRegion(HWND hwnd, const OcrRegionConfig& region, const 
     return imagePath;
 }
 
-QString NormalizeBanOcrText(QString text)
-{
-    text.remove(QRegularExpression(QStringLiteral("[\\s\\p{P}]")));
-    return text;
-}
-
-bool IsBanOcrText(const QString& recognizedText)
-{
-    const QString text = NormalizeBanOcrText(recognizedText);
-    const bool abnormalEnvironment = text.contains(QStringLiteral("游戏环境及行为数据异常"), Qt::CaseInsensitive)
-        || (text.contains(QStringLiteral("游戏环境"), Qt::CaseInsensitive)
-            && text.contains(QStringLiteral("行为数据异常"), Qt::CaseInsensitive));
-    const bool accountFrozen = text.contains(QStringLiteral("账号进行冻结"), Qt::CaseInsensitive)
-        || text.contains(QStringLiteral("账号冻结"), Qt::CaseInsensitive)
-        || text.contains(QStringLiteral("冻结"), Qt::CaseInsensitive);
-    return abnormalEnvironment && accountFrozen;
-}
 }
 
 ClientController::ClientController(QObject* parent)
@@ -3025,8 +3008,9 @@ void ClientController::handleLoginReady()
 {
     if (accountLoginReadyReported_ || !accountLoginRunning_ || !boundHwnd_) return;
     accountLoginReadyReported_ = true;
-    // 登录成功后停止“常驻/TAB/行前备战”判断，继续保留同一个监测线程做封禁 OCR。
-    accountLoginSuccessMonitor_.setStage(3);
+    // “行前备战”已经证明登录成功。停止登录成功判定线程，封禁监测由
+    // AccountBanMonitor 独立负责，避免同一张截图被两个 OCR 流程重复处理。
+    accountLoginSuccessMonitor_.stop();
     loginOcrRunning_ = false;
     rebindGameWindow();
     QTimer::singleShot(500, this, [this]() {
@@ -3038,11 +3022,13 @@ void ClientController::handleLoginReady()
 
 void ClientController::runLoginSuccessOcr(int stage)
 {
-    if ((!accountLoginRunning_ && stage != 3) || (!accountBanMonitoringEnabled_ && stage == 3)
+    // stage 3 曾用于第二条封禁 OCR。封禁现在始终由 AccountBanMonitor 负责，
+    // 不再启动这条登录成功 OCR，也不再输出“上号OCR[封禁]”日志。
+    if (stage == 3 || accountLoginReadyReported_ || !accountLoginRunning_
         || !boundHwnd_ || !binder_.isValid(boundHwnd_)) return;
     if (loginOcrRunning_.exchange(true)) return;
     OcrRegionConfig region;
-    // 常驻、Tab 和封禁都读取完整客户区，避免固定小区域随窗口布局或缩放变化而偏移。
+    // 常驻、菜单和确认阶段读取完整客户区，避免固定小区域随窗口布局或缩放变化而偏移。
     if (stage == 0) { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
     else if (stage == 1) { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
     else if (stage == 2) { region = {true, 1946, 1262, 500, 56, 2560, 1440}; }
@@ -3067,11 +3053,7 @@ void ClientController::runLoginSuccessOcr(int stage)
         bool found = false;
         if (!imagePath.isEmpty())
         {
-            if (stage == 3)
-            {
-                found = !(recognizedText = runner.recognizeImage(imagePath, executable, port, error)).trimmed().isEmpty();
-            }
-            else if (stage == 1 || stage == 4)
+            if (stage == 1 || stage == 4)
             {
                 // 同一张截图一次 OCR 同时接受多个候选词，
                 // 避免为多个候选词重复请求 OCR。
@@ -3109,9 +3091,9 @@ void ClientController::runLoginSuccessOcr(int stage)
         if (controller)
         {
             const QString stageName = stage == 0 ? QStringLiteral("常驻")
-                : stage == 1 ? QStringLiteral("TAB开始游戏")
+                : stage == 1 ? QStringLiteral("菜单")
                 : stage == 2 ? QStringLiteral("行前备战")
-                : stage == 4 ? QStringLiteral("继续/参加/跳转") : QStringLiteral("封禁");
+                : QStringLiteral("前往获取");
             QMetaObject::invokeMethod(controller, [controller, stageName, found, recognizedText, error, elapsed]() {
                 if (controller)
                 {
@@ -3122,14 +3104,6 @@ void ClientController::runLoginSuccessOcr(int stage)
                              error.isEmpty() ? QStringLiteral("<无>") : error));
                 }
             }, Qt::QueuedConnection);
-        }
-        if (stage == 3) {
-            const QString normalized = recognizedText;
-            if (IsBanOcrText(normalized)) {
-                QMetaObject::invokeMethod(controller, [controller, normalized]() {
-                    if (controller) controller->handleAccountBanned(normalized);
-                }, Qt::QueuedConnection);
-            }
         }
         if (!controller) return;
         QMetaObject::invokeMethod(controller, [controller, stage, found, recognizedText]() {
@@ -3142,13 +3116,7 @@ void ClientController::finishLoginSuccessOcr(int stage, bool found, const QStrin
 {
     Q_UNUSED(recognizedText);
     loginOcrRunning_ = false;
-    if (!accountLoginRunning_ || !boundHwnd_) return;
-    if (stage == 3)
-    {
-        // 封禁 OCR 未命中目标文案（包括空文本）时，返回常驻阶段继续轮换。
-        accountLoginSuccessMonitor_.setStage(0);
-        return;
-    }
+    if (accountLoginReadyReported_ || !accountLoginRunning_ || !boundHwnd_) return;
     if (!found)
     {
         // 进入游戏或行前备战未出现时，回到常驻检测，避免卡在中间阶段。

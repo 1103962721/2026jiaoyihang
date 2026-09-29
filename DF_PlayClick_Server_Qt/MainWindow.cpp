@@ -1009,6 +1009,10 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
             accountLoginButton->setMinimumWidth(50);
             accountLoginButton->setEnabled(client.connected && !client.actionRunning);
             connect(accountLoginButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
+                controller_.setAccountLoginConfig(clientId,
+                    loadoutWeapon_, loadoutBackpack_, loadoutEgg_, loadoutBulletName_,
+                    loadoutPerClick_.toInt(), loadoutBulletTotal_.toInt(),
+                    listingTextEdit_->text(), listingPriceEdit_->text(), listingPurchaseCountSpin_->value());
                 controller_.startAccountLogin(clientId);
             });
         }

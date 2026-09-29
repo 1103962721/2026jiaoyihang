@@ -58,6 +58,9 @@ public slots:
     void requestMail(quint64 clientId);
     void requestMailAll();
     void importAccounts(const QString& filePath);
+    void setAccountLoginConfig(quint64 clientId, const QString& weapon, const QString& backpack,
+        const QString& egg, const QString& bulletName, int perClick, int bulletTotal,
+        const QString& listingText, const QString& listingPrice, int purchaseCount);
     void startAccountLogin(quint64 clientId);
     void setAutoExecuteThresholds(int bossCount, int coinCount);
     void setHighPriceStopThreshold(int threshold);
@@ -121,6 +124,7 @@ private:
     bool markAccountBanned(quint64 clientId, QString& accountLine);
     bool appendBannedAccount(const QString& accountLine);
     void handleAccountLoginReady(quint64 clientId);
+    void clearPendingAccountLoginRequests(quint64 clientId);
 
     ServerConnectionManager connectionManager_;
     QTimer autoStartTimer_;
@@ -131,8 +135,21 @@ private:
     QHash<int, quint64> pendingOcrRequests_;
     QHash<int, quint64> pendingSelfThunderRequests_;
     QHash<int, quint64> pendingLoadoutRequests_;
-    struct LoginReadyState { QString listingText; QString listingPrice; int purchaseCount = 1; bool loadoutMode = false; };
+    struct LoginReadyState
+    {
+        QString weapon;
+        QString backpack;
+        QString egg;
+        QString bulletName;
+        int perClick = 0;
+        int bulletTotal = 0;
+        QString listingText;
+        QString listingPrice;
+        int purchaseCount = 1;
+        bool loadoutMode = true;
+    };
     QHash<int, LoginReadyState> pendingLoginReadyLoadouts_;
+    QHash<int, quint64> pendingLoginReadyListings_;
     QHash<quint64, LoginReadyState> loginReadyStates_;
     struct SemiAutoState
     {
