@@ -19,6 +19,7 @@
 #include <QRandomGenerator>
 #include <QScreen>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QThread>
 
 #include <cmath>
@@ -49,6 +50,12 @@ QString NormalizeAmountNumericToken(QString value)
     // 例如：12.133.12 -> 1213312，随后再由服务端格式化为 1,213,312。
     value.remove(QRegularExpression(QStringLiteral("[^0-9]")));
     return value;
+}
+
+QString NormalizeLoginOcrText(QString value)
+{
+    value.remove(QRegularExpression(QStringLiteral("[\\s\\p{P}]")));
+    return value.toCaseFolded();
 }
 
 QString CaptureDesktopOcrRegion(HWND hwnd, const OcrRegionConfig& region, const QString& filePrefix, QString& errorText)
@@ -3030,7 +3037,7 @@ void ClientController::runLoginSuccessOcr(int stage)
     else { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
     const QString executable = config_.loadUmiOcrPath();
     const int port = config_.loadUmiOcrPort();
-    const QString keyword = stage == 0 ? QStringLiteral("常驻") : stage == 1 ? QStringLiteral("Tab") : QStringLiteral("行前备战");
+    const QString keyword = stage == 0 ? QStringLiteral("常驻") : stage == 1 ? QStringLiteral("Tab/战术部门/研发部门/医疗部门") : QStringLiteral("行前备战");
     const HWND gameWindow = boundHwnd_;
     QPointer<ClientController> controller(this);
     std::thread([controller, gameWindow, region, stage, executable, port, keyword]() {
@@ -3045,9 +3052,39 @@ void ClientController::runLoginSuccessOcr(int stage)
         bool found = false;
         if (!imagePath.isEmpty())
         {
-            found = stage == 3
-                ? !(recognizedText = runner.recognizeImage(imagePath, executable, port, error)).trimmed().isEmpty()
-                : runner.findTextBounds(imagePath, executable, port, keyword, bounds, error, false, &recognizedText);
+            if (stage == 3)
+            {
+                found = !(recognizedText = runner.recognizeImage(imagePath, executable, port, error)).trimmed().isEmpty();
+            }
+            else if (stage == 1)
+            {
+                // Tab 阶段一次 OCR 同时接受 Tab、战术部门、研发部门、医疗部门，
+                // 避免为多个候选词重复请求 OCR。
+                recognizedText = runner.recognizeImage(imagePath, executable, port, error);
+                const QString normalizedRecognizedText = NormalizeLoginOcrText(recognizedText);
+                const QStringList tabKeywords{
+                    QStringLiteral("Tab"),
+                    QStringLiteral("战术部门"),
+                    QStringLiteral("研发部门"),
+                    QStringLiteral("医疗部门")
+                };
+                for (const QString& candidate : tabKeywords)
+                {
+                    if (normalizedRecognizedText.contains(NormalizeLoginOcrText(candidate)))
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!error.isEmpty())
+                {
+                    found = false;
+                }
+            }
+            else
+            {
+                found = runner.findTextBounds(imagePath, executable, port, keyword, bounds, error, false, &recognizedText);
+            }
             QFile::remove(imagePath);
         }
         AccountBanMonitor::loginOcrInFlight = false;
