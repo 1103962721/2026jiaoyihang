@@ -35,7 +35,7 @@ void AccountLoginSuccessMonitor::stop() {
     if (worker_.joinable()) worker_.join();
     running_ = false;
 }
-void AccountLoginSuccessMonitor::setStage(int stage) { stage_.store(qBound(0, stage, 5)); }
+void AccountLoginSuccessMonitor::setStage(int stage) { stage_.store(qBound(0, stage, 6)); }
 bool AccountLoginSuccessMonitor::isRunning() const { return running_.load(); }
 
 void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
@@ -48,7 +48,7 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
     while (!stopRequested_ && gameProcessAlive(hwnd)) {
         const qint64 cycleStartedAt = QDateTime::currentMSecsSinceEpoch();
         const int requestedStage = stage_.load();
-        if (requestedStage >= 0 && requestedStage <= 5) {
+        if (requestedStage >= 0 && requestedStage <= 6) {
             if (requestedStage != phaseStage && requestedStage == 1) {
                 tabStageStartedAt = cycleStartedAt;
             } else if (requestedStage != phaseStage && requestedStage == 4) {
@@ -74,7 +74,7 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
         // 常驻命中后先等待 5 秒，再开始“继续/参加/跳转”确认 OCR。
         // 每个阶段只发起一次 OCR，避免多个 OCR 请求并发。
         const bool continueWaiting = phaseStage == 4 && cycleStartedAt - continueStageStartedAt < 5000;
-        if (phaseStage != 5 && !continueWaiting) {
+        if (phaseStage != 5 && phaseStage != 6 && !continueWaiting) {
             emit ocrRequested(phaseStage);
         }
         const int sleepSlices = phaseStage == 5 ? 2 : 20;
@@ -85,7 +85,7 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
 
         const qint64 cycleFinishedAt = QDateTime::currentMSecsSinceEpoch();
         const int changedStage = stage_.load();
-        if (changedStage >= 0 && changedStage <= 5 && changedStage != phaseStage) {
+        if (changedStage >= 0 && changedStage <= 6 && changedStage != phaseStage) {
             phaseStage = changedStage;
             if (phaseStage == 1) {
                 tabStageStartedAt = cycleFinishedAt;
@@ -109,6 +109,10 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
             }
             continue;
         }
+        if (phaseStage == 6) {
+            // 菜单命中后由 UI 线程等待 2 秒再按 Tab；等待期间暂停 OCR。
+            continue;
+        }
         if (phaseStage == 4) {
             // 等待 5 秒后最多识别 15 秒，超时仍然进入菜单识别。
             if (cycleFinishedAt - continueStageStartedAt >= 20000) {
@@ -129,7 +133,7 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
             stage_.store(phaseStage);
             continue;
         }
-        if (phaseStage != 3 && phaseStage != 4 && phaseStage != 5)
+        if (phaseStage != 3 && phaseStage != 4 && phaseStage != 5 && phaseStage != 6)
         {
             phaseStage = 3;
         }

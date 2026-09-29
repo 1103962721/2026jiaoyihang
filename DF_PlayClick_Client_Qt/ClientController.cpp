@@ -3082,7 +3082,8 @@ void ClientController::runLoginSuccessOcr(int stage)
                     QStringLiteral("研发部门"), QStringLiteral("医疗部门")
                 } : QStringList{
                     QStringLiteral("继续"), QStringLiteral("参加"), QStringLiteral("跳转"),
-                    QStringLiteral("前往参加"), QStringLiteral("前往跳转")
+                    QStringLiteral("前往参加"), QStringLiteral("前往跳转"),
+                    QStringLiteral("前往获取"), QStringLiteral("前往")
                 };
                 for (const QString& candidate : keywords)
                 {
@@ -3173,8 +3174,24 @@ void ClientController::finishLoginSuccessOcr(int stage, bool found, const QStrin
     }
     else if (stage == 1)
     {
-        input_.pressKey(VK_TAB, error);
-        accountLoginSuccessMonitor_.setStage(2);
+        // 菜单文字命中后先等待 2 秒，给界面完成切换的时间，再按 Tab。
+        accountLoginSuccessMonitor_.setStage(6);
+        setStatus(QStringLiteral("已识别菜单，2 秒后按 Tab"));
+        QTimer::singleShot(2000, this, [this]() {
+            if (!accountLoginRunning_ || accountLoginReadyReported_ || !boundHwnd_
+                || !binder_.isValid(boundHwnd_))
+            {
+                return;
+            }
+            QString delayedError;
+            if (!input_.pressKey(VK_TAB, delayedError))
+            {
+                setStatus(QStringLiteral("按 Tab 失败：%1").arg(delayedError));
+                accountLoginSuccessMonitor_.setStage(0);
+                return;
+            }
+            accountLoginSuccessMonitor_.setStage(2);
+        });
     }
     else
     {
