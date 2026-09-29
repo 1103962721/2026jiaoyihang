@@ -59,6 +59,7 @@ public slots:
         const QString& egg, const QString& bulletName, int perClick, int bulletTotal,
         const QString& listingText, const QString& listingPrice, int purchaseCount);
     void startAccountLogin(quint64 clientId);
+    void startAccountLoginForAllCoins();
     void setAutoExecuteThresholds(int bossCount, int coinCount);
     void setHighPriceStopThreshold(int threshold);
     void setAutoExecuteEnabled(bool enabled);
@@ -122,6 +123,7 @@ private:
     bool appendBannedAccount(const QString& accountLine);
     void handleAccountLoginReady(quint64 clientId);
     void clearPendingAccountLoginRequests(quint64 clientId);
+    bool dispatchAccountLogin(quint64 clientId);
 
     ServerConnectionManager connectionManager_;
     QTimer autoStartTimer_;

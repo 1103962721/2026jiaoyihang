@@ -186,6 +186,7 @@ void MainWindow::buildUi()
     mailAllButton_ = new QPushButton(QStringLiteral("全部领取邮件"), this);
     settingsButton_ = new QPushButton(QStringLiteral("设置"), this);
     importAccountsButton_ = new QPushButton(QStringLiteral("导入账号"), this);
+    accountLoginAllButton_ = new QPushButton(QStringLiteral("一键上号"), this);
     accountQueueLabel_ = new QLabel(QStringLiteral("账号队列：0/0"), this);
     settingsButton_->setToolTip(QStringLiteral("设置发送顺序、执行模式、验证码方式和购买方式"));
     actionRow->addLayout(countdownBox, 1);
@@ -195,6 +196,7 @@ void MainWindow::buildUi()
     actionRow->addWidget(listingButton_, 0, Qt::AlignBottom);
     actionRow->addWidget(saveLoadoutButton_, 0, Qt::AlignBottom);
     actionRow->addWidget(importAccountsButton_, 0, Qt::AlignBottom);
+    actionRow->addWidget(accountLoginAllButton_, 0, Qt::AlignBottom);
     actionRow->addWidget(accountQueueLabel_, 0, Qt::AlignBottom);
     dispatchLayout->addLayout(actionRow);
 
@@ -449,6 +451,20 @@ void MainWindow::connectSignals()
     connect(importAccountsButton_, &QPushButton::clicked, this, [this]() {
         const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("导入账号文件"), QString(), QStringLiteral("文本文件 (*.txt)"));
         if (!path.isEmpty()) controller_.importAccounts(path);
+    });
+    connect(accountLoginAllButton_, &QPushButton::clicked, this, [this]() {
+        const QVector<ClientListItem> currentClients = controller_.clients();
+        for (const ClientListItem& client : currentClients)
+        {
+            if (!client.connected || client.role != ClientRole::Coin)
+                continue;
+            controller_.setAccountLoginConfig(client.id,
+                loadoutWeapon_, loadoutBackpack_, loadoutEgg_, loadoutBulletName_,
+                loadoutPerClick_.toInt(), loadoutBulletTotal_.toInt(),
+                listingTextEdit_->text(), listingPriceEdit_->text(), listingPurchaseCountSpin_->value());
+        }
+        controller_.startAccountLoginForAllCoins();
+        appendConnectionLog(QStringLiteral("已提交全体币号一键上号任务。"));
     });
     connect(&controller_, &ServerController::accountQueueChanged, this, [this](int total, int remaining, int) {
         if (accountQueueLabel_)

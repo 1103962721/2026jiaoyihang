@@ -91,6 +91,7 @@ private:
     QPushButton* mailAllButton_ = nullptr;
     QPushButton* settingsButton_ = nullptr;
     QPushButton* importAccountsButton_ = nullptr;
+    QPushButton* accountLoginAllButton_ = nullptr;
     QTableWidget* clientTable_ = nullptr;
     QHash<QString, QString> clientNotes_;
     QTextEdit* connectionLogEdit_ = nullptr;

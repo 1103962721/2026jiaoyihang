@@ -1599,6 +1599,11 @@ void ServerController::setAccountLoginConfig(quint64 clientId, const QString& we
 
 void ServerController::startAccountLogin(quint64 clientId)
 {
+    dispatchAccountLogin(clientId);
+}
+
+bool ServerController::dispatchAccountLogin(quint64 clientId)
+{
     if (!loginReadyStates_.contains(clientId))
     {
         // 兼容没有经过新 UI 配置入口的调用方；客户端随后会返回缺少配装参数，
@@ -1637,13 +1642,13 @@ void ServerController::startAccountLogin(quint64 clientId)
     if (!selected)
     {
         emit statusChanged(QStringLiteral("没有可分发的账号"), ServerStatusTone::Error);
-        return;
+        return false;
     }
     QString errorText;
     if (!connectionManager_.requestAccountLogin(clientId, nextAccountLoginRequestId_++, selected->username, selected->password, errorText))
     {
         emit statusChanged(errorText, ServerStatusTone::Error);
-        return;
+        return false;
     }
     if (!selected->assigned)
     {
@@ -1654,6 +1659,21 @@ void ServerController::startAccountLogin(quint64 clientId)
         emit accountQueueChanged(accounts_.size(), accounts_.size() - assigned, assigned);
     }
     emit statusChanged(QStringLiteral("已向币号客户端 %1 下发上号指令").arg(clientId), ServerStatusTone::Neutral);
+    return true;
+}
+
+void ServerController::startAccountLoginForAllCoins()
+{
+    int sent = 0;
+    for (const ClientListItem& client : connectionManager_.clients())
+    {
+        if (!client.connected || client.role != ClientRole::Coin)
+            continue;
+        if (dispatchAccountLogin(client.id))
+            ++sent;
+    }
+    emit statusChanged(QStringLiteral("已向 %1 个币号客户端执行一键上号请求").arg(sent),
+        sent > 0 ? ServerStatusTone::Success : ServerStatusTone::Error);
 }
 
 void ServerController::handleAccountLoginReady(quint64 clientId)
