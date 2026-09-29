@@ -382,6 +382,9 @@ void MainWindow::connectSignals()
         QAction* listingAction = nullptr;
         if (client.role == ClientRole::Coin)
             listingAction = menu.addAction(QStringLiteral("单独上架"));
+        QAction* accountLoginAction = nullptr;
+        if (client.role == ClientRole::Coin)
+            accountLoginAction = menu.addAction(QStringLiteral("上号"));
         QAction* loadoutAction = menu.addAction(QStringLiteral("保存配装"));
         QAction* mailAction = menu.addAction(QStringLiteral("领取邮件"));
         QAction* rebindAction = menu.addAction(QStringLiteral("重新绑定"));
@@ -417,6 +420,14 @@ void MainWindow::connectSignals()
         }
         else if (chosen == listingAction)
             controller_.startListingForClient(clientId, listingTextEdit_->text(), listingPriceEdit_->text(), false, listingPurchaseCountSpin_->value(), !tradePurchase_);
+        else if (chosen == accountLoginAction)
+        {
+            controller_.setAccountLoginConfig(clientId,
+                loadoutWeapon_, loadoutBackpack_, loadoutEgg_, loadoutBulletName_,
+                loadoutPerClick_.toInt(), loadoutBulletTotal_.toInt(),
+                listingTextEdit_->text(), listingPriceEdit_->text(), listingPurchaseCountSpin_->value());
+            controller_.startAccountLogin(clientId);
+        }
         else if (chosen == loadoutAction)
         {
             const bool boss = client.role == ClientRole::Boss;
