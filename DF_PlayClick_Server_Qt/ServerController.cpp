@@ -38,17 +38,6 @@ ServerController::ServerController(QObject* parent)
         [this](quint64 clientId, int requestId, bool success, const QString& text) {
             emit connectionLogAppended(QStringLiteral("币号客户端 %1 保存配装%2：%3")
                 .arg(clientId).arg(success ? QStringLiteral("完成") : QStringLiteral("失败"), text));
-            if (pendingSemiLoadoutRequests_.contains(requestId))
-            {
-                const SemiAutoState state = pendingSemiLoadoutRequests_.take(requestId);
-                if (success)
-                {
-                    semiAutoStates_.insert(clientId, state);
-                    QString errorText;
-                    connectionManager_.requestListing(clientId, nextListingRequestId_++, state.listingText,
-                        state.listingPrice, false, state.purchaseCount, state.loadoutMode, errorText);
-                }
-            }
         });
     connect(&connectionManager_, &ServerConnectionManager::listingResponseReceived, this,
         [this](quint64 clientId, int requestId, bool success, const QString& text) {
@@ -59,39 +48,11 @@ ServerController::ServerController(QObject* parent)
                 : QStringLiteral("失败");
             emit connectionLogAppended(QStringLiteral("币号客户端 %1 上架%2：%3")
                 .arg(clientId).arg(resultLabel, text));
-            if (success && semiAutoStates_.contains(clientId))
-            {
-                SemiAutoState& state = semiAutoStates_[clientId];
-                if (!state.relistedAfterMail)
-                {
-                    QString errorText;
-                    connectionManager_.requestMail(clientId, nextMailRequestId_++, errorText);
-                }
-                else
-                {
-                    semiAutoStates_.remove(clientId);
-                }
-            }
         });
     connect(&connectionManager_, &ServerConnectionManager::mailResponseReceived, this,
         [this](quint64 clientId, int requestId, bool success, const QString& text) {
             emit connectionLogAppended(QStringLiteral("客户端 %1 领取邮件%2：%3")
                 .arg(clientId).arg(success ? QStringLiteral("完成") : QStringLiteral("失败"), text));
-            if (success && semiAutoStates_.contains(clientId))
-            {
-                SemiAutoState& state = semiAutoStates_[clientId];
-                if (!state.relistedAfterMail)
-                {
-                    state.relistedAfterMail = true;
-                    QString errorText;
-                    connectionManager_.requestListing(clientId, nextListingRequestId_++, state.listingText,
-                        state.listingPrice, false, state.purchaseCount, state.loadoutMode, errorText);
-                }
-                else
-                {
-                    semiAutoStates_.remove(clientId);
-                }
-            }
         });
     connect(&connectionManager_, &ServerConnectionManager::timeSyncResponseReceived, this,
         [this](quint64 clientId, int requestId, qint64 clientReceiveMs, qint64 clientSendMs,
@@ -896,18 +857,7 @@ bool ServerController::requestLoadout(quint64 clientId, AutoStartClientState& st
 
     const int requestId = nextOcrRequestId_++;
     QString errorText;
-    QString loadoutType = QStringLiteral("普通");
-    const QVector<ClientListItem> currentClients = connectionManager_.clients();
-    for (const ClientListItem& client : currentClients)
-    {
-        if (client.id == clientId)
-        {
-            loadoutType = client.remark == QStringLiteral("机密") ? QStringLiteral("机密") : QStringLiteral("普通");
-            break;
-        }
-    }
-
-    if (!connectionManager_.requestLoadout(clientId, requestId, loadoutType, errorText))
+    if (!connectionManager_.requestLoadout(clientId, requestId, QStringLiteral("普通"), errorText))
     {
         emit statusChanged(errorText, ServerStatusTone::Error);
         return false;
@@ -1231,12 +1181,10 @@ void ServerController::showSelfThunderPlaceholder(quint64 clientId)
     emit statusChanged(QStringLiteral("自雷功能暂未实现"), ServerStatusTone::Neutral);
 }
 
-void ServerController::setClientRemark(quint64 clientId, const QString& remark)
+void ServerController::setClientNote(quint64 clientId, const QString& note)
 {
-    if (connectionManager_.setClientRemark(clientId, remark))
-    {
+    if (connectionManager_.setClientNote(clientId, note))
         emit statusChanged(QStringLiteral("已更新客户端备注"), ServerStatusTone::Success);
-    }
 }
 
 void ServerController::setClientRole(quint64 clientId, ClientRole role)
@@ -1448,47 +1396,6 @@ void ServerController::saveLoadoutForClient(quint64 clientId, ClientRole targetR
         return;
     }
     emit statusChanged(QStringLiteral("已向客户端 %1 发送保存配装任务").arg(clientId), ServerStatusTone::Success);
-}
-
-void ServerController::startCoinSemiAuto(const QString& weapon, const QString& backpack, const QString& egg,
-    const QString& bulletName, int perClick, int bulletTotal, const QString& listingText,
-    const QString& listingPrice, int purchaseCount, bool loadoutMode)
-{
-    bool priceOk = false;
-    const QString normalizedPrice = listingPrice.trimmed();
-    if (normalizedPrice.toDouble(&priceOk) <= 0.0 || !priceOk || purchaseCount <= 0 || purchaseCount > 99)
-    {
-        emit statusChanged(QStringLiteral("请先填写有效的上架价格和购买次数"), ServerStatusTone::Error);
-        return;
-    }
-    const QStringList values = { weapon.trimmed(), backpack.trimmed(), egg.trimmed(), bulletName.trimmed() };
-    if (std::any_of(values.cbegin(), values.cend(), [](const QString& value) { return value.isEmpty(); })
-        || perClick <= 0 || bulletTotal <= 0 || bulletTotal % perClick != 0)
-    {
-        emit statusChanged(QStringLiteral("请完整填写有效的配装参数"), ServerStatusTone::Error);
-        return;
-    }
-    const SemiAutoState state{ listingText, normalizedPrice, purchaseCount, loadoutMode, false };
-    int sent = 0;
-    for (const ClientListItem& client : connectionManager_.clients())
-    {
-        if (!client.connected || client.role != ClientRole::Coin)
-            continue;
-        const int requestId = nextSaveLoadoutRequestId_++;
-        QString errorText;
-        if (connectionManager_.requestSaveLoadout(client.id, requestId, ClientRole::Coin,
-            values[0], values[1], values[2], values[3], perClick, bulletTotal, errorText))
-        {
-            pendingSemiLoadoutRequests_.insert(requestId, state);
-            ++sent;
-        }
-        else
-        {
-            emit connectionLogAppended(QStringLiteral("币号客户端 %1 半自动下发失败：%2").arg(client.id).arg(errorText));
-        }
-    }
-    emit statusChanged(QStringLiteral("已提交 %1 个币号半自动任务").arg(sent),
-        sent > 0 ? ServerStatusTone::Success : ServerStatusTone::Error);
 }
 
 void ServerController::requestMail(quint64 clientId)

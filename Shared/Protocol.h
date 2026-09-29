@@ -86,9 +86,10 @@ namespace Protocol
 
     inline std::string NormalizeLinePayload(std::string text);
 
-    inline std::string BuildHelloMessage()
+    inline std::string BuildHelloMessage(const std::string& deviceId = {})
     {
-        return "HELLO\n";
+        const std::string normalizedId = NormalizeLinePayload(deviceId);
+        return normalizedId.empty() ? "HELLO\n" : "HELLO " + normalizedId + "\n";
     }
 
     inline std::string BuildReadyMessage(bool ready)
@@ -317,12 +318,6 @@ namespace Protocol
     {
         message = ParsedMessage{};
 
-        if (line == "HELLO")
-        {
-            message.type = MessageType::Hello;
-            return true;
-        }
-
         if (line == "PING")
         {
             message.type = MessageType::Ping;
@@ -365,6 +360,18 @@ namespace Protocol
         if (stream.fail())
         {
             return false;
+        }
+
+        if (command == "HELLO")
+        {
+            std::string deviceId;
+            std::string extra;
+            stream >> deviceId;
+            if (stream >> extra)
+                return false;
+            message.type = MessageType::Hello;
+            message.payload = deviceId;
+            return true;
         }
 
         if (command == "PREPARE_REQUEST")

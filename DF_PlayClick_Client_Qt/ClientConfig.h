@@ -35,6 +35,7 @@ public:
 
     QString loadLastIp() const;
     void saveLastIp(const QString& ip) const;
+    QString loadOrCreateDeviceId() const;
     int loadClickQueueDelayMs() const;
     void saveClickQueueDelayMs(int delayMs) const;
     QString loadUmiOcrPath() const;

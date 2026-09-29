@@ -780,18 +780,15 @@ bool ServerConnectionManager::setClientTeamCode(quint64 clientId, const QString&
     return true;
 }
 
-bool ServerConnectionManager::setClientRemark(quint64 clientId, const QString& remark)
+bool ServerConnectionManager::setClientNote(quint64 clientId, const QString& note)
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto client = findClientLocked(clientId);
         if (!client)
-        {
             return false;
-        }
-        client->remark = remark;
+        client->clientNote = note;
     }
-
     emit clientsChanged();
     return true;
 }
@@ -966,8 +963,9 @@ QVector<ClientListItem> ServerConnectionManager::clients() const
         ClientListItem item;
         item.id = client->id;
         item.ip = client->ip;
+        item.deviceId = client->deviceId;
+        item.clientNote = client->clientNote;
         item.ready = client->ready;
-        item.remark = client->remark;
         item.role = client->role;
         item.teamReadyText = client->teamReadyText;
         item.teamReadyState = client->teamReadyState;
@@ -1079,7 +1077,15 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
                 continue;
             }
 
-            if (message.type == Protocol::MessageType::Ready)
+            if (message.type == Protocol::MessageType::Hello)
+            {
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    client->deviceId = QString::fromStdString(message.payload).trimmed();
+                }
+                emit clientsChanged();
+            }
+            else if (message.type == Protocol::MessageType::Ready)
             {
                 {
                     std::lock_guard<std::mutex> lock(mutex_);

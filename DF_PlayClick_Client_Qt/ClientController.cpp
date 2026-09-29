@@ -53,6 +53,7 @@ QString NormalizeAmountNumericToken(QString value)
 ClientController::ClientController(QObject* parent)
     : QObject(parent)
 {
+    connection_.setDeviceId(config_.loadOrCreateDeviceId());
     unitPrice_ = config_.loadUnitPrice();
     bulletTotal_ = config_.loadBulletTotal();
     countdownTimer_.setInterval(1000);
@@ -1888,40 +1889,49 @@ bool ClientController::executeCoinRevenueClaimSequence(bool& noRevenue, QString&
     };
     if (!waitForListingQuantityReady(errorText, QStringLiteral("coin_revenue_quantity")))
         return false;
-    if (!click(revenueClaimButton) || !waitForAutomation(2000, errorText))
-        return false;
-
-    QElapsedTimer completeTimer;
-    completeTimer.start();
-    bool completeFound = false;
-    int pollIndex = 0;
-    while (completeTimer.elapsed() < TimeoutMs)
+    int claimRound = 0;
+    for (;;)
     {
         if (automationCancelRequested_.load())
         {
             errorText = QStringLiteral("用户或服务端已强制停止当前动作");
             return false;
         }
-
-        QString recognizedText;
-        if (!captureText(1153, 152, 285, 375,
-            QStringLiteral("coin_revenue_complete_%1").arg(++pollIndex), recognizedText))
-        {
-            errorText.clear();
-        }
-        if (recognizedText.simplified().contains(QStringLiteral("领取完成"), Qt::CaseInsensitive))
-        {
-            completeFound = true;
-            break;
-        }
-        if (!waitForAutomation(PollIntervalMs, errorText))
+        if (!click(revenueClaimButton) || !waitForAutomation(2000, errorText))
             return false;
-    }
 
-    if (!completeFound)
-    {
-        errorText = QStringLiteral("5 秒内未找到“领取完成”");
-        return false;
+        QElapsedTimer completeTimer;
+        completeTimer.start();
+        bool completeFound = false;
+        int pollIndex = 0;
+        while (completeTimer.elapsed() < TimeoutMs)
+        {
+            if (automationCancelRequested_.load())
+            {
+                errorText = QStringLiteral("用户或服务端已强制停止当前动作");
+                return false;
+            }
+
+            QString recognizedText;
+            if (!captureText(1153, 152, 285, 375,
+                QStringLiteral("coin_revenue_complete_%1_%2").arg(++claimRound).arg(++pollIndex), recognizedText))
+            {
+                errorText.clear();
+            }
+            if (recognizedText.simplified().contains(QStringLiteral("领取完成"), Qt::CaseInsensitive))
+            {
+                completeFound = true;
+                break;
+            }
+            if (!waitForAutomation(PollIntervalMs, errorText))
+                return false;
+        }
+
+        if (completeFound)
+            break;
+
+        emit connectionLogAppended(QStringLiteral(
+            "币号领取收益：5秒内未找到“领取完成”，重新点击领取按钮（第%1轮）").arg(claimRound));
     }
 
     // 领取完成后立即按空格，随后等待界面标记再返回，避免依赖固定等待时间。
@@ -3020,14 +3030,13 @@ bool ClientController::executeLoadoutSequence(const QString& loadoutType, QStrin
     constexpr int ReferenceHeight = 1440;
     const POINT openLoadout{ 2063, 1290 };
     const POINT normalOption{ 220, 569 };
-    const POINT secretOption{ 216, 666 };
     const POINT firstConfirm{ 2263, 1165 };
     const POINT secondConfirm{ 2260, 1278 };
     const POINT finalConfirm{ 1282, 936 };
-    const POINT typeOption = loadoutType == QStringLiteral("SECRET") ? secretOption : normalOption;
+    Q_UNUSED(loadoutType);
 
     SetForegroundWindow(boundHwnd_);
-    // 配装流程坐标按 2560x1440 客户区参考缩放，普通/机密由服务端备注类型决定。
+    // 配装流程坐标按 2560x1440 客户区参考缩放，统一使用保存配装入口。
     if (!input_.clickReferencePoint(boundHwnd_, openLoadout, ReferenceWidth, ReferenceHeight, 500, errorText))
     {
         return false;
@@ -3038,7 +3047,7 @@ bool ClientController::executeLoadoutSequence(const QString& loadoutType, QStrin
         return false;
     }
     QThread::msleep(1000);
-    if (!input_.clickReferencePoint(boundHwnd_, typeOption, ReferenceWidth, ReferenceHeight, 500, errorText))
+    if (!input_.clickReferencePoint(boundHwnd_, normalOption, ReferenceWidth, ReferenceHeight, 500, errorText))
     {
         return false;
     }

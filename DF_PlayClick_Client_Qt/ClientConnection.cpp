@@ -96,6 +96,11 @@ bool ClientConnection::isReconnecting() const
     return reconnectTimer_.isActive();
 }
 
+void ClientConnection::setDeviceId(const QString& deviceId)
+{
+    deviceId_ = deviceId.trimmed();
+}
+
 void ClientConnection::connectToServer(const QString& ip, int port)
 {
     if (connected_)
@@ -187,7 +192,7 @@ bool ClientConnection::tryConnectToStoredServer(bool reconnecting)
     socket_ = socketHandle;
     heartbeatMisses_ = 0;
     connected_ = true;
-    if (!SocketUtil::SendLine(socket_, Protocol::BuildHelloMessage()))
+    if (!SocketUtil::SendLine(socket_, Protocol::BuildHelloMessage(deviceId_.toStdString())))
     {
         appendConnectionLog(QStringLiteral("连接建立后发送 HELLO 失败，错误码：%1").arg(WSAGetLastError()));
         closesocket(socketHandle);

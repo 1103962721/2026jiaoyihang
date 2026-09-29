@@ -22,6 +22,7 @@ public:
 
     bool isConnected() const;
     bool isReconnecting() const;
+    void setDeviceId(const QString& deviceId);
     void connectToServer(const QString& ip, int port);
     void disconnectFromServer();
     bool sendReady(bool ready);
@@ -80,6 +81,7 @@ private:
     QTimer heartbeatTimer_;
     QTimer reconnectTimer_;
     QString serverIp_;
+    QString deviceId_;
     int serverPort_ = 0;
     bool userRequestedDisconnect_ = true;
     bool desiredReady_ = true;

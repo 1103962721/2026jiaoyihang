@@ -20,8 +20,9 @@ struct ClientListItem
 {
     quint64 id = 0;
     QString ip;
+    QString deviceId;
+    QString clientNote;
     bool ready = false;
-    QString remark;
     ClientRole role = ClientRoleUtil::DefaultRole;
     QString teamReadyText;
     int teamReadyState = -1;

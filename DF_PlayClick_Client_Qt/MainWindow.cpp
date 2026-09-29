@@ -238,7 +238,7 @@ void MainWindow::buildUi()
     auto* roleLayout = new QVBoxLayout(rolePanel);
     roleLayout->setContentsMargins(9, 7, 9, 7);
     roleLayout->setSpacing(2);
-    auto* roleCaption = new QLabel(QStringLiteral("备注类型"), rolePanel);
+    auto* roleCaption = new QLabel(QStringLiteral("角色"), rolePanel);
     roleCaption->setObjectName(QStringLiteral("executionCaption"));
     clientRoleLabel_ = new QLabel(QStringLiteral("由服务端下发：%1")
         .arg(QString::fromStdWString(ClientRoleUtil::ToDisplayText(controller_.clientRole()))), rolePanel);
@@ -264,7 +264,7 @@ void MainWindow::buildUi()
     executionStatusLabel_ = new QLabel(QStringLiteral("最近指令：等待服务端指令"), this);
     executionStatusLabel_->setObjectName(QStringLiteral("executionStatus"));
     executionLayout->addWidget(executionStatusLabel_);
-    auto* executionHint = new QLabel(QStringLiteral("客户端不提供手动取点；接收指令后按备注类型执行对应固定坐标。"), this);
+    auto* executionHint = new QLabel(QStringLiteral("客户端不提供手动取点；接收服务端角色指令后执行对应固定坐标。"), this);
     executionHint->setObjectName(QStringLiteral("hintText"));
     executionHint->setWordWrap(true);
     executionLayout->addWidget(executionHint);

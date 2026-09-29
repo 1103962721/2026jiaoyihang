@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include <algorithm>
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QButtonGroup>
@@ -14,6 +15,8 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QIntValidator>
+#include <QInputDialog>
+#include <QMenu>
 #include <QMessageBox>
 #include <QSizePolicy>
 #include <QSettings>
@@ -176,7 +179,6 @@ void MainWindow::buildUi()
     listingButton_->setObjectName(QStringLiteral("listingButton"));
     saveLoadoutButton_ = new QPushButton(QStringLiteral("保存配装"), this);
     saveLoadoutButton_->setObjectName(QStringLiteral("saveLoadoutButton"));
-    coinSemiAutoButton_ = new QPushButton(QStringLiteral("币号半自动"), this);
     rebindAllButton_ = new QPushButton(QStringLiteral("全部重新绑定"), this);
     forceStopAllButton_ = new QPushButton(QStringLiteral("停止所有动作"), this);
     forceStopAllButton_->setObjectName(QStringLiteral("forceStopAllButton"));
@@ -189,7 +191,6 @@ void MainWindow::buildUi()
     actionRow->addWidget(triggerAllButton_, 0, Qt::AlignBottom);
     actionRow->addWidget(listingButton_, 0, Qt::AlignBottom);
     actionRow->addWidget(saveLoadoutButton_, 0, Qt::AlignBottom);
-    actionRow->addWidget(coinSemiAutoButton_, 0, Qt::AlignBottom);
     dispatchLayout->addLayout(actionRow);
 
     auto* listingTextRow = new QHBoxLayout();
@@ -262,8 +263,6 @@ void MainWindow::buildUi()
     auto* bulkActionRow = new QHBoxLayout();
     bulkActionRow->setSpacing(7);
     bulkActionRow->addStretch();
-    clientStatusButton_ = new QPushButton(QStringLiteral("客户端状态详情"), this);
-    bulkActionRow->addWidget(clientStatusButton_);
     bulkActionRow->addWidget(rebindAllButton_);
     bulkActionRow->addWidget(forceStopAllButton_);
     bulkActionRow->addWidget(mailAllButton_);
@@ -274,29 +273,29 @@ void MainWindow::buildUi()
 
     auto* tableLayout = new QVBoxLayout();
     tableLayout->setContentsMargins(0, 0, 0, 0);
-    clientTable_ = new QTableWidget(0, 8, this);
+    clientTable_ = new QTableWidget(0, 7, this);
     clientTable_->setHorizontalHeaderLabels({
-        QStringLiteral("客户端 IP"), QStringLiteral("备注类型"),
+        QStringLiteral("客户端 IP"), QStringLiteral("角色 / 备注"),
         QStringLiteral("上架/准备状态"), QStringLiteral("期望金额"), QStringLiteral("当前金额"),
-        QStringLiteral("累计收益"), QStringLiteral("低价/高价"), QStringLiteral("操作")
+        QStringLiteral("累计收益"), QStringLiteral("低价/高价")
     });
     // 各列使用接近均衡的固定宽度，避免 IP 列独占大量空间。
     clientTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
     clientTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Fixed);
     clientTable_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Fixed);
     clientTable_->horizontalHeader()->resizeSection(0, 220);
-    clientTable_->horizontalHeader()->resizeSection(1, 154);
+    clientTable_->horizontalHeader()->resizeSection(1, 240);
     clientTable_->horizontalHeader()->resizeSection(2, 140);
     clientTable_->horizontalHeader()->resizeSection(3, 100);
     clientTable_->horizontalHeader()->resizeSection(4, 100);
     clientTable_->horizontalHeader()->resizeSection(5, 110);
     clientTable_->horizontalHeader()->resizeSection(6, 100);
-    clientTable_->horizontalHeader()->resizeSection(7, 390);
     clientTable_->verticalHeader()->setVisible(false);
     clientTable_->verticalHeader()->setDefaultSectionSize(40);
     clientTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     clientTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
     clientTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    clientTable_->setContextMenuPolicy(Qt::CustomContextMenu);
     tableLayout->addWidget(clientTable_);
     bodyLayout->addWidget(createCard(QStringLiteral("客户端列表"), tableLayout), 1);
 
@@ -349,16 +348,88 @@ void MainWindow::connectSignals()
             loadoutPerClick_.toInt(), loadoutBulletTotal_.toInt());
         appendConnectionLog(QStringLiteral("已提交币号保存配装任务。"));
     });
-    connect(coinSemiAutoButton_, &QPushButton::clicked, this, [this]() {
-        controller_.startCoinSemiAuto(loadoutWeapon_, loadoutBackpack_, loadoutEgg_, loadoutBulletName_,
-            loadoutPerClick_.toInt(), loadoutBulletTotal_.toInt(), listingTextEdit_->text(), listingPriceEdit_->text(),
-            listingPurchaseCountSpin_->value(), !tradePurchase_);
-        appendConnectionLog(QStringLiteral("已提交币号半自动保存配装任务。"));
-    });
     connect(forceStopAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestForceStopAllActions);
     connect(mailAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestMailAll);
     connect(rebindAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestRebindAllWindows);
     connect(settingsButton_, &QPushButton::clicked, this, &MainWindow::showSettingsDialog);
+    connect(clientTable_, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& position) {
+        const QModelIndex index = clientTable_->indexAt(position);
+        if (!index.isValid())
+            return;
+        const int row = index.row();
+        clientTable_->selectRow(row);
+        const quint64 clientId = clientIdForRow(row);
+        if (clientId == 0)
+            return;
+        const QVector<ClientListItem> currentClients = controller_.clients();
+        const auto iterator = std::find_if(currentClients.cbegin(), currentClients.cend(),
+            [clientId](const ClientListItem& client) { return client.id == clientId; });
+        if (iterator == currentClients.cend())
+            return;
+        const ClientListItem client = *iterator;
+        QMenu menu(this);
+        QAction* coinAction = menu.addAction(QStringLiteral("设置为币号"));
+        QAction* bossAction = menu.addAction(QStringLiteral("设置为老板"));
+        menu.addSeparator();
+        QAction* noteAction = menu.addAction(QStringLiteral("编辑备注"));
+        QAction* clearNoteAction = menu.addAction(QStringLiteral("清空备注"));
+        menu.addSeparator();
+        QAction* listingAction = nullptr;
+        if (client.role == ClientRole::Coin)
+            listingAction = menu.addAction(QStringLiteral("单独上架"));
+        QAction* loadoutAction = menu.addAction(QStringLiteral("保存配装"));
+        QAction* mailAction = menu.addAction(QStringLiteral("领取邮件"));
+        QAction* rebindAction = menu.addAction(QStringLiteral("重新绑定"));
+        QAction* stopAction = menu.addAction(QStringLiteral("停止动作"));
+        QAction* kickAction = menu.addAction(QStringLiteral("断开客户端"));
+        QAction* chosen = menu.exec(clientTable_->viewport()->mapToGlobal(position));
+        if (chosen == coinAction)
+            controller_.setClientRole(clientId, ClientRole::Coin);
+        else if (chosen == bossAction)
+            controller_.setClientRole(clientId, ClientRole::Boss);
+        else if (chosen == noteAction)
+        {
+            bool accepted = false;
+            const QString currentNote = clientNotes_.value(client.deviceId, client.clientNote);
+            const QString note = QInputDialog::getText(this, QStringLiteral("编辑备注"),
+                QStringLiteral("备注"), QLineEdit::Normal, currentNote, &accepted);
+            if (accepted)
+            {
+                clientNotes_[client.deviceId] = note;
+                QSettings settings(QCoreApplication::applicationDirPath() + QStringLiteral("/DF_PlayClick_Server.ini"), QSettings::IniFormat);
+                settings.setValue(QStringLiteral("ClientNotes/%1").arg(client.deviceId), note);
+                settings.sync();
+                controller_.setClientNote(clientId, note);
+            }
+        }
+        else if (chosen == clearNoteAction)
+        {
+            clientNotes_.remove(client.deviceId);
+            QSettings settings(QCoreApplication::applicationDirPath() + QStringLiteral("/DF_PlayClick_Server.ini"), QSettings::IniFormat);
+            settings.remove(QStringLiteral("ClientNotes/%1").arg(client.deviceId));
+            settings.sync();
+            controller_.setClientNote(clientId, QString());
+        }
+        else if (chosen == listingAction)
+            controller_.startListingForClient(clientId, listingTextEdit_->text(), listingPriceEdit_->text(), false, listingPurchaseCountSpin_->value(), !tradePurchase_);
+        else if (chosen == loadoutAction)
+        {
+            const bool boss = client.role == ClientRole::Boss;
+            controller_.saveLoadoutForClient(clientId, client.role,
+                boss ? bossLoadoutWeapon_ : loadoutWeapon_, boss ? bossLoadoutBackpack_ : loadoutBackpack_,
+                boss ? bossLoadoutEgg_ : loadoutEgg_, boss ? bossLoadoutBulletName_ : loadoutBulletName_,
+                (boss ? bossLoadoutPerClick_ : loadoutPerClick_).toInt(),
+                (boss ? bossLoadoutBulletTotal_ : loadoutBulletTotal_).toInt());
+        }
+        else if (chosen == mailAction)
+            controller_.requestMail(clientId);
+        else if (chosen == rebindAction)
+            controller_.requestRebindWindow(clientId);
+        else if (chosen == stopAction)
+            controller_.requestForceStopAction(clientId);
+        else if (chosen == kickAction)
+            controller_.kickClient(clientId);
+    });
     connect(autoBossThresholdSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         controller_.setAutoExecuteThresholds(autoBossThresholdSpin_->value(), autoCoinThresholdSpin_->value());
     });
@@ -368,115 +439,6 @@ void MainWindow::connectSignals()
     connect(highPriceStopThresholdSpin_, qOverload<int>(&QSpinBox::valueChanged), &controller_,
         &ServerController::setHighPriceStopThreshold);
     connect(autoExecuteCheck_, &QCheckBox::toggled, &controller_, &ServerController::setAutoExecuteEnabled);
-    connect(clientStatusButton_, &QPushButton::clicked, this, [this]() {
-        auto* dialog = new QDialog(this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        dialog->setWindowTitle(QStringLiteral("客户端状态详情"));
-        dialog->resize(1260, 480);
-
-        auto* layout = new QVBoxLayout(dialog);
-        layout->setContentsMargins(12, 12, 12, 12);
-        auto* table = new QTableWidget(0, 10, dialog);
-        table->setHorizontalHeaderLabels({
-            QStringLiteral("客户端"), QStringLiteral("IP"), QStringLiteral("备注类型"),
-            QStringLiteral("当前动作"), QStringLiteral("上架/准备状态"), QStringLiteral("期望金额"),
-            QStringLiteral("当前金额"), QStringLiteral("累计收益"), QStringLiteral("低价/高价"), QStringLiteral("操作")
-        });
-        table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        table->setSelectionBehavior(QAbstractItemView::SelectRows);
-        table->setSelectionMode(QAbstractItemView::SingleSelection);
-        table->setAlternatingRowColors(true);
-        table->horizontalHeader()->setSectionResizeMode(QHeaderView::Fixed);
-        table->horizontalHeader()->resizeSection(0, 75);
-        table->horizontalHeader()->resizeSection(1, 220);
-        table->horizontalHeader()->resizeSection(2, 120);
-        table->horizontalHeader()->resizeSection(3, 150);
-        table->horizontalHeader()->resizeSection(4, 100);
-        table->horizontalHeader()->resizeSection(5, 330);
-        layout->addWidget(table);
-
-        const auto refreshDetailTable = [table, this](const QVector<ClientListItem>& clients) {
-            table->setRowCount(0);
-            for (const ClientListItem& client : clients)
-            {
-                const int row = table->rowCount();
-                table->insertRow(row);
-                const QString roleText = QString::fromStdWString(ClientRoleUtil::ToDisplayText(client.role));
-                const bool isBoss = client.role == ClientRole::Boss;
-                const QStringList values = {
-                    QString::number(client.id), client.ip, roleText,
-                    client.actionRunning ? client.runningAction : QStringLiteral("空闲"),
-                    client.role == ClientRole::Coin ? client.listingStatus : client.teamReadyText,
-                    isBoss ? client.expectedAmount : QStringLiteral("-"),
-                    formatAmountForDisplay(client.currentAmount),
-                    isBoss ? QString::number(client.cumulativeIncome) : QStringLiteral("-"),
-                    isBoss ? QStringLiteral("低价:%1 / 高价:%2").arg(client.lowPriceCount).arg(client.highPriceCount) : QStringLiteral("-")
-                };
-                for (int column = 0; column < values.size(); ++column)
-                {
-                    auto* item = new QTableWidgetItem(values.at(column));
-                    if (column == 4)
-                    {
-                        item->setTextAlignment(Qt::AlignCenter);
-                        const QString status = values.at(column);
-                        if (status == QStringLiteral("成功"))
-                        {
-                            item->setForeground(QColor(QStringLiteral("#16a34a")));
-                        }
-                        else if (status == QStringLiteral("少"))
-                        {
-                            item->setForeground(QColor(QStringLiteral("#d97706")));
-                        }
-                        else if (status == QStringLiteral("超出") || status == QStringLiteral("失败"))
-                        {
-                            item->setForeground(QColor(QStringLiteral("#dc2626")));
-                        }
-                    }
-                    table->setItem(row, column, item);
-                }
-
-                auto* actionCell = new QWidget(table);
-                auto* actionLayout = new QHBoxLayout(actionCell);
-                actionLayout->setContentsMargins(2, 2, 2, 2);
-                actionLayout->setSpacing(3);
-                auto* rebindButton = new QPushButton(QStringLiteral("重新绑定"), actionCell);
-                auto* stopActionButton = new QPushButton(QStringLiteral("停止动作"), actionCell);
-                auto* loadoutButton = new QPushButton(QStringLiteral("配装"), actionCell);
-                auto* kickButton = new QPushButton(QStringLiteral("断开"), actionCell);
-                rebindButton->setMinimumWidth(72);
-                stopActionButton->setMinimumWidth(72);
-                loadoutButton->setMinimumWidth(54);
-                kickButton->setMinimumWidth(52);
-                connect(rebindButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
-                    controller_.requestRebindWindow(clientId);
-                });
-                connect(stopActionButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
-                    controller_.requestForceStopAction(clientId);
-                });
-                connect(loadoutButton, &QPushButton::clicked, this, [this, clientId = client.id, role = client.role]() {
-                    const bool boss = role == ClientRole::Boss;
-                    controller_.saveLoadoutForClient(clientId, role,
-                        boss ? bossLoadoutWeapon_ : loadoutWeapon_,
-                        boss ? bossLoadoutBackpack_ : loadoutBackpack_,
-                        boss ? bossLoadoutEgg_ : loadoutEgg_,
-                        boss ? bossLoadoutBulletName_ : loadoutBulletName_,
-                        (boss ? bossLoadoutPerClick_ : loadoutPerClick_).toInt(),
-                        (boss ? bossLoadoutBulletTotal_ : loadoutBulletTotal_).toInt());
-                });
-                connect(kickButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
-                    controller_.kickClient(clientId);
-                });
-                actionLayout->addWidget(rebindButton);
-                actionLayout->addWidget(stopActionButton);
-                actionLayout->addWidget(loadoutButton);
-                actionLayout->addWidget(kickButton);
-                table->setCellWidget(row, 9, actionCell);
-            }
-        };
-        connect(&controller_, &ServerController::clientsChanged, dialog, refreshDetailTable);
-        refreshDetailTable(controller_.clients());
-        dialog->show();
-    });
     const auto syncAutoParameters = [this]() {
         controller_.updateAutoExecuteParameters(countdownEdit_->text(), groupDelayEdit_->text(), coinFirst_,
             compensationEnabled_, compensationLeadEdit_->text(), bossPriceEdit_->text());
@@ -705,6 +667,12 @@ void MainWindow::loadPersistentLoadoutSettings()
     bossLoadoutBulletName_ = settings.value(QStringLiteral("BossLoadout/BulletName"), bossLoadoutBulletName_).toString();
     bossLoadoutPerClick_ = settings.value(QStringLiteral("BossLoadout/PerClick"), bossLoadoutPerClick_).toString();
     bossLoadoutBulletTotal_ = settings.value(QStringLiteral("BossLoadout/BulletTotal"), bossLoadoutBulletTotal_).toString();
+    const QStringList noteKeys = settings.allKeys();
+    for (const QString& key : noteKeys)
+    {
+        if (key.startsWith(QStringLiteral("ClientNotes/")))
+            clientNotes_.insert(key.mid(QStringLiteral("ClientNotes/").size()), settings.value(key).toString());
+    }
 }
 
 void MainWindow::savePersistentLoadoutSettings() const
@@ -876,40 +844,12 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
         ipItem->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(client.id));
         clientTable_->setItem(row, 0, ipItem);
 
-        // 备注类型使用互斥胶囊按钮，点击后仍复用现有角色更新与调度链路。
-        auto* roleCell = new QWidget(clientTable_);
-        roleCell->setObjectName(QStringLiteral("roleCell"));
-        auto* roleCellLayout = new QHBoxLayout(roleCell);
-        roleCellLayout->setContentsMargins(0, 0, 0, 0);
-        roleCellLayout->setSpacing(0);
-        auto* roleSelector = new QWidget(roleCell);
-        roleSelector->setObjectName(QStringLiteral("roleSelector"));
-        roleSelector->setFixedWidth(132);
-        auto* roleLayout = new QHBoxLayout(roleSelector);
-        roleLayout->setContentsMargins(2, 2, 2, 2);
-        roleLayout->setSpacing(2);
-        auto* coinButton = new QPushButton(QStringLiteral("币号"), roleSelector);
-        coinButton->setObjectName(QStringLiteral("coinRoleButton"));
-        coinButton->setCheckable(true);
-        auto* bossButton = new QPushButton(QStringLiteral("老板"), roleSelector);
-        bossButton->setObjectName(QStringLiteral("bossRoleButton"));
-        bossButton->setCheckable(true);
-        auto* roleGroup = new QButtonGroup(roleSelector);
-        roleGroup->setExclusive(true);
-        roleGroup->addButton(coinButton);
-        roleGroup->addButton(bossButton);
-        coinButton->setChecked(client.role == ClientRole::Coin);
-        bossButton->setChecked(client.role == ClientRole::Boss);
-        roleLayout->addWidget(coinButton);
-        roleLayout->addWidget(bossButton);
-        roleCellLayout->addWidget(roleSelector, 0, Qt::AlignCenter);
-        connect(coinButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
-            controller_.setClientRole(clientId, ClientRole::Coin);
-        });
-        connect(bossButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
-            controller_.setClientRole(clientId, ClientRole::Boss);
-        });
-        clientTable_->setCellWidget(row, 1, roleCell);
+        const QString roleText = QString::fromStdWString(ClientRoleUtil::ToDisplayText(client.role));
+        const QString displayNote = clientNotes_.value(client.deviceId, client.clientNote);
+        auto* roleNoteItem = new QTableWidgetItem(QStringLiteral("%1 / %2").arg(roleText,
+            displayNote.isEmpty() ? QStringLiteral("（无备注）") : displayNote));
+        roleNoteItem->setToolTip(displayNote);
+        clientTable_->setItem(row, 1, roleNoteItem);
 
         const QString displayStatus = client.role == ClientRole::Coin
             ? client.listingStatus
@@ -969,62 +909,8 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
             ? QStringLiteral("低价:%1 / 高价:%2").arg(client.lowPriceCount).arg(client.highPriceCount)
             : QStringLiteral("-")));
 
-        auto* actionCell = new QWidget(clientTable_);
-        auto* actionLayout = new QHBoxLayout(actionCell);
-        actionLayout->setContentsMargins(2, 2, 2, 2);
-        actionLayout->setSpacing(3);
-        auto* rebindButton = new QPushButton(QStringLiteral("重新绑定"), actionCell);
-        auto* stopActionButton = new QPushButton(QStringLiteral("停止动作"), actionCell);
-        auto* loadoutButton = new QPushButton(QStringLiteral("配装"), actionCell);
-        auto* mailButton = new QPushButton(QStringLiteral("领取邮件"), actionCell);
-        QPushButton* listingButton = nullptr;
-        if (client.role == ClientRole::Coin)
-        {
-            listingButton = new QPushButton(QStringLiteral("上架"), actionCell);
-            listingButton->setMinimumWidth(50);
-            connect(listingButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
-                controller_.startListingForClient(clientId, listingTextEdit_->text(), listingPriceEdit_->text(),
-                    false, listingPurchaseCountSpin_->value(), !tradePurchase_);
-            });
-        }
-        auto* kickButton = new QPushButton(QStringLiteral("断开"), actionCell);
-        rebindButton->setMinimumWidth(70);
-        stopActionButton->setMinimumWidth(70);
-        loadoutButton->setMinimumWidth(54);
-        mailButton->setMinimumWidth(70);
-        kickButton->setMinimumWidth(50);
-        connect(rebindButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
-            controller_.requestRebindWindow(clientId);
-        });
-        connect(stopActionButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
-            controller_.requestForceStopAction(clientId);
-        });
-        connect(loadoutButton, &QPushButton::clicked, this, [this, clientId = client.id, role = client.role]() {
-            const bool boss = role == ClientRole::Boss;
-            controller_.saveLoadoutForClient(clientId, role,
-                boss ? bossLoadoutWeapon_ : loadoutWeapon_,
-                boss ? bossLoadoutBackpack_ : loadoutBackpack_,
-                boss ? bossLoadoutEgg_ : loadoutEgg_,
-                boss ? bossLoadoutBulletName_ : loadoutBulletName_,
-                (boss ? bossLoadoutPerClick_ : loadoutPerClick_).toInt(),
-                (boss ? bossLoadoutBulletTotal_ : loadoutBulletTotal_).toInt());
-        });
-        connect(mailButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
-            controller_.requestMail(clientId);
-        });
-        connect(kickButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
-            controller_.kickClient(clientId);
-        });
-        actionLayout->addWidget(rebindButton);
-        actionLayout->addWidget(stopActionButton);
-        actionLayout->addWidget(loadoutButton);
-        actionLayout->addWidget(mailButton);
-        if (listingButton)
-        {
-            actionLayout->addWidget(listingButton);
-        }
-        actionLayout->addWidget(kickButton);
-        clientTable_->setCellWidget(row, 7, actionCell);
+        auto* idItem = clientTable_->item(row, 0);
+        idItem->setData(Qt::UserRole + 1, client.deviceId);
     }
     clientCountBadge_->setText(QStringLiteral("%1 客户端").arg(clients.size()));
 }

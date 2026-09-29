@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QLabel>
+#include <QHash>
 #include <QCheckBox>
 #include <QLineEdit>
 #include <QMainWindow>
@@ -84,13 +85,12 @@ private:
     QPushButton* triggerAllButton_ = nullptr;
     QPushButton* listingButton_ = nullptr;
     QPushButton* saveLoadoutButton_ = nullptr;
-    QPushButton* coinSemiAutoButton_ = nullptr;
     QPushButton* rebindAllButton_ = nullptr;
     QPushButton* forceStopAllButton_ = nullptr;
     QPushButton* mailAllButton_ = nullptr;
     QPushButton* settingsButton_ = nullptr;
-    QPushButton* clientStatusButton_ = nullptr;
     QTableWidget* clientTable_ = nullptr;
+    QHash<QString, QString> clientNotes_;
     QTextEdit* connectionLogEdit_ = nullptr;
     QTimer serverTimeTimer_;
 };

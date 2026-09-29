@@ -40,7 +40,7 @@ public slots:
     void forceResetClientAction(quint64 clientId);
     void setClientTeamCode(quint64 clientId, const QString& teamCode);
     void showSelfThunderPlaceholder(quint64 clientId);
-    void setClientRemark(quint64 clientId, const QString& remark);
+    void setClientNote(quint64 clientId, const QString& note);
     void setClientRole(quint64 clientId, ClientRole role);
     void startListing(const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, bool loadoutMode);
     void startListingForClient(quint64 clientId, const QString& listingText, const QString& listingPrice,
@@ -51,9 +51,6 @@ public slots:
         const QString& bulletName, int perClick, int bulletTotal);
     void saveLoadoutForClient(quint64 clientId, ClientRole role, const QString& weapon, const QString& backpack,
         const QString& egg, const QString& bulletName, int perClick, int bulletTotal);
-    void startCoinSemiAuto(const QString& weapon, const QString& backpack, const QString& egg,
-        const QString& bulletName, int perClick, int bulletTotal, const QString& listingText,
-        const QString& listingPrice, int purchaseCount, bool loadoutMode);
     void requestMail(quint64 clientId);
     void requestMailAll();
     void setAutoExecuteThresholds(int bossCount, int coinCount);
@@ -124,16 +121,6 @@ private:
     QHash<int, quint64> pendingOcrRequests_;
     QHash<int, quint64> pendingSelfThunderRequests_;
     QHash<int, quint64> pendingLoadoutRequests_;
-    struct SemiAutoState
-    {
-        QString listingText;
-        QString listingPrice;
-        int purchaseCount = 1;
-        bool loadoutMode = false;
-        bool relistedAfterMail = false;
-    };
-    QHash<int, SemiAutoState> pendingSemiLoadoutRequests_;
-    QHash<quint64, SemiAutoState> semiAutoStates_;
     qint64 autoStartCycleStartedAtMs_ = 0;
     int nextOcrRequestId_ = 1;
     int nextListingRequestId_ = 1;

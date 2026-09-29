@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QUuid>
 #include <QStringList>
 #include <QtGlobal>
 
@@ -23,6 +24,25 @@ QString ClientConfig::loadLastIp() const
 void ClientConfig::saveLastIp(const QString& ip) const
 {
     WritePrivateProfileStringW(L"Server", L"IP", reinterpret_cast<LPCWSTR>(ip.utf16()), reinterpret_cast<LPCWSTR>(configPath().utf16()));
+}
+
+QString ClientConfig::loadOrCreateDeviceId() const
+{
+    wchar_t buffer[128]{};
+    const QString path = configPath();
+    GetPrivateProfileStringW(L"Client", L"DeviceId", L"", buffer, 128,
+                             reinterpret_cast<LPCWSTR>(path.utf16()));
+    const QString existing = QString::fromWCharArray(buffer).trimmed();
+    if (!existing.isEmpty())
+    {
+        return existing;
+    }
+
+    const QString generated = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    WritePrivateProfileStringW(L"Client", L"DeviceId",
+                               reinterpret_cast<LPCWSTR>(generated.utf16()),
+                               reinterpret_cast<LPCWSTR>(path.utf16()));
+    return generated;
 }
 
 int ClientConfig::loadClickQueueDelayMs() const

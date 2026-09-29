@@ -54,7 +54,7 @@ public:
     bool resetClientTeamReadyDisplay(quint64 clientId);
     bool forceResetClientAction(quint64 clientId);
     bool setClientTeamCode(quint64 clientId, const QString& teamCode, QString& errorText);
-    bool setClientRemark(quint64 clientId, const QString& remark);
+    bool setClientNote(quint64 clientId, const QString& note);
     bool setClientRole(quint64 clientId, ClientRole role);
     bool setClientListingStatus(quint64 clientId, const QString& status);
     bool resetClientListingQuantity(quint64 clientId);
@@ -86,8 +86,9 @@ private:
         quint64 id = 0;
         SOCKET socketHandle = INVALID_SOCKET;
         QString ip;
+        QString deviceId;
+        QString clientNote;
         ClientRole role = ClientRoleUtil::DefaultRole;
-        QString remark = QStringLiteral("普通");
         QString teamReadyText = QStringLiteral("未识别");
         int teamReadyState = -1;
         int teamReadyCurrent = 0;
