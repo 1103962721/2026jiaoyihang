@@ -24,6 +24,40 @@ namespace
 
     const OcrRequestRegion ActionRegion{ 1945, 1261, 500, 60, AutoStartReferenceWidth, AutoStartReferenceHeight };
     const OcrRequestRegion MapTypeRegion{ 0, 0, 300, 60, AutoStartReferenceWidth, AutoStartReferenceHeight };
+
+    QString AccountCredentialKey(const QString& username, const QString& password)
+    {
+        return username.trimmed() + QChar(0x1f) + password.trimmed();
+    }
+
+    QSet<QString> LoadBannedAccountKeys()
+    {
+        QSet<QString> keys;
+        const QString filePath = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("封号.txt"));
+        QFile file(filePath);
+        if (!file.exists() || !file.open(QIODevice::ReadOnly | QIODevice::Text))
+        {
+            return keys;
+        }
+
+        QTextStream stream(&file);
+        while (!stream.atEnd())
+        {
+            const QString line = stream.readLine().trimmed();
+            const int separator = line.indexOf(QStringLiteral("----"));
+            if (separator <= 0 || separator + 4 >= line.size())
+            {
+                continue;
+            }
+            const QString username = line.left(separator).trimmed();
+            const QString password = line.mid(separator + 4).trimmed();
+            if (!username.isEmpty() && !password.isEmpty())
+            {
+                keys.insert(AccountCredentialKey(username, password));
+            }
+        }
+        return keys;
+    }
 }
 
 ServerController::ServerController(QObject* parent)
@@ -1610,6 +1644,8 @@ void ServerController::importAccounts(const QString& filePath)
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) { emit statusChanged(QStringLiteral("账号文件打开失败"), ServerStatusTone::Error); return; }
     QVector<AccountCredential> loaded;
     QSet<QString> seenCredentials;
+    const QSet<QString> bannedCredentials = LoadBannedAccountKeys();
+    int skippedBanned = 0;
     QTextStream stream(&file);
     while (!stream.atEnd())
     {
@@ -1617,16 +1653,23 @@ void ServerController::importAccounts(const QString& filePath)
         const int separator = line.indexOf(QStringLiteral("----"));
         if (separator <= 0 || separator + 4 >= line.size()) continue;
         AccountCredential item{line.left(separator).trimmed(), line.mid(separator + 4).trimmed(), false, false, 0};
-        const QString key = item.username + QChar(0x1f) + item.password;
+        const QString key = AccountCredentialKey(item.username, item.password);
         if (!item.username.isEmpty() && !item.password.isEmpty() && !seenCredentials.contains(key))
         {
             seenCredentials.insert(key);
+            if (bannedCredentials.contains(key))
+            {
+                ++skippedBanned;
+                continue;
+            }
             loaded.push_back(item);
         }
     }
     accounts_ = loaded;
     emit accountQueueChanged(accounts_.size(), accounts_.size(), 0);
-    emit statusChanged(QStringLiteral("已导入 %1 个账号").arg(accounts_.size()), ServerStatusTone::Success);
+    emit statusChanged(skippedBanned > 0
+        ? QStringLiteral("已导入 %1 个账号，跳过 %2 个封禁账号").arg(accounts_.size()).arg(skippedBanned)
+        : QStringLiteral("已导入 %1 个账号").arg(accounts_.size()), ServerStatusTone::Success);
 }
 
 void ServerController::setAccountLoginConfig(quint64 clientId, const QString& weapon, const QString& backpack,
@@ -1655,6 +1698,15 @@ void ServerController::startAccountLogin(quint64 clientId)
         // 但不会误用旧的固定坐标 LOADOUT_REQUEST。
         loginReadyStates_.insert(clientId, LoginReadyState{});
     }
+    const QSet<QString> bannedCredentials = LoadBannedAccountKeys();
+    for (AccountCredential& account : accounts_)
+    {
+        if (bannedCredentials.contains(AccountCredentialKey(account.username, account.password)))
+        {
+            account.banned = true;
+        }
+    }
+
     AccountCredential* selected = nullptr;
     for (AccountCredential& account : accounts_)
     {
