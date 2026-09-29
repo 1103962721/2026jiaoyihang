@@ -153,16 +153,17 @@ ClientController::ClientController(QObject* parent)
         }
     });
     connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::loginReady, this, &ClientController::handleLoginReady);
+    connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::ocrRequested, this, &ClientController::runLoginSuccessOcr, Qt::QueuedConnection);
     connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::residentFound, this, [this]() {
         if (!boundHwnd_) return; QString error;
         POINT p{386, 1192}; input_.clickReferencePoint(boundHwnd_, p, 2560, 1440, 0, error);
-        QTimer::singleShot(1500, this, []() {});
+        QTimer::singleShot(1500, this, [this]() { setStatus(QStringLiteral("常驻点击完成，继续检测登录界面")); });
     });
     connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::tabFound, this, [this]() {
         QString error; input_.pressKey(VK_TAB, error);
     });
     connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::retrySpace, this, [this]() {
-        QString error; input_.holdKey(VK_SPACE, 3000, error);
+        QTimer::singleShot(0, this, [this]() { QString error; input_.holdKey(VK_SPACE, 3000, error); });
     });
     connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::monitorStatus, this, [this](const QString& text) { setStatus(text); });
     connect(&accountLoginAutomation_, &AccountLoginAutomation::finished, this, [this](bool success, const QString& text) {
@@ -2889,6 +2890,30 @@ void ClientController::handleLoginReady()
         connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("READY"), QStringLiteral("行前备战，登录成功"));
         setStatus(QStringLiteral("已识别行前备战，登录成功"));
     });
+}
+
+void ClientController::runLoginSuccessOcr(int stage)
+{
+    if (!accountLoginRunning_ || !boundHwnd_ || !binder_.isValid(boundHwnd_)) return;
+    OcrRegionConfig region;
+    if (stage == 0) { region = {true, 262, 144, 520, 60, 2560, 1440}; }
+    else if (stage == 1) { region = {true, 994, 1145, 500, 255, 2560, 1440}; }
+    else { region = {true, 1946, 1262, 500, 56, 2560, 1440}; }
+    QString error;
+    const QString imagePath = captureOcrRegion(region, QStringLiteral("login_success_%1").arg(stage), error);
+    if (imagePath.isEmpty()) return;
+    QRect bounds;
+    const QString keyword = stage == 0 ? QStringLiteral("常驻") : stage == 1 ? QStringLiteral("TAB开始游戏") : QStringLiteral("行前备战");
+    const bool found = umiOcrRunner_.findTextBounds(imagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), keyword, bounds, error);
+    QFile::remove(imagePath);
+    if (!found) return;
+    if (stage == 0) {
+        if (boundHwnd_) { POINT p{386, 1192}; input_.clickReferencePoint(boundHwnd_, p, 2560, 1440, 0, error); }
+    } else if (stage == 1) {
+        input_.pressKey(VK_TAB, error);
+    } else {
+        handleLoginReady();
+    }
 }
 
 void ClientController::stopAccountBanMonitor()

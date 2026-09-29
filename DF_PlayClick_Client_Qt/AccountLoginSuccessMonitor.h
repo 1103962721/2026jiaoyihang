@@ -16,6 +16,7 @@ public:
     void stop();
     bool isRunning() const;
 signals:
+    void ocrRequested(int stage);
     void loginReady();
     void residentFound();
     void tabFound();
