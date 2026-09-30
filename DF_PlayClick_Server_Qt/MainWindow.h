@@ -57,6 +57,7 @@ private:
     QLineEdit* listingTextEdit_ = nullptr;
     QLineEdit* listingPriceEdit_ = nullptr;
     QLineEdit* bossPriceEdit_ = nullptr;
+    QLineEdit* accountSwitchAmountEdit_ = nullptr;
     QString loadoutWeapon_;
     QString loadoutBackpack_;
     QString loadoutEgg_;
@@ -69,6 +70,7 @@ private:
     QString bossLoadoutBulletName_;
     QString bossLoadoutPerClick_;
     QString bossLoadoutBulletTotal_;
+    QString accountSwitchAmount_;
     QSpinBox* listingPurchaseCountSpin_ = nullptr;
     QSpinBox* autoBossThresholdSpin_ = nullptr;
     QSpinBox* autoCoinThresholdSpin_ = nullptr;

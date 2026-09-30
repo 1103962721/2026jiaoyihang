@@ -267,6 +267,16 @@ void MainWindow::buildUi()
     bossPriceRow->addWidget(bossPriceEdit_, 1);
     dispatchLayout->addLayout(bossPriceRow);
 
+    auto* accountSwitchRow = new QHBoxLayout();
+    accountSwitchRow->setSpacing(8);
+    auto* accountSwitchLabel = new QLabel(QStringLiteral("换号金额"), this);
+    accountSwitchLabel->setObjectName(QStringLiteral("fieldLabel"));
+    accountSwitchAmountEdit_ = new QLineEdit(accountSwitchAmount_, this);
+    accountSwitchAmountEdit_->setPlaceholderText(QStringLiteral("资金低于此值时换号，空/0关闭"));
+    accountSwitchRow->addWidget(accountSwitchLabel);
+    accountSwitchRow->addWidget(accountSwitchAmountEdit_, 1);
+    dispatchLayout->addLayout(accountSwitchRow);
+
     auto* bulkActionRow = new QHBoxLayout();
     bulkActionRow->setSpacing(7);
     bulkActionRow->addStretch();
@@ -497,6 +507,12 @@ void MainWindow::connectSignals()
     connect(bossPriceEdit_, &QLineEdit::textChanged, this, [syncAutoParameters](const QString&) {
         syncAutoParameters();
     });
+    connect(accountSwitchAmountEdit_, &QLineEdit::textChanged, this, [this](const QString& text) {
+        accountSwitchAmount_ = text.trimmed();
+        controller_.setAccountSwitchAmountThreshold(accountSwitchAmount_);
+        savePersistentLoadoutSettings();
+    });
+    controller_.setAccountSwitchAmountThreshold(accountSwitchAmount_);
     connect(&controller_, &ServerController::clientsChanged, this, &MainWindow::refreshClients);
     connect(&controller_, &ServerController::listeningChanged, this, &MainWindow::updateListeningState);
     connect(&controller_, &ServerController::statusChanged, this, &MainWindow::updateStatus);
@@ -701,6 +717,7 @@ void MainWindow::loadPersistentLoadoutSettings()
     loadoutBulletName_ = settings.value(QStringLiteral("Loadout/BulletName"), loadoutBulletName_).toString();
     loadoutPerClick_ = settings.value(QStringLiteral("Loadout/PerClick"), loadoutPerClick_).toString();
     loadoutBulletTotal_ = settings.value(QStringLiteral("Loadout/BulletTotal"), loadoutBulletTotal_).toString();
+    accountSwitchAmount_ = settings.value(QStringLiteral("AccountSwitch/Amount"), accountSwitchAmount_).toString();
     bossLoadoutWeapon_ = settings.value(QStringLiteral("BossLoadout/Weapon"), bossLoadoutWeapon_).toString();
     bossLoadoutBackpack_ = settings.value(QStringLiteral("BossLoadout/Backpack"), bossLoadoutBackpack_).toString();
     bossLoadoutEgg_ = settings.value(QStringLiteral("BossLoadout/Egg"), bossLoadoutEgg_).toString();
@@ -726,6 +743,7 @@ void MainWindow::savePersistentLoadoutSettings() const
     settings.setValue(QStringLiteral("Loadout/BulletName"), loadoutBulletName_);
     settings.setValue(QStringLiteral("Loadout/PerClick"), loadoutPerClick_);
     settings.setValue(QStringLiteral("Loadout/BulletTotal"), loadoutBulletTotal_);
+    settings.setValue(QStringLiteral("AccountSwitch/Amount"), accountSwitchAmount_);
     settings.setValue(QStringLiteral("BossLoadout/Weapon"), bossLoadoutWeapon_);
     settings.setValue(QStringLiteral("BossLoadout/Backpack"), bossLoadoutBackpack_);
     settings.setValue(QStringLiteral("BossLoadout/Egg"), bossLoadoutEgg_);

@@ -220,6 +220,13 @@ ServerController::ServerController(QObject* parent)
                     ? QStringLiteral("老板") : QStringLiteral("币号");
                 emit connectionLogAppended(QStringLiteral("%1客户端 %2 金额更新：%3")
                     .arg(roleText).arg(clientId).arg(amount));
+                if (client.role == ClientRole::Coin
+                    && accountSwitchAmountThreshold_ > 0
+                    && amount < accountSwitchAmountThreshold_)
+                {
+                    switchAccountAfterLowAmount(clientId, amount);
+                    break;
+                }
                 if (client.role == ClientRole::Boss
                     && client.expectedAmount != QStringLiteral("-")
                     && amount >= client.expectedAmount.toLongLong())
@@ -1559,7 +1566,7 @@ void ServerController::importAccounts(const QString& filePath)
         const QString line = stream.readLine().trimmed();
         const int separator = line.indexOf(QStringLiteral("----"));
         if (separator <= 0 || separator + 4 >= line.size()) continue;
-        AccountCredential item{line.left(separator).trimmed(), line.mid(separator + 4).trimmed(), false, false, 0};
+        AccountCredential item{line.left(separator).trimmed(), line.mid(separator + 4).trimmed(), false, false, false, 0};
         const QString key = AccountCredentialKey(item.username, item.password);
         if (!item.username.isEmpty() && !item.password.isEmpty() && !seenCredentials.contains(key))
         {
@@ -1602,7 +1609,7 @@ void ServerController::startAccountLogin(quint64 clientId)
     dispatchAccountLogin(clientId);
 }
 
-bool ServerController::dispatchAccountLogin(quint64 clientId)
+bool ServerController::dispatchAccountLogin(quint64 clientId, bool skipCurrentAccount)
 {
     if (!loginReadyStates_.contains(clientId))
     {
@@ -1619,20 +1626,21 @@ bool ServerController::dispatchAccountLogin(quint64 clientId)
         }
     }
 
-    AccountCredential* selected = nullptr;
+    AccountCredential* current = nullptr;
     for (AccountCredential& account : accounts_)
     {
         if (account.assigned && !account.banned && account.clientId == clientId)
         {
-            selected = &account;
+            current = &account;
             break;
         }
     }
+    AccountCredential* selected = skipCurrentAccount ? nullptr : current;
     if (!selected)
     {
         for (AccountCredential& account : accounts_)
         {
-            if (!account.assigned && !account.banned)
+            if (!account.assigned && !account.banned && !account.skippedForLowAmount)
             {
                 selected = &account;
                 break;
@@ -1644,9 +1652,21 @@ bool ServerController::dispatchAccountLogin(quint64 clientId)
         emit statusChanged(QStringLiteral("没有可分发的账号"), ServerStatusTone::Error);
         return false;
     }
+    if (skipCurrentAccount && current)
+    {
+        current->assigned = false;
+        current->skippedForLowAmount = true;
+        current->clientId = 0;
+    }
     QString errorText;
     if (!connectionManager_.requestAccountLogin(clientId, nextAccountLoginRequestId_++, selected->username, selected->password, errorText))
     {
+        if (skipCurrentAccount && current)
+        {
+            current->assigned = true;
+            current->skippedForLowAmount = false;
+            current->clientId = clientId;
+        }
         emit statusChanged(errorText, ServerStatusTone::Error);
         return false;
     }
@@ -1674,6 +1694,55 @@ void ServerController::startAccountLoginForAllCoins()
     }
     emit statusChanged(QStringLiteral("已向 %1 个币号客户端执行一键上号请求").arg(sent),
         sent > 0 ? ServerStatusTone::Success : ServerStatusTone::Error);
+}
+
+void ServerController::setAccountSwitchAmountThreshold(const QString& amountText)
+{
+    const QString text = amountText.trimmed();
+    if (text.isEmpty() || text == QStringLiteral("0"))
+    {
+        accountSwitchAmountThreshold_ = 0;
+        return;
+    }
+    bool ok = false;
+    const qint64 value = text.toLongLong(&ok);
+    if (!ok || value < 0)
+    {
+        emit statusChanged(QStringLiteral("换号金额必须是非负整数"), ServerStatusTone::Error);
+        return;
+    }
+    accountSwitchAmountThreshold_ = value;
+}
+
+void ServerController::switchAccountAfterLowAmount(quint64 clientId, qint64 amount)
+{
+    if (pendingAccountSwitches_.contains(clientId))
+        return;
+    pendingAccountSwitches_.insert(clientId);
+    resetAutoStartClient(clientId);
+    clearPendingAccountLoginRequests(clientId);
+
+    QString errorText;
+    const bool stopSent = connectionManager_.requestForceStopAction(clientId, errorText);
+    connectionManager_.forceResetClientAction(clientId);
+    emit connectionLogAppended(QStringLiteral("币号客户端 %1 资金 %2 低于换号金额，已发送停止并准备换号")
+        .arg(clientId).arg(amount));
+    if (!stopSent)
+    {
+        pendingAccountSwitches_.remove(clientId);
+        emit statusChanged(QStringLiteral("客户端 %1 换号前停止失败：%2").arg(clientId).arg(errorText), ServerStatusTone::Error);
+        return;
+    }
+
+    QTimer::singleShot(500, this, [this, clientId]() {
+        pendingAccountSwitches_.remove(clientId);
+        if (!dispatchAccountLogin(clientId, true))
+        {
+            emit statusChanged(QStringLiteral("客户端 %1 没有可切换的下一账号").arg(clientId), ServerStatusTone::Error);
+            return;
+        }
+        emit statusChanged(QStringLiteral("客户端 %1 已停止当前动作并切换下一账号").arg(clientId), ServerStatusTone::Success);
+    });
 }
 
 void ServerController::handleAccountLoginReady(quint64 clientId)

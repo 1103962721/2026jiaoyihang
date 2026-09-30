@@ -68,6 +68,7 @@ public slots:
         const QString& bossPriceText);
     void kickClient(quint64 clientId);
     void setBossExpectedAmount(quint64 clientId, const QString& amountText);
+    void setAccountSwitchAmountThreshold(const QString& amountText);
 
 signals:
     void clientsChanged(const QVector<ClientListItem>& clients);
@@ -123,7 +124,8 @@ private:
     bool appendBannedAccount(const QString& accountLine);
     void handleAccountLoginReady(quint64 clientId);
     void clearPendingAccountLoginRequests(quint64 clientId);
-    bool dispatchAccountLogin(quint64 clientId);
+    bool dispatchAccountLogin(quint64 clientId, bool skipCurrentAccount = false);
+    void switchAccountAfterLowAmount(quint64 clientId, qint64 amount);
 
     ServerConnectionManager connectionManager_;
     QTimer autoStartTimer_;
@@ -185,10 +187,13 @@ private:
         QString password;
         bool assigned = false;
         bool banned = false;
+        bool skippedForLowAmount = false;
         quint64 clientId = 0;
     };
     QVector<AccountCredential> accounts_;
     int nextAccountLoginRequestId_ = 20000;
+    qint64 accountSwitchAmountThreshold_ = 0;
+    QSet<quint64> pendingAccountSwitches_;
     bool preparingExecution_ = false;
     bool dispatchingPreparedExecution_ = false;
     QHash<int, quint64> pendingPrepareRequests_;
