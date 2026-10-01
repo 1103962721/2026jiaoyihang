@@ -1,6 +1,6 @@
 #include <windows.h>
 
-IDI_ICON1	ICON	"W:\\DF_PlayClick_Client_Qt\\AppIcon.ico"
+IDI_ICON1	ICON	"AppIcon.ico"
 
 VS_VERSION_INFO VERSIONINFO
 	FILEVERSION 0,0,0,0

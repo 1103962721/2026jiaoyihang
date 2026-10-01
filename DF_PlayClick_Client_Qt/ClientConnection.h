@@ -72,7 +72,7 @@ private:
     bool tryConnectToStoredServer(bool reconnecting);
     bool startReconnect();
     void stopReconnect();
-    void receiveLoop();
+    void receiveLoop(SOCKET socketHandle, quint64 generation);
     void closeSocketOnly();
     void handleConnectionLost(const QString& statusText);
     void appendConnectionLog(const QString& text);
@@ -90,4 +90,5 @@ private:
     int reconnectAttempt_ = 0;
     std::atomic_int heartbeatMisses_ = 0;
     std::atomic_bool connected_ = false;
+    std::atomic<quint64> connectionGeneration_{0};
 };

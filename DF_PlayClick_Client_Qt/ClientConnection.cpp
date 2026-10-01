@@ -218,7 +218,8 @@ bool ClientConnection::tryConnectToStoredServer(bool reconnecting)
     emit statusChanged(reconnecting ? QStringLiteral("已重新连接服务端") : QStringLiteral("已连接服务端"));
     heartbeatTimer_.start();
 
-    receiveThread_ = std::thread(&ClientConnection::receiveLoop, this);
+    const quint64 generation = ++connectionGeneration_;
+    receiveThread_ = std::thread(&ClientConnection::receiveLoop, this, socketHandle, generation);
     return true;
 }
 
@@ -420,10 +421,16 @@ bool ClientConnection::sendMailResponse(int requestId, bool success, const QStri
 
 bool ClientConnection::sendAccountLoginResponse(int requestId, const QString& status, const QString& payload)
 {
-    std::lock_guard<std::mutex> lock(sendMutex_);
-    if (!connected_.load()) return false;
-    return SocketUtil::SendLine(socket_, Protocol::BuildAccountLoginResponseMessage(
-        requestId, status.toStdString(), payload.toUtf8().toStdString()));
+    int errorCode = 0;
+    {
+        std::lock_guard<std::mutex> lock(sendMutex_);
+        if (!connected_.load()) return false;
+        if (SocketUtil::SendLine(socket_, Protocol::BuildAccountLoginResponseMessage(
+            requestId, status.toStdString(), payload.toUtf8().toStdString()))) return true;
+        errorCode = WSAGetLastError();
+    }
+    handleConnectionLost(QStringLiteral("发送上号状态失败，错误码：%1").arg(errorCode));
+    return false;
 }
 
 bool ClientConnection::sendAmountReport(qint64 amount)
@@ -443,16 +450,17 @@ bool ClientConnection::sendTimeSyncResponse(int requestId, qint64 clientReceiveM
         requestId, static_cast<long long>(clientReceiveMs), static_cast<long long>(clientSendMs)));
 }
 
-void ClientConnection::receiveLoop()
+void ClientConnection::receiveLoop(SOCKET socketHandle, quint64 generation)
 {
     std::string buffer;
     char chunk[512]{};
-    while (connected_)
+    while (connected_ && connectionGeneration_.load() == generation)
     {
-        const int received = recv(socket_, chunk, sizeof(chunk), 0);
+        const int received = recv(socketHandle, chunk, sizeof(chunk), 0);
         if (received == 0)
         {
-            QMetaObject::invokeMethod(this, [this]() {
+            QMetaObject::invokeMethod(this, [this, generation]() {
+                if (connectionGeneration_.load() != generation) return;
                 handleConnectionLost(QStringLiteral("recv 返回 0，服务端已关闭连接"));
             }, Qt::QueuedConnection);
             return;
@@ -460,7 +468,12 @@ void ClientConnection::receiveLoop()
         if (received == SOCKET_ERROR)
         {
             const int errorCode = WSAGetLastError();
-            QMetaObject::invokeMethod(this, [this, errorCode]() {
+            if (errorCode == WSAEINTR)
+            {
+                continue;
+            }
+            QMetaObject::invokeMethod(this, [this, errorCode, generation]() {
+                if (connectionGeneration_.load() != generation) return;
                 handleConnectionLost(QStringLiteral("Socket 接收失败，错误码：%1").arg(errorCode));
             }, Qt::QueuedConnection);
             return;
@@ -602,7 +615,8 @@ void ClientConnection::receiveLoop()
                 {
                     const QString username = QString::fromUtf8(message.payload.substr(0, separator).data());
                     const QString password = QString::fromUtf8(message.payload.substr(separator + 1).data());
-                    QMetaObject::invokeMethod(this, [this, requestId = message.requestId, username, password]() {
+                    QMetaObject::invokeMethod(this, [this, generation, requestId = message.requestId, username, password]() {
+                        if (!connected_ || connectionGeneration_.load() != generation) return;
                         emit accountLoginRequestReceived(requestId, username, password);
                     }, Qt::QueuedConnection);
                 }
@@ -667,6 +681,8 @@ void ClientConnection::appendConnectionLog(const QString& text)
 
 void ClientConnection::closeSocketOnly()
 {
+    // 已排队的旧 recv 结果不能关闭随后建立的新连接（Socket 数值也可能被复用）。
+    ++connectionGeneration_;
     if (socket_ != INVALID_SOCKET)
     {
         shutdown(socket_, SD_BOTH);
