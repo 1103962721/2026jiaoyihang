@@ -33,6 +33,7 @@ public slots:
     void requestRebindWindow(quint64 clientId);
     void requestRebindAllWindows();
     void requestForceStopAction(quint64 clientId);
+    void requestAccountLoginStop(quint64 clientId);
     void requestForceStopAllActions();
     void requestSelfThunder(quint64 clientId);
     void requestLoadout(quint64 clientId);

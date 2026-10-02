@@ -708,6 +708,26 @@ bool ServerConnectionManager::requestMail(quint64 clientId, int requestId, QStri
     return true;
 }
 
+bool ServerConnectionManager::requestAccountLoginStop(quint64 clientId, QString& errorText)
+{
+    std::shared_ptr<ClientEntry> client;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        client = findClientLocked(clientId);
+        if (!client || !client->connected)
+        {
+            errorText = QStringLiteral("客户端已断开");
+            return false;
+        }
+    }
+    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildAccountLoginStopRequestMessage()))
+    {
+        errorText = QStringLiteral("发送中止上号指令失败，错误码：%1").arg(WSAGetLastError());
+        return false;
+    }
+    return true;
+}
+
 bool ServerConnectionManager::requestAccountLogin(quint64 clientId, int requestId, const QString& username, const QString& password, QString& errorText)
 {
     std::shared_ptr<ClientEntry> client;
@@ -723,7 +743,9 @@ bool ServerConnectionManager::requestAccountLogin(quint64 clientId, int requestI
     if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildAccountLoginRequestMessage(
         requestId, username.toUtf8().toStdString(), password.toUtf8().toStdString())))
     {
-        errorText = QStringLiteral("发送上号指令失败");
+        const int errorCode = WSAGetLastError();
+        errorText = QStringLiteral("发送上号指令失败，错误码：%1").arg(errorCode);
+        recordDisconnectReason(client, errorText);
         markClientDisconnected(clientId);
         return false;
     }
@@ -962,16 +984,23 @@ int ServerConnectionManager::coinClientCount(bool readyOnly) const
 
 bool ServerConnectionManager::kickClient(quint64 clientId)
 {
+    std::shared_ptr<ClientEntry> client;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto client = findClientLocked(clientId);
+        client = findClientLocked(clientId);
         if (!client)
         {
             return false;
         }
+        // 先通知客户端这是服务端主动踢出，再关闭 socket。客户端据此立即停止动作并禁止自动重连。
+        if (client->socketHandle != INVALID_SOCKET)
+        {
+            SocketUtil::SendLine(client->socketHandle, Protocol::BuildClientKickedMessage());
+        }
         closeClientSocketLocked(client);
     }
 
+    recordDisconnectReason(client, QStringLiteral("服务端主动移除客户端"));
     emit clientsChanged();
     return true;
 }
@@ -1076,7 +1105,20 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
 
     while (listening_.load())
     {
-        int received = recv(client->socketHandle, temp, sizeof(temp), 0);
+        SOCKET receiveSocket = INVALID_SOCKET;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!client->connected) break;
+            receiveSocket = client->socketHandle;
+        }
+        const int received = recv(receiveSocket, temp, sizeof(temp), 0);
+        const int errorCode = received == SOCKET_ERROR ? WSAGetLastError() : 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            // 主动停止、移除或发送失败已经关闭连接；保留原始原因，
+            // 不再用被关闭 Socket 的 recv/10004 覆盖它。
+            if (!listening_.load() || !client->connected) break;
+        }
         if (received == 0)
         {
             recordDisconnectReason(client, QStringLiteral("recv 返回 0，对端已关闭连接"));
@@ -1084,7 +1126,11 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
         }
         if (received == SOCKET_ERROR)
         {
-            recordDisconnectReason(client, QStringLiteral("Socket 接收失败，错误码：%1").arg(WSAGetLastError()));
+            if (errorCode == WSAEINTR)
+            {
+                continue;
+            }
+            recordDisconnectReason(client, QStringLiteral("Socket 接收失败，错误码：%1").arg(errorCode));
             break;
         }
 

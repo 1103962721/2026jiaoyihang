@@ -26,6 +26,8 @@ public:
     void setDeviceId(const QString& deviceId);
     void connectToServer(const QString& ip, int port);
     void disconnectFromServer();
+    // 服务端主动踢出后禁止本次连接生命周期的自动重连；手动重新连接会清除该状态。
+    void suppressAutoReconnect();
     bool sendReady(bool ready);
     bool sendTeamCodeResponse(const QString& payload);
     bool sendTeamReady(int state, int current, int total);
@@ -56,6 +58,10 @@ signals:
     void forceStopActionRequestReceived();
     // 在接收线程直接通知取消标志，避免 UI 线程被同步自动化流程阻塞时无法中止。
     void forceStopActionImmediate();
+    void accountLoginStopRequestReceived();
+    void accountLoginStopImmediate();
+    void clientKicked();
+    void clientKickedImmediate();
     void ocrRequestReceived(int requestId, int x, int y, int width, int height, int referenceWidth, int referenceHeight);
     void selfThunderRequestReceived(int requestId);
     void loadoutRequestReceived(int requestId, const QString& loadoutType);
@@ -73,7 +79,7 @@ private:
     bool tryConnectToStoredServer(bool reconnecting);
     bool startReconnect();
     void stopReconnect();
-    void receiveLoop();
+    void receiveLoop(SOCKET socketHandle, quint64 generation);
     void closeSocketOnly();
     void handleConnectionLost(const QString& statusText);
     void appendConnectionLog(const QString& text);
@@ -92,4 +98,6 @@ private:
     int reconnectAttempt_ = 0;
     std::atomic_int heartbeatMisses_ = 0;
     std::atomic_bool connected_ = false;
+    std::atomic<quint64> connectionGeneration_{0};
+    std::atomic_bool autoReconnectSuppressed_ = false;
 };

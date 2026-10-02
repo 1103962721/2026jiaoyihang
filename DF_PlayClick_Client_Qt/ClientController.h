@@ -9,6 +9,7 @@
 #include <QVector>
 #include <QAbstractNativeEventFilter>
 #include <QDateTime>
+#include <QRect>
 
 #include "ClientConfig.h"
 #include "ClientConnection.h"
@@ -40,6 +41,7 @@ class ClientController : public QObject, public QAbstractNativeEventFilter
 
 public:
     explicit ClientController(QObject* parent = nullptr);
+    void shutdownForExit();
 
     QString lastServerIp() const;
     QVector<TargetWindowInfo> windows() const;
@@ -133,7 +135,9 @@ private:
     void handleAccountStartupFailed(const QString& recognizedText);
     void handleLoginReady();
     void runLoginSuccessOcr(int stage);
-    void finishLoginSuccessOcr(int stage, bool found, const QString& recognizedText = {});
+    void finishLoginSuccessOcr(int stage, bool found, const QString& recognizedText = {}, const QRect& bounds = {});
+    void stopAllActionsImmediately(bool stopLoginProcesses);
+    void handleClientKicked();
     void stopAccountBanMonitor();
     bool executeSelfThunderSequence(QString& errorText);
     bool executeLoadoutSequence(const QString& loadoutType, QString& errorText);

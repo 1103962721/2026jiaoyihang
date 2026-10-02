@@ -41,6 +41,7 @@ public:
     bool requestRebindWindow(quint64 clientId, QString& errorText);
     int requestRebindAllWindows();
     bool requestForceStopAction(quint64 clientId, QString& errorText);
+    bool requestAccountLoginStop(quint64 clientId, QString& errorText);
     int requestForceStopAllActions();
     void resetAllClientStates();
     bool requestOcr(quint64 clientId, int requestId, const OcrRequestRegion& region, QString& errorText);

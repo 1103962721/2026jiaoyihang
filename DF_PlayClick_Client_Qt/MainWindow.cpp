@@ -21,6 +21,11 @@ MainWindow::MainWindow(QWidget* parent)
     refreshConnectionControls();
 }
 
+MainWindow::~MainWindow()
+{
+    controller_.shutdownForExit();
+}
+
 void MainWindow::showEvent(QShowEvent* event)
 {
     QMainWindow::showEvent(event);
