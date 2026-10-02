@@ -36,6 +36,7 @@ int main()
     assert(Protocol::BuildMailRequestMessage(31) == "MAIL_REQUEST 31\n");
     assert(Protocol::BuildMailResponseMessage(31, true, "领取完成") == "MAIL_RESPONSE 31 OK 领取完成\n");
     assert(Protocol::BuildAccountLoginStopRequestMessage() == "ACCOUNT_LOGIN_STOP_REQUEST\n");
+    assert(Protocol::BuildClientKickedMessage() == "CLIENT_KICKED\n");
     assert(Protocol::IsValidTeamCodePayload("ABC1234"));
     assert(!Protocol::IsValidTeamCodePayload("abc1234"));
     assert(!Protocol::IsValidTeamCodePayload("AB12345"));
@@ -228,6 +229,8 @@ int main()
     assert(parsed.payload == "user\npass");
     assert(Protocol::ParseLine("ACCOUNT_LOGIN_STOP_REQUEST", parsed));
     assert(parsed.type == Protocol::MessageType::AccountLoginStopRequest);
+    assert(Protocol::ParseLine("CLIENT_KICKED", parsed));
+    assert(parsed.type == Protocol::MessageType::ClientKicked);
     assert(Protocol::ParseLine("ACCOUNT_LOGIN_RESPONSE 7 STARTED launching", parsed));
     assert(parsed.type == Protocol::MessageType::AccountLoginResponse);
     assert(parsed.value == 1);

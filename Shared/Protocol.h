@@ -48,7 +48,8 @@ namespace Protocol
         AmountReport,
         AccountLoginRequest,
         AccountLoginResponse,
-        AccountLoginStopRequest
+        AccountLoginStopRequest,
+        ClientKicked
     };
 
     enum class LoadoutType
@@ -321,6 +322,11 @@ namespace Protocol
         return "ACCOUNT_LOGIN_STOP_REQUEST\n";
     }
 
+    inline std::string BuildClientKickedMessage()
+    {
+        return "CLIENT_KICKED\n";
+    }
+
     inline std::string BuildAccountLoginRequestMessage(int requestId, const std::string& username, const std::string& password)
     {
         return "ACCOUNT_LOGIN_REQUEST " + std::to_string(requestId) + " "
@@ -376,6 +382,12 @@ namespace Protocol
         if (line == "FORCE_STOP_ACTION_REQUEST")
         {
             message.type = MessageType::ForceStopActionRequest;
+            return true;
+        }
+
+        if (line == "CLIENT_KICKED")
+        {
+            message.type = MessageType::ClientKicked;
             return true;
         }
 

@@ -258,11 +258,24 @@ void AccountLoginAutomation::start(const QString& username, const QString& passw
                 return;
             }
 
-            emit progress(QStringLiteral("df_launcher 等待超时，正在重新发送 Steam 启动命令"));
+            emit progress(QStringLiteral("df_launcher 第一次等待超时，正在进行第二次完整等待"));
             if (!launchGame(error) || !prepareAndStartLauncher(error))
             {
-                fail(cancelled() ? QStringLiteral("已取消") : error);
-                return;
+                if (cancelled())
+                {
+                    fail(QStringLiteral("已取消"));
+                    return;
+                }
+
+                const bool steamRunning = waitForProcess(QStringLiteral("steam.exe"), 250);
+                emit progress(steamRunning
+                    ? QStringLiteral("第二次 df_launcher 等待仍超时，已检测到 Steam，进行第三次完整等待")
+                    : QStringLiteral("第二次 df_launcher 等待仍超时，未检测到 Steam，仍进行第三次完整等待"));
+                if (!launchGame(error) || !prepareAndStartLauncher(error))
+                {
+                    fail(cancelled() ? QStringLiteral("已取消") : error);
+                    return;
+                }
             }
         }
         if (!waitForGameWindow(60000))

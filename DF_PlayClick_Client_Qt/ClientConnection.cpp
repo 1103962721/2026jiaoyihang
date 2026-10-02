@@ -107,6 +107,7 @@ void ClientConnection::connectToServer(const QString& ip, int port)
     serverPort_ = port;
     reconnectAttempt_ = 0;
     userRequestedDisconnect_ = false;
+    autoReconnectSuppressed_ = false;
     stopReconnect();
     if (!tryConnectToStoredServer(false))
     {
@@ -132,6 +133,12 @@ void ClientConnection::disconnectFromServer()
         emit connectedChanged(false);
     }
     emit statusChanged(QStringLiteral("已断开服务端"));
+}
+
+void ClientConnection::suppressAutoReconnect()
+{
+    autoReconnectSuppressed_ = true;
+    userRequestedDisconnect_ = true;
 }
 
 bool ClientConnection::tryConnectToStoredServer(bool reconnecting)
@@ -225,6 +232,10 @@ bool ClientConnection::tryConnectToStoredServer(bool reconnecting)
 
 bool ClientConnection::startReconnect()
 {
+    if (autoReconnectSuppressed_.load())
+    {
+        return false;
+    }
     if (!ConnectionLifecyclePolicy::ShouldAutoReconnect(userRequestedDisconnect_, !serverIp_.isEmpty() && serverPort_ > 0))
     {
         return false;
@@ -613,6 +624,16 @@ void ClientConnection::receiveLoop(SOCKET socketHandle, quint64 generation)
                 emit accountLoginStopImmediate();
                 QMetaObject::invokeMethod(this, [this]() {
                     emit accountLoginStopRequestReceived();
+                }, Qt::QueuedConnection);
+            }
+            else if (message.type == Protocol::MessageType::ClientKicked)
+            {
+                // 先设置禁止自动重连，再等待服务端关闭 socket，避免断线回调重新发起连接。
+                autoReconnectSuppressed_ = true;
+                userRequestedDisconnect_ = true;
+                emit clientKickedImmediate();
+                QMetaObject::invokeMethod(this, [this]() {
+                    emit clientKicked();
                 }, Qt::QueuedConnection);
             }
             else if (message.type == Protocol::MessageType::AccountLoginRequest)

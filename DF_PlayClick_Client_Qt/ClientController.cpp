@@ -224,6 +224,14 @@ ClientController::ClientController(QObject* parent)
             automationCancelRequested_.store(true);
         }
     }, Qt::DirectConnection);
+    connect(&connection_, &ClientConnection::clientKickedImmediate, this, [this]() {
+        // 接收线程先取消同步自动化和登录进程，避免踢出后仍继续执行当前指令。
+        accountLoginStopExcluded_.store(false);
+        automationCancelRequested_.store(true);
+        accountLoginAutomation_.cancelAndStopProcesses();
+    }, Qt::DirectConnection);
+    connect(&connection_, &ClientConnection::clientKicked, this, &ClientController::handleClientKicked,
+        Qt::QueuedConnection);
     connect(&connection_, &ClientConnection::accountLoginStopRequestReceived, this, [this]() {
         accountLoginStopExcluded_ = false;
         accountLoginRunning_ = false;
@@ -349,6 +357,16 @@ ClientController::ClientController(QObject* parent)
     connect(&hotkey_, &HotkeyManager::hotkeyPressed, this, &ClientController::finishHotkeyPick);
     connect(&hotkey_, &HotkeyManager::f3Pressed, this, &ClientController::toggleBulletOcrLoop);
     qApp->installNativeEventFilter(this);
+}
+
+void ClientController::shutdownForExit()
+{
+    stopAllActionsImmediately(true);
+    connection_.disconnectFromServer();
+    if (qApp)
+    {
+        qApp->removeNativeEventFilter(this);
+    }
 }
 
 QString ClientController::lastServerIp() const
@@ -509,6 +527,44 @@ void ClientController::forceStopCurrentAction()
     }
     automationActionRunning_ = false;
     setStatus(QStringLiteral("已强制停止当前动作"));
+}
+
+void ClientController::stopAllActionsImmediately(bool stopLoginProcesses)
+{
+    accountLoginStopExcluded_.store(false);
+    accountLoginRunning_ = false;
+    accountBanMonitoringEnabled_ = false;
+    accountLoginReadyReported_ = false;
+    loginOcrRunning_.store(false);
+    accountBanMonitor_.stop();
+    accountLoginSuccessMonitor_.stop();
+    automationCancelRequested_.store(true);
+    if (stopLoginProcesses)
+    {
+        accountLoginAutomation_.cancelAndStopProcesses();
+    }
+    else
+    {
+        accountLoginAutomation_.cancel();
+    }
+    countdownTimer_.stop();
+    scheduledTriggerTimer_.stop();
+    bulletOcrActionTimer_.stop();
+    bulletOcrNextRoundTimer_.stop();
+    countdown_ = 0;
+    if (bulletOcrRunning_)
+    {
+        finishBulletOcrLoop(false, QStringLiteral("连接已主动断开，已停止当前动作"));
+    }
+    teamReadyOcrRunning_ = false;
+    automationActionRunning_ = false;
+}
+
+void ClientController::handleClientKicked()
+{
+    connection_.suppressAutoReconnect();
+    stopAllActionsImmediately(true);
+    setStatus(QStringLiteral("已被服务端踢出，当前动作已立即停止，请手动重新连接"));
 }
 
 void ClientController::bindWindow(int index, bool bringToFront)
@@ -681,7 +737,9 @@ void ClientController::connectOrDisconnect(const QString& ip, int port)
 {
     if (connection_.isConnected() || connection_.isReconnecting())
     {
+        stopAllActionsImmediately(true);
         connection_.disconnectFromServer();
+        setStatus(QStringLiteral("已主动断开服务端，当前动作已立即停止"));
         return;
     }
 
@@ -3092,13 +3150,15 @@ void ClientController::runLoginSuccessOcr(int stage)
     if (stage == 0) { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
     else if (stage == 1) { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
     else if (stage == 2) { region = {true, 1946, 1262, 500, 56, 2560, 1440}; }
+    else if (stage == 7) { region = {true, 1084, 849, 400, 80, 2560, 1440}; }
     else { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
     const QString executable = config_.loadUmiOcrPath();
     const int port = config_.loadUmiOcrPort();
     const QString keyword = stage == 0 ? QStringLiteral("常驻")
         : stage == 1 ? QStringLiteral("Tab/战术部门/研发部门/医疗部门")
         : stage == 2 ? QStringLiteral("行前备战")
-        : stage == 4 ? QStringLiteral("继续/参加/跳转/前往参加/前往跳转") : QStringLiteral("行前备战");
+        : stage == 4 ? QStringLiteral("继续/参加/跳转/前往参加/前往跳转")
+        : stage == 7 ? QStringLiteral("进入游戏") : QStringLiteral("行前备战");
     const HWND gameWindow = boundHwnd_;
     QPointer<ClientController> controller(this);
     std::thread([controller, gameWindow, region, stage, executable, port, keyword]() {
@@ -3153,7 +3213,7 @@ void ClientController::runLoginSuccessOcr(int stage)
             const QString stageName = stage == 0 ? QStringLiteral("常驻")
                 : stage == 1 ? QStringLiteral("菜单")
                 : stage == 2 ? QStringLiteral("行前备战")
-                : QStringLiteral("前往获取");
+                : stage == 7 ? QStringLiteral("进入游戏") : QStringLiteral("前往获取");
             QMetaObject::invokeMethod(controller, [controller, stageName, found, recognizedText, error, elapsed]() {
                 if (controller)
                 {
@@ -3166,13 +3226,13 @@ void ClientController::runLoginSuccessOcr(int stage)
             }, Qt::QueuedConnection);
         }
         if (!controller) return;
-        QMetaObject::invokeMethod(controller, [controller, stage, found, recognizedText]() {
-            if (controller) controller->finishLoginSuccessOcr(stage, found, recognizedText);
+        QMetaObject::invokeMethod(controller, [controller, stage, found, recognizedText, bounds]() {
+            if (controller) controller->finishLoginSuccessOcr(stage, found, recognizedText, bounds);
         }, Qt::QueuedConnection);
     }).detach();
 }
 
-void ClientController::finishLoginSuccessOcr(int stage, bool found, const QString& recognizedText)
+void ClientController::finishLoginSuccessOcr(int stage, bool found, const QString& recognizedText, const QRect& bounds)
 {
     Q_UNUSED(recognizedText);
     loginOcrRunning_ = false;
@@ -3181,7 +3241,7 @@ void ClientController::finishLoginSuccessOcr(int stage, bool found, const QStrin
     {
         // 进入游戏或行前备战未出现时，回到常驻检测，避免卡在中间阶段。
         // Tab 阶段由监测线程连续保留 10 秒，不能因单轮 OCR 未命中立即回退。
-        if (stage != 0 && stage != 1 && stage != 4)
+        if (stage != 0 && stage != 1 && stage != 4 && stage != 7)
         {
             accountLoginSuccessMonitor_.setStage(0);
         }
@@ -3192,7 +3252,31 @@ void ClientController::finishLoginSuccessOcr(int stage, bool found, const QStrin
     {
         POINT p{386, 1192};
         input_.clickReferencePoint(boundHwnd_, p, 2560, 1440, 0, error);
-        // 常驻点击后由监测线程等待 5 秒，再执行最多 15 秒的确认 OCR。
+        // 常驻点击后先独立识别最多 5 秒的可选“进入游戏”提示，再进入继续/参加/跳转流程。
+        accountLoginSuccessMonitor_.setStage(7);
+    }
+    else if (stage == 7)
+    {
+        if (bounds.isValid() && boundHwnd_ && IsWindow(boundHwnd_))
+        {
+            RECT clientRect{};
+            if (GetClientRect(boundHwnd_, &clientRect))
+            {
+                const QSize clientSize(clientRect.right - clientRect.left, clientRect.bottom - clientRect.top);
+                const QRect region = ScaleReferenceRect(QRect(1084, 849, 400, 80), QSize(2560, 1440), clientSize);
+                const QPoint center = region.topLeft() + bounds.center();
+                POINT clickPoint{center.x(), center.y()};
+                if (!input_.clickClientPoint(boundHwnd_, clickPoint, 0, error))
+                {
+                    setStatus(QStringLiteral("点击进入游戏失败：%1").arg(error));
+                }
+                else
+                {
+                    setStatus(QStringLiteral("已识别并点击进入游戏"));
+                }
+            }
+        }
+        // 可选提示只处理一次，随后进入“继续/参加/跳转”阶段。
         accountLoginSuccessMonitor_.setStage(4);
     }
     else if (stage == 4)

@@ -995,6 +995,11 @@ bool ServerConnectionManager::kickClient(quint64 clientId)
         {
             return false;
         }
+        // 先通知客户端这是服务端主动踢出，再关闭 socket。客户端据此立即停止动作并禁止自动重连。
+        if (client->socketHandle != INVALID_SOCKET)
+        {
+            SocketUtil::SendLine(client->socketHandle, Protocol::BuildClientKickedMessage());
+        }
         closeClientSocketLocked(client);
     }
 

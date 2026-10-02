@@ -25,6 +25,8 @@ public:
     bool isReconnecting() const;
     void connectToServer(const QString& ip, int port);
     void disconnectFromServer();
+    // 服务端主动踢出后禁止本次连接生命周期的自动重连；手动重新连接会清除该状态。
+    void suppressAutoReconnect();
     bool sendReady(bool ready);
     bool sendTeamCodeResponse(const QString& payload);
     bool sendTeamReady(int state, int current, int total);
@@ -57,6 +59,8 @@ signals:
     void forceStopActionImmediate();
     void accountLoginStopRequestReceived();
     void accountLoginStopImmediate();
+    void clientKicked();
+    void clientKickedImmediate();
     void ocrRequestReceived(int requestId, int x, int y, int width, int height, int referenceWidth, int referenceHeight);
     void selfThunderRequestReceived(int requestId);
     void loadoutRequestReceived(int requestId, const QString& loadoutType);
@@ -93,4 +97,5 @@ private:
     std::atomic_int heartbeatMisses_ = 0;
     std::atomic_bool connected_ = false;
     std::atomic<quint64> connectionGeneration_{0};
+    std::atomic_bool autoReconnectSuppressed_ = false;
 };
