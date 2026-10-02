@@ -608,6 +608,13 @@ void ClientConnection::receiveLoop(SOCKET socketHandle, quint64 generation)
                     emit mailRequestReceived(requestId);
                 }, Qt::QueuedConnection);
             }
+            else if (message.type == Protocol::MessageType::AccountLoginStopRequest)
+            {
+                emit accountLoginStopImmediate();
+                QMetaObject::invokeMethod(this, [this]() {
+                    emit accountLoginStopRequestReceived();
+                }, Qt::QueuedConnection);
+            }
             else if (message.type == Protocol::MessageType::AccountLoginRequest)
             {
                 const auto separator = message.payload.find('\n');

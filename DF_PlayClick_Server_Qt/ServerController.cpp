@@ -1638,6 +1638,19 @@ void ServerController::requestMailAll()
     emit statusChanged(QStringLiteral("已向 %1 个客户端发送领取邮件指令").arg(sent), ServerStatusTone::Success);
 }
 
+void ServerController::requestAccountLoginStop(quint64 clientId)
+{
+    QString errorText;
+    if (!connectionManager_.requestAccountLoginStop(clientId, errorText))
+    {
+        emit statusChanged(errorText, ServerStatusTone::Error);
+        return;
+    }
+    connectionManager_.forceResetClientAction(clientId);
+    clearPendingAccountLoginRequests(clientId);
+    emit statusChanged(QStringLiteral("已向客户端发送中止上号指令"), ServerStatusTone::Success);
+}
+
 void ServerController::importAccounts(const QString& filePath)
 {
     QFile file(filePath);

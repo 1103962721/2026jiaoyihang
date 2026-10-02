@@ -224,6 +224,25 @@ ClientController::ClientController(QObject* parent)
             automationCancelRequested_.store(true);
         }
     }, Qt::DirectConnection);
+    connect(&connection_, &ClientConnection::accountLoginStopRequestReceived, this, [this]() {
+        accountLoginStopExcluded_ = false;
+        accountLoginRunning_ = false;
+        accountBanMonitoringEnabled_ = false;
+        accountBanMonitor_.stop();
+        accountLoginSuccessMonitor_.stop();
+        loginOcrRunning_ = false;
+        accountLoginAutomation_.cancelAndStopProcesses();
+        automationCancelRequested_ = true;
+        automationActionRunning_ = false;
+        connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("ERROR"), QStringLiteral("已中止上号并结束 Steam、df_launcher 和 Delta Force 进程"));
+        setStatus(QStringLiteral("已中止上号，相关进程已结束"));
+    });
+    connect(&connection_, &ClientConnection::accountLoginStopImmediate, this, [this]() {
+        // 接收线程直接取消自动化并结束目标进程；UI 线程随后负责收尾状态和监测线程。
+        accountLoginStopExcluded_ = false;
+        automationCancelRequested_.store(true);
+        accountLoginAutomation_.cancelAndStopProcesses();
+    }, Qt::DirectConnection);
     connect(&connection_, &ClientConnection::ocrRequestReceived, this, &ClientController::handleOcrRequest);
     connect(&connection_, &ClientConnection::selfThunderRequestReceived, this, &ClientController::handleSelfThunderRequest);
     connect(&connection_, &ClientConnection::loadoutRequestReceived, this, &ClientController::handleLoadoutRequest);
@@ -2959,10 +2978,19 @@ void ClientController::handleAccountLoginRequest(int requestId, const QString& u
         connection_.sendAccountLoginResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("仅币号客户端支持上号"));
         return;
     }
-    if (accountBanMonitoringEnabled_ || accountBanMonitor_.isRunning())
+    // 单独再次下发上号时，先结束上一次登录成功/封禁监测和相关进程。
+    // AccountLoginAutomation::start() 还会再次清理一次，确保 Steam、df_launcher
+    // 和 Delta Force 不会沿用上一次账号的进程状态。
+    if (accountLoginRunning_ || accountBanMonitoringEnabled_ || accountBanMonitor_.isRunning())
     {
-        connection_.sendAccountLoginResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("已有账号正在进行封禁监测"));
-        return;
+        accountLoginStopExcluded_ = false;
+        accountBanMonitoringEnabled_ = false;
+        accountBanMonitor_.stop();
+        accountLoginSuccessMonitor_.stop();
+        loginOcrRunning_ = false;
+        accountLoginAutomation_.cancelAndStopProcesses();
+        accountLoginRunning_ = false;
+        automationActionRunning_ = false;
     }
     if (!beginAutomationAction(QStringLiteral("上号")))
     {

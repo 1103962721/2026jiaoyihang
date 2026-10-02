@@ -47,7 +47,8 @@ namespace Protocol
         MailResponse,
         AmountReport,
         AccountLoginRequest,
-        AccountLoginResponse
+        AccountLoginResponse,
+        AccountLoginStopRequest
     };
 
     enum class LoadoutType
@@ -313,6 +314,11 @@ namespace Protocol
     inline std::string BuildAmountReportMessage(long long amount)
     {
         return "AMOUNT_REPORT " + std::to_string(amount) + "\n";
+    }
+
+    inline std::string BuildAccountLoginStopRequestMessage()
+    {
+        return "ACCOUNT_LOGIN_STOP_REQUEST\n";
     }
 
     inline std::string BuildAccountLoginRequestMessage(int requestId, const std::string& username, const std::string& password)
@@ -825,6 +831,12 @@ namespace Protocol
                 return false;
             message.type = MessageType::AmountReport;
             message.timestampMs = amount;
+            return true;
+        }
+
+        if (line == "ACCOUNT_LOGIN_STOP_REQUEST")
+        {
+            message.type = MessageType::AccountLoginStopRequest;
             return true;
         }
 

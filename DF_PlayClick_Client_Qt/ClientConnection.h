@@ -55,6 +55,8 @@ signals:
     void forceStopActionRequestReceived();
     // 在接收线程直接通知取消标志，避免 UI 线程被同步自动化流程阻塞时无法中止。
     void forceStopActionImmediate();
+    void accountLoginStopRequestReceived();
+    void accountLoginStopImmediate();
     void ocrRequestReceived(int requestId, int x, int y, int width, int height, int referenceWidth, int referenceHeight);
     void selfThunderRequestReceived(int requestId);
     void loadoutRequestReceived(int requestId, const QString& loadoutType);

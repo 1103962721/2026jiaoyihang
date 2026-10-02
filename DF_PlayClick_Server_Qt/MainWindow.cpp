@@ -453,7 +453,10 @@ void MainWindow::connectSignals()
                 actionLayout->setContentsMargins(2, 2, 2, 2);
                 actionLayout->setSpacing(3);
                 auto* rebindButton = new QPushButton(QStringLiteral("重新绑定"), actionCell);
-                auto* stopActionButton = new QPushButton(QStringLiteral("停止动作"), actionCell);
+                const bool accountLoginRunning = client.role == ClientRole::Coin
+                    && client.actionRunning && client.runningAction == QStringLiteral("上号中");
+                auto* stopActionButton = new QPushButton(
+                    accountLoginRunning ? QStringLiteral("中止上号") : QStringLiteral("停止动作"), actionCell);
                 auto* loadoutButton = new QPushButton(QStringLiteral("配装"), actionCell);
                 auto* kickButton = new QPushButton(QStringLiteral("断开"), actionCell);
                 rebindButton->setMinimumWidth(72);
@@ -463,8 +466,11 @@ void MainWindow::connectSignals()
                 connect(rebindButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
                     controller_.requestRebindWindow(clientId);
                 });
-                connect(stopActionButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
-                    controller_.requestForceStopAction(clientId);
+                connect(stopActionButton, &QPushButton::clicked, this, [this, clientId = client.id, accountLoginRunning]() {
+                    if (accountLoginRunning)
+                        controller_.requestAccountLoginStop(clientId);
+                    else
+                        controller_.requestForceStopAction(clientId);
                 });
                 connect(loadoutButton, &QPushButton::clicked, this, [this, clientId = client.id, role = client.role]() {
                     const bool boss = role == ClientRole::Boss;
@@ -1025,8 +1031,11 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
         connect(rebindButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
             controller_.requestRebindWindow(clientId);
         });
-        connect(stopActionButton, &QPushButton::clicked, this, [this, clientId = client.id]() {
-            controller_.requestForceStopAction(clientId);
+        connect(stopActionButton, &QPushButton::clicked, this, [this, clientId = client.id, accountLoginRunning]() {
+            if (accountLoginRunning)
+                controller_.requestAccountLoginStop(clientId);
+            else
+                controller_.requestForceStopAction(clientId);
         });
         connect(loadoutButton, &QPushButton::clicked, this, [this, clientId = client.id, role = client.role]() {
             const bool boss = role == ClientRole::Boss;

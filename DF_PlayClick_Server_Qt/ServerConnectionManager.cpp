@@ -708,6 +708,26 @@ bool ServerConnectionManager::requestMail(quint64 clientId, int requestId, QStri
     return true;
 }
 
+bool ServerConnectionManager::requestAccountLoginStop(quint64 clientId, QString& errorText)
+{
+    std::shared_ptr<ClientEntry> client;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        client = findClientLocked(clientId);
+        if (!client || !client->connected)
+        {
+            errorText = QStringLiteral("客户端已断开");
+            return false;
+        }
+    }
+    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildAccountLoginStopRequestMessage()))
+    {
+        errorText = QStringLiteral("发送中止上号指令失败，错误码：%1").arg(WSAGetLastError());
+        return false;
+    }
+    return true;
+}
+
 bool ServerConnectionManager::requestAccountLogin(quint64 clientId, int requestId, const QString& username, const QString& password, QString& errorText)
 {
     std::shared_ptr<ClientEntry> client;
