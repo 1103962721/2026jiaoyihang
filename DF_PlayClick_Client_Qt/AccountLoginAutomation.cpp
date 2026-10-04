@@ -224,14 +224,39 @@ void AccountLoginAutomation::start(const QString& username, const QString& passw
             return;
         }
         emit progress(QStringLiteral("正在启动 Steam，并持续等待登录窗口"));
-        if (!launchSteam(error))
+        while (!cancelled())
         {
-            fail(error.isEmpty() ? QStringLiteral("无法发起 Steam 启动") : error);
-            return;
+            if (!launchSteam(error))
+            {
+                fail(error.isEmpty() ? QStringLiteral("无法发起 Steam 启动") : error);
+                return;
+            }
+
+            bool loginWindowTimedOut = false;
+            if (performSteamLogin(error, loginWindowTimedOut))
+                break;
+            if (cancelled())
+            {
+                fail(QStringLiteral("已取消"));
+                return;
+            }
+            if (!loginWindowTimedOut)
+            {
+                fail(error);
+                return;
+            }
+
+            emit progress(QStringLiteral("30 秒内未找到 Steam 登录窗口，正在结束 Steam 并使用当前账号重试"));
+            if (!stopSteamProcesses(error) || cancelled())
+            {
+                fail(cancelled() ? QStringLiteral("已取消") : error);
+                return;
+            }
+            QThread::msleep(500);
         }
-        if (!performSteamLogin(error))
+        if (cancelled())
         {
-            fail(error);
+            fail(QStringLiteral("已取消"));
             return;
         }
         if (cancelled_)
@@ -258,24 +283,29 @@ void AccountLoginAutomation::start(const QString& username, const QString& passw
                 return;
             }
 
-            emit progress(QStringLiteral("df_launcher 第一次等待超时，正在进行第二次完整等待"));
-            if (!launchGame(error) || !prepareAndStartLauncher(error))
+            emit progress(QStringLiteral("df_launcher 控件等待超时，正在重复拉起 df_launcher"));
+            // 启动器进程可能已经存在但界面没有完成初始化。超时后重复发送
+            // 游戏启动 URI，继续等待启动器控件，不再执行固定次数的完整登录流程。
+            while (!cancelled())
             {
+                if (!launchGame(error))
+                {
+                    fail(error);
+                    return;
+                }
+                if (prepareAndStartLauncher(error))
+                    break;
                 if (cancelled())
                 {
                     fail(QStringLiteral("已取消"));
                     return;
                 }
-
-                const bool steamRunning = waitForProcess(QStringLiteral("steam.exe"), 250);
-                emit progress(steamRunning
-                    ? QStringLiteral("第二次 df_launcher 等待仍超时，已检测到 Steam，进行第三次完整等待")
-                    : QStringLiteral("第二次 df_launcher 等待仍超时，未检测到 Steam，仍进行第三次完整等待"));
-                if (!launchGame(error) || !prepareAndStartLauncher(error))
-                {
-                    fail(cancelled() ? QStringLiteral("已取消") : error);
-                    return;
-                }
+                emit progress(QStringLiteral("df_launcher 控件仍未就绪，继续重复拉起 df_launcher"));
+            }
+            if (cancelled())
+            {
+                fail(QStringLiteral("已取消"));
+                return;
             }
         }
         if (!waitForGameWindow(60000))
@@ -289,12 +319,26 @@ void AccountLoginAutomation::start(const QString& username, const QString& passw
     thread->start();
 }
 
-bool AccountLoginAutomation::performSteamLogin(QString& errorText) const
+bool AccountLoginAutomation::performSteamLogin(QString& errorText, bool& loginWindowTimedOut) const
 {
+    constexpr int SteamLoginWindowTimeoutMs = 30000;
+    QElapsedTimer windowTimer;
+    windowTimer.start();
+    loginWindowTimedOut = false;
     while (!cancelled())
     {
         HWND hwnd = FindWindowByLoginTitle();
-        if (!hwnd) { QThread::msleep(300); continue; }
+        if (!hwnd)
+        {
+            if (windowTimer.elapsed() >= SteamLoginWindowTimeoutMs)
+            {
+                loginWindowTimedOut = true;
+                errorText = QStringLiteral("30 秒内未找到 Steam 登录窗口");
+                return false;
+            }
+            QThread::msleep(300);
+            continue;
+        }
         const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         IUIAutomation* automation = nullptr;
         IUIAutomationElement* root = nullptr;
@@ -367,14 +411,47 @@ bool AccountLoginAutomation::acceptSteamAgreementIfPresent() const
     return accepted;
 }
 
+bool AccountLoginAutomation::clickSteamOpenGameIfPresent() const
+{
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(init) && init != RPC_E_CHANGED_MODE) return false;
+
+    IUIAutomation* automation = nullptr;
+    bool clicked = false;
+    if (SUCCEEDED(CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&automation))))
+    {
+        for (const HWND hwnd : FindSteamWindows())
+        {
+            IUIAutomationElement* root = nullptr;
+            if (FAILED(automation->ElementFromHandle(hwnd, &root)) || !root) continue;
+
+            IUIAutomationElement* openGame = FindNamed(automation, root, L"打开游戏");
+            if (!openGame) openGame = FindNamed(automation, root, L"Open Game");
+            if (openGame)
+            {
+                clicked = Invoke(openGame);
+                openGame->Release();
+            }
+            root->Release();
+            if (clicked) break;
+        }
+        automation->Release();
+    }
+    if (SUCCEEDED(init)) CoUninitialize();
+    return clicked;
+}
+
 bool AccountLoginAutomation::prepareAndStartLauncher(QString& errorText) const
 {
     QElapsedTimer timer;
     timer.start();
     constexpr int LauncherControlTimeoutMs = 60000;
+    bool steamOpenGameClicked = false;
     while (!cancelled() && timer.elapsed() < LauncherControlTimeoutMs)
     {
         acceptSteamAgreementIfPresent();
+        if (!steamOpenGameClicked)
+            steamOpenGameClicked = clickSteamOpenGameIfPresent();
 
         if (!waitForProcess(QStringLiteral("df_launcher.exe"), 250))
         {
@@ -447,6 +524,19 @@ bool AccountLoginAutomation::stopProcesses(QString& errorText) const
     for (const QString& name : names)
     {
         QProcess::execute(QStringLiteral("taskkill"), {QStringLiteral("/F"), QStringLiteral("/IM"), name});
+    }
+    Q_UNUSED(errorText);
+    return true;
+}
+
+bool AccountLoginAutomation::stopSteamProcesses(QString& errorText) const
+{
+    const QStringList names{QStringLiteral("steam.exe"), QStringLiteral("steamwebhelper.exe")};
+    for (const QString& name : names)
+    {
+        const int result = QProcess::execute(QStringLiteral("taskkill"),
+            {QStringLiteral("/F"), QStringLiteral("/IM"), name});
+        Q_UNUSED(result);
     }
     Q_UNUSED(errorText);
     return true;

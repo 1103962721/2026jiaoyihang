@@ -277,6 +277,96 @@ bool UmiOcrRunner::findTextBounds(const QString& imagePath, const QString& execu
     return false;
 }
 
+bool UmiOcrRunner::findBulletTextBounds(const QString& imagePath, const QString& executablePath, int port,
+    const QString& keyword, QRect& bounds, QString& errorText, QString* recognizedText) const
+{
+    bounds = {};
+    QJsonObject responseObject;
+    if (!requestOcr(imagePath, executablePath, port, QStringLiteral("json"), responseObject, errorText))
+        return false;
+
+    const QJsonValue dataValue = responseObject.value(QStringLiteral("data"));
+    if (!dataValue.isArray())
+    {
+        errorText = QStringLiteral("UmiOCR 未返回文字坐标");
+        return false;
+    }
+
+    const QString normalizedKeyword = NormalizeOcrMatchText(keyword);
+    QStringList allTexts;
+    const auto matches = [](QString expected, QString actual) {
+        // 只允许明确的 OCR 差异：.45 的前导句点缺失，以及字母 I 被识别成数字 1。
+        if (expected.startsWith(QLatin1Char('.')) && !actual.startsWith(QLatin1Char('.')))
+            expected.remove(0, 1);
+        if (expected.size() != actual.size())
+            return false;
+        for (int index = 0; index < expected.size(); ++index)
+        {
+            const QChar expectedChar = expected.at(index);
+            const QChar actualChar = actual.at(index);
+            if (expectedChar == actualChar)
+                continue;
+            if (expectedChar == QLatin1Char('i') && actualChar == QLatin1Char('1'))
+                continue;
+            return false;
+        }
+        return true;
+    };
+
+    for (const QJsonValue blockValue : dataValue.toArray())
+    {
+        const QJsonObject block = blockValue.toObject();
+        const QString text = block.value(QStringLiteral("text")).toString().trimmed();
+        if (!text.isEmpty())
+            allTexts.append(text);
+        if (!matches(normalizedKeyword, NormalizeOcrMatchText(text)))
+            continue;
+
+        const QJsonArray box = block.value(QStringLiteral("box")).toArray();
+        bool hasPoint = false;
+        int minX = 0;
+        int minY = 0;
+        int maxX = 0;
+        int maxY = 0;
+        for (const QJsonValue pointValue : box)
+        {
+            const QJsonArray point = pointValue.toArray();
+            if (point.size() < 2 || !point.at(0).isDouble() || !point.at(1).isDouble())
+                continue;
+            const int x = point.at(0).toInt();
+            const int y = point.at(1).toInt();
+            if (!hasPoint)
+            {
+                minX = maxX = x;
+                minY = maxY = y;
+                hasPoint = true;
+            }
+            else
+            {
+                minX = qMin(minX, x);
+                minY = qMin(minY, y);
+                maxX = qMax(maxX, x);
+                maxY = qMax(maxY, y);
+            }
+        }
+        if (hasPoint && maxX > minX && maxY > minY)
+        {
+            if (recognizedText)
+                *recognizedText = allTexts.join(QLatin1Char('\n'));
+            bounds = QRect(QPoint(minX, minY), QPoint(maxX, maxY)).normalized();
+            return true;
+        }
+    }
+
+    const QString recognizedTextValue = allTexts.join(QLatin1Char('\n'));
+    if (recognizedText)
+        *recognizedText = recognizedTextValue;
+    errorText = recognizedTextValue.isEmpty()
+        ? QStringLiteral("OCR未识别到文字，未找到“%1”").arg(keyword)
+        : QStringLiteral("OCR未找到“%1”，原文：%2").arg(keyword, recognizedTextValue);
+    return false;
+}
+
 bool UmiOcrRunner::ensureServerRunning(const QString& executablePath, int port, QString& errorText) const
 {
     if (isServerReady(port))

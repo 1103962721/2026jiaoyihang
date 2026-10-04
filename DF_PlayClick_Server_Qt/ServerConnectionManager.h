@@ -55,6 +55,8 @@ public:
     bool setClientTeamReadyDisplay(quint64 clientId, const QString& text, int state);
     bool resetClientTeamReadyDisplay(quint64 clientId);
     bool forceResetClientAction(quint64 clientId);
+    bool clearClientData(quint64 clientId, QString& errorText);
+    bool resetConsecutiveHighPriceCount(quint64 clientId);
     bool setClientTeamCode(quint64 clientId, const QString& teamCode, QString& errorText);
     bool setClientNote(quint64 clientId, const QString& note);
     bool setClientRole(quint64 clientId, ClientRole role);
@@ -78,6 +80,7 @@ signals:
     void listingResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void mailResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void accountLoginResponseReceived(quint64 clientId, int requestId, int status, const QString& text);
+    void forceStopActionAckReceived(quint64 clientId);
     void amountReportReceived(quint64 clientId, qint64 amount);
     void prepareResponseReceived(quint64 clientId, int requestId, int status, const QString& text);
     void timeSyncResponseReceived(quint64 clientId, int requestId, qint64 clientReceiveMs, qint64 clientSendMs,

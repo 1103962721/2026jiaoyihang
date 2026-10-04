@@ -122,10 +122,19 @@ bool IsBanText(const QString& recognizedText)
     const bool abnormalEnvironment = text.contains(QStringLiteral("游戏环境及行为数据异常"), Qt::CaseInsensitive)
         || (text.contains(QStringLiteral("游戏环境"), Qt::CaseInsensitive)
             && text.contains(QStringLiteral("行为数据异常"), Qt::CaseInsensitive));
-    const bool accountFrozen = text.contains(QStringLiteral("账号进行冻结"), Qt::CaseInsensitive)
-        || text.contains(QStringLiteral("账号冻结"), Qt::CaseInsensitive)
-        || text.contains(QStringLiteral("冻结"), Qt::CaseInsensitive);
-    return abnormalEnvironment && accountFrozen;
+    const bool accountContext = text.contains(QStringLiteral("账号"), Qt::CaseInsensitive)
+        || text.contains(QStringLiteral("帐号"), Qt::CaseInsensitive)
+        || text.contains(QStringLiteral("账户"), Qt::CaseInsensitive);
+    const bool banAction = text.contains(QStringLiteral("冻结"), Qt::CaseInsensitive)
+        || text.contains(QStringLiteral("封禁"), Qt::CaseInsensitive)
+        || text.contains(QStringLiteral("封号"), Qt::CaseInsensitive)
+        || text.contains(QStringLiteral("停封"), Qt::CaseInsensitive)
+        || text.contains(QStringLiteral("限制登录"), Qt::CaseInsensitive)
+        || text.contains(QStringLiteral("被限制"), Qt::CaseInsensitive);
+
+    // 登录阶段的弹窗通常包含完整的“游戏环境及行为数据异常”文案，
+    // 游戏运行中弹出的封禁提示可能只保留“账号 + 封禁/冻结”等短文案。
+    return (abnormalEnvironment && banAction) || (accountContext && banAction);
 }
 
 bool IsStartupFailureText(const QString& recognizedText)
@@ -201,25 +210,38 @@ void AccountBanMonitor::run(HWND gameWindow, QString ocrExecutable, int ocrPort,
     const QString tempPath = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
         .filePath(QStringLiteral("df_playclick_account_ban_%1.png").arg(reinterpret_cast<quintptr>(gameWindow)));
 
-    while (!token->load() && (!IsWindow(gameWindow) || !IsDeltaForceProcessRunning(gameWindow)))
+    while (!token->load() && !IsWindow(gameWindow))
     {
-        if (!IsWindow(gameWindow))
-        {
-            return;
-        }
         QThread::msleep(250);
+    }
+    if (token->load())
+    {
+        return;
     }
     if (!token->load())
     {
         emit monitorStatus(QStringLiteral("封禁 OCR 已开始监测"));
     }
 
-    while (!token->load() && IsDeltaForceProcessRunning(gameWindow))
+    // 监测生命周期由 stop() 控制。游戏窗口/进程在切换场景时可能短暂不可用，
+    // 这时只暂停本轮 OCR，不能让线程退出，否则登录成功后就不会再恢复封禁监测。
+    while (!token->load() && IsWindow(gameWindow))
     {
+        if (!IsDeltaForceProcessRunning(gameWindow))
+        {
+            QThread::msleep(250);
+            continue;
+        }
+
         // 登录成功 OCR 与封禁 OCR 共用 UmiOCR 服务，登录阶段避免并发请求导致界面和 OCR 服务拥塞。
         bool ocrLockAcquired = false;
-        while (!token->load() && IsDeltaForceProcessRunning(gameWindow))
+        while (!token->load() && IsWindow(gameWindow))
         {
+            if (!IsDeltaForceProcessRunning(gameWindow))
+            {
+                QThread::msleep(250);
+                continue;
+            }
             bool expected = false;
             if (loginOcrInFlight.compare_exchange_weak(expected, true))
             {
@@ -230,7 +252,7 @@ void AccountBanMonitor::run(HWND gameWindow, QString ocrExecutable, int ocrPort,
         }
         if (!ocrLockAcquired)
         {
-            break;
+            continue;
         }
 
         const QImage image = CaptureClientArea(gameWindow);

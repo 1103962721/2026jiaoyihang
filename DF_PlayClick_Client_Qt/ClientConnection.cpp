@@ -449,6 +449,20 @@ bool ClientConnection::sendAccountLoginResponse(int requestId, const QString& st
     return false;
 }
 
+bool ClientConnection::sendForceStopActionAck()
+{
+    std::lock_guard<std::mutex> lock(sendMutex_);
+    if (!connected_.load())
+        return false;
+    if (SocketUtil::SendLine(socket_, Protocol::BuildForceStopActionAckMessage()))
+        return true;
+    const int errorCode = WSAGetLastError();
+    QMetaObject::invokeMethod(this, [this, errorCode]() {
+        handleConnectionLost(QStringLiteral("发送停止完成确认失败，错误码：%1").arg(errorCode));
+    }, Qt::QueuedConnection);
+    return false;
+}
+
 bool ClientConnection::sendAmountReport(qint64 amount)
 {
     if (!connected_ || socket_ == INVALID_SOCKET)
@@ -578,6 +592,12 @@ void ClientConnection::receiveLoop(SOCKET socketHandle, quint64 generation)
                 emit forceStopActionImmediate();
                 QMetaObject::invokeMethod(this, [this]() {
                     emit forceStopActionRequestReceived();
+                }, Qt::QueuedConnection);
+            }
+            else if (message.type == Protocol::MessageType::ForceStopActionAck)
+            {
+                QMetaObject::invokeMethod(this, [this]() {
+                    emit forceStopActionAckReceived();
                 }, Qt::QueuedConnection);
             }
             else if (message.type == Protocol::MessageType::OcrRequest)

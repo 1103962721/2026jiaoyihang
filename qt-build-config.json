@@ -1,0 +1,16 @@
+{
+  "qtVersion": "6.6.3",
+  "qtRoot": "E:\\visual studio Project\\DF_PlayClick_Qt_数字识别修复\\DF_PlayClick_Qt\\.qt\\6.6.3\\msvc2019_64_static",
+  "qmake": "E:\\visual studio Project\\DF_PlayClick_Qt_数字识别修复\\DF_PlayClick_Qt\\.qt\\6.6.3\\msvc2019_64_static\\bin\\qmake.exe",
+  "visualStudioRoot": "E:\\VisualStudio\\VisualStudioIDE",
+  "vsDevCmd": "E:\\VisualStudio\\VisualStudioIDE\\Common7\\Tools\\VsDevCmd.bat",
+  "msvcVersion": "14.29.30133",
+  "msvcArchitecture": "x64",
+  "configuration": "Release",
+  "buildRoot": "build\\qt-release",
+  "outputRoot": "Relase",
+  "targets": [
+    "DF_PlayClick_Client_Qt\\DF_PlayClick_Client_Qt.pro",
+    "DF_PlayClick_Server_Qt\\DF_PlayClick_Server_Qt.pro"
+  ]
+}

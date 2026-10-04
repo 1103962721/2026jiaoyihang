@@ -32,6 +32,7 @@ namespace Protocol
         PrepareResponse,
         RebindWindowRequest,
         ForceStopActionRequest,
+        ForceStopActionAck,
         TeamReady,
         OcrRequest,
         OcrResponse,
@@ -213,6 +214,11 @@ namespace Protocol
         return "FORCE_STOP_ACTION_REQUEST\n";
     }
 
+    inline std::string BuildForceStopActionAckMessage()
+    {
+        return "FORCE_STOP_ACTION_ACK\n";
+    }
+
     inline bool IsValidTeamReadyValue(int current, int total)
     {
         return (current == 0 && total == 0) || (current >= 0 && total > 0 && current <= total);
@@ -377,6 +383,12 @@ namespace Protocol
         if (line == "FORCE_STOP_ACTION_REQUEST")
         {
             message.type = MessageType::ForceStopActionRequest;
+            return true;
+        }
+
+        if (line == "FORCE_STOP_ACTION_ACK")
+        {
+            message.type = MessageType::ForceStopActionAck;
             return true;
         }
 

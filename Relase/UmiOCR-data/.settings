@@ -44,6 +44,6 @@ action.popMainWindow=true
 other.simpleNotificationType=default
 
 [TabPageManager]
-openPageList=GlobalConfigsPage/GlobalConfigsPage.qml, Navigation/Navigation.qml, ScreenshotOCR/ScreenshotOCR.qml
-refresh=true
-showPageIndex=2
+openPageList=GlobalConfigsPage/GlobalConfigsPage.qml, Navigation/Navigation.qml, ScreenshotOCR/ScreenshotOCR.qml, Navigation/Navigation.qml
+refresh=false
+showPageIndex=3

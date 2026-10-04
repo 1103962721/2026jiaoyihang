@@ -13,28 +13,29 @@ FramelessTitleBar::FramelessTitleBar(const QString& title, QWidget* targetWindow
     setFixedHeight(38);
 
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(13, 0, 13, 0);
-    layout->setSpacing(6);
+    layout->setContentsMargins(13, 0, 0, 0);
+    layout->setSpacing(0);
 
     auto* titleLabel = new QLabel(title, this);
     titleLabel->setObjectName(QStringLiteral("windowTitleText"));
     layout->addWidget(titleLabel);
     layout->addStretch();
 
-    auto createControlDot = [this](const QString& objectName, const QString& toolTip) {
+    auto createControlButton = [this](const QString& objectName, const QString& text, const QString& toolTip) {
         auto* button = new QPushButton(this);
         button->setObjectName(objectName);
+        button->setText(text);
         button->setToolTip(toolTip);
         button->setAccessibleName(toolTip);
-        button->setFixedSize(9, 9);
+        button->setFixedSize(42, 38);
         button->setFocusPolicy(Qt::NoFocus);
         button->setCursor(Qt::PointingHandCursor);
         return button;
     };
 
-    auto* minimizeButton = createControlDot(QStringLiteral("windowMinimizeDot"), QStringLiteral("最小化"));
-    auto* maximizeButton = createControlDot(QStringLiteral("windowMaximizeDot"), QStringLiteral("最大化或还原"));
-    auto* closeButton = createControlDot(QStringLiteral("windowCloseDot"), QStringLiteral("关闭"));
+    auto* minimizeButton = createControlButton(QStringLiteral("windowMinimizeButton"), QStringLiteral("−"), QStringLiteral("最小化"));
+    auto* maximizeButton = createControlButton(QStringLiteral("windowMaximizeButton"), QStringLiteral("□"), QStringLiteral("最大化或还原"));
+    auto* closeButton = createControlButton(QStringLiteral("windowCloseButton"), QStringLiteral("×"), QStringLiteral("关闭"));
     layout->addWidget(minimizeButton);
     layout->addWidget(maximizeButton);
     layout->addWidget(closeButton);

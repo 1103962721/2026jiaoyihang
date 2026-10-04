@@ -454,12 +454,23 @@ bool ServerConnectionManager::requestForceStopAction(quint64 clientId, QString& 
             errorText = QStringLiteral("客户端已断开");
             return false;
         }
+        if (client->runningAction == QStringLiteral("上号中"))
+        {
+            errorText = QStringLiteral("客户端正在上号，请使用“中止上号”停止登录流程");
+            return false;
+        }
+        // 先占住服务端动作锁，再发停止消息，避免客户端快速回 ACK 时发生“先解锁后又被写回停止中”。
+        client->actionRunning = true;
+        client->runningAction = QStringLiteral("正在停止");
     }
     if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildForceStopActionRequestMessage()))
     {
         errorText = QStringLiteral("发送强制停止指令失败，错误码：%1").arg(WSAGetLastError());
+        recordDisconnectReason(client, errorText);
+        markClientDisconnected(clientId);
         return false;
     }
+    emit clientsChanged();
     return true;
 }
 
@@ -475,7 +486,6 @@ int ServerConnectionManager::requestForceStopAllActions()
         QString errorText;
         if (item.connected && requestForceStopAction(item.id, errorText))
         {
-            forceResetClientAction(item.id);
             ++sentCount;
         }
     }
@@ -488,7 +498,8 @@ void ServerConnectionManager::resetAllClientStates()
         std::lock_guard<std::mutex> lock(mutex_);
         for (const auto& client : clients_)
         {
-            if (client->runningAction == QStringLiteral("上号中"))
+        if (client->runningAction == QStringLiteral("上号中")
+            || client->runningAction == QStringLiteral("正在停止"))
                 continue;
             client->actionRunning = false;
             client->runningAction.clear();
@@ -610,6 +621,24 @@ bool ServerConnectionManager::requestLoadout(quint64 clientId, int requestId, co
 
 bool ServerConnectionManager::requestListing(quint64 clientId, int requestId, const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, bool loadoutMode, QString& errorText)
 {
+    if (!loadoutMode && listingText.trimmed().isEmpty())
+    {
+        errorText = QStringLiteral("上架文本不能为空");
+        return false;
+    }
+    bool priceOk = false;
+    const double priceValue = listingPrice.trimmed().toDouble(&priceOk);
+    if (!priceOk || priceValue <= 0.0)
+    {
+        errorText = QStringLiteral("请输入有效的上架价格");
+        return false;
+    }
+    if (purchaseCount <= 0 || purchaseCount > 99)
+    {
+        errorText = QStringLiteral("购买次数必须在 1 到 99 之间");
+        return false;
+    }
+
     std::shared_ptr<ClientEntry> client;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -802,6 +831,53 @@ bool ServerConnectionManager::forceResetClientAction(quint64 clientId)
             client->teamCode.clear();
     }
 
+    emit clientsChanged();
+    return true;
+}
+
+bool ServerConnectionManager::clearClientData(quint64 clientId, QString& errorText)
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto client = findClientLocked(clientId);
+        if (!client)
+        {
+            errorText = QStringLiteral("客户端不存在");
+            return false;
+        }
+        if (client->actionRunning)
+        {
+            errorText = QStringLiteral("客户端正在执行：%1，请停止完成后再清除数据").arg(client->runningAction);
+            return false;
+        }
+        client->currentAmount = QStringLiteral("-");
+        client->cumulativeIncome = 0;
+        client->lowPriceCount = 0;
+        client->highPriceCount = 0;
+        client->consecutiveHighPriceCount = 0;
+        client->hasAmountBaseline = false;
+        client->listingStatus = client->role == ClientRole::Coin
+            ? QStringLiteral("待执行") : QStringLiteral("不适用");
+        client->listingQuantityX = -1;
+        client->teamReadyText = QStringLiteral("未识别");
+        client->teamReadyState = -1;
+        client->teamReadyCurrent = 0;
+        client->teamReadyTotal = 0;
+        client->teamReadyUpdatedAtMs = 0;
+    }
+    emit clientsChanged();
+    return true;
+}
+
+bool ServerConnectionManager::resetConsecutiveHighPriceCount(quint64 clientId)
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto client = findClientLocked(clientId);
+        if (!client)
+            return false;
+        client->consecutiveHighPriceCount = 0;
+    }
     emit clientsChanged();
     return true;
 }
@@ -1372,6 +1448,11 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
                 }
                 emit clientsChanged();
                 emit accountLoginResponseReceived(client->id, message.requestId, message.value, responseText);
+            }
+            else if (message.type == Protocol::MessageType::ForceStopActionAck)
+            {
+                forceResetClientAction(client->id);
+                emit forceStopActionAckReceived(client->id);
             }
             else if (message.type == Protocol::MessageType::AmountReport)
             {

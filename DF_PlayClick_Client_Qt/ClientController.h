@@ -134,6 +134,7 @@ private:
     void handleAccountBanned(const QString& recognizedText);
     void handleAccountStartupFailed(const QString& recognizedText);
     void handleLoginReady();
+    bool waitForLoginReadyAfterLoadout(QString& errorText);
     void runLoginSuccessOcr(int stage);
     void finishLoginSuccessOcr(int stage, bool found, const QString& recognizedText = {}, const QRect& bounds = {});
     void stopAllActionsImmediately(bool stopLoginProcesses);
@@ -202,6 +203,7 @@ private:
     bool accountBanMonitoringEnabled_ = false;
     bool accountBanHandled_ = false;
     bool accountLoginReadyReported_ = false;
+    quint64 accountLoginFlowGeneration_ = 0;
     std::atomic_bool loginOcrRunning_{false};
     bool hasLastListingRequest_ = false;
     qint64 serverClockOffsetMs_ = 0;
@@ -211,6 +213,7 @@ private:
     int lastTeamReadyTotal_ = -1;
     bool ready_ = false;
     bool automationActionRunning_ = false;
+    bool forceStopActionAckPending_ = false;
     std::atomic_bool automationCancelRequested_ = false;
     bool teamReadyOcrRunning_ = false;
     bool bulletOcrRunning_ = false;

@@ -20,8 +20,10 @@ private:
     bool stopProcesses(QString& errorText) const;
     bool launchSteam(QString& errorText) const;
     bool launchGame(QString& errorText) const;
-    bool performSteamLogin(QString& errorText) const;
+    bool performSteamLogin(QString& errorText, bool& loginWindowTimedOut) const;
+    bool stopSteamProcesses(QString& errorText) const;
     bool acceptSteamAgreementIfPresent() const;
+    bool clickSteamOpenGameIfPresent() const;
     bool prepareAndStartLauncher(QString& errorText) const;
     QString username_;
     QString password_;

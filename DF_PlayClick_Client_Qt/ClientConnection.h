@@ -41,6 +41,7 @@ public:
     bool sendAmountReport(qint64 amount);
     bool sendTimeSyncResponse(int requestId, qint64 clientReceiveMs, qint64 clientSendMs);
     bool sendAccountLoginResponse(int requestId, const QString& status, const QString& payload);
+    bool sendForceStopActionAck();
 
 signals:
     void connectedChanged(bool connected);
@@ -56,6 +57,7 @@ signals:
     void prepareRequestReceived(int requestId);
     void rebindWindowRequestReceived();
     void forceStopActionRequestReceived();
+    void forceStopActionAckReceived();
     // 在接收线程直接通知取消标志，避免 UI 线程被同步自动化流程阻塞时无法中止。
     void forceStopActionImmediate();
     void accountLoginStopRequestReceived();

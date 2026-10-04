@@ -40,6 +40,7 @@ public slots:
     void setAutoStartEnabled(bool enabled, const QString& countdownText);
     void setAutoStartCountdownText(const QString& countdownText);
     void forceResetClientAction(quint64 clientId);
+    void clearClientData(quint64 clientId);
     void setClientTeamCode(quint64 clientId, const QString& teamCode);
     void showSelfThunderPlaceholder(quint64 clientId);
     void setClientNote(quint64 clientId, const QString& note);
@@ -47,19 +48,21 @@ public slots:
     void startListing(const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, bool loadoutMode);
     void startListingForClient(quint64 clientId, const QString& listingText, const QString& listingPrice,
         bool hasExchange, int purchaseCount, bool loadoutMode);
-    void saveLoadout(const QString& weapon, const QString& backpack, const QString& egg,
-        const QString& bulletName, int perClick, int bulletTotal);
-    void saveLoadoutForRole(ClientRole role, const QString& weapon, const QString& backpack, const QString& egg,
-        const QString& bulletName, int perClick, int bulletTotal);
-    void saveLoadoutForClient(quint64 clientId, ClientRole role, const QString& weapon, const QString& backpack,
-        const QString& egg, const QString& bulletName, int perClick, int bulletTotal);
+    void saveLoadout();
+    void saveLoadoutForRole(ClientRole role);
+    void saveLoadoutForClient(quint64 clientId, ClientRole role);
     void requestMail(quint64 clientId);
     void requestMailAll();
     void importAccounts(const QString& filePath);
-    void setAccountLoginConfig(quint64 clientId, const QString& weapon, const QString& backpack,
-        const QString& egg, const QString& bulletName, int perClick, int bulletTotal,
-        const QString& listingText, const QString& listingPrice, int purchaseCount);
+    void addAccounts(const QString& filePath);
+    void clearAccounts();
+    void exportAccounts(const QString& filePath);
+    void setSavedLoadoutConfig(ClientRole role, const QString& weapon, const QString& backpack,
+        const QString& egg, const QString& bulletName, int perClick, int bulletTotal);
+    bool setAccountLoginConfig(quint64 clientId, const QString& listingText,
+        const QString& listingPrice, int purchaseCount);
     void startAccountLogin(quint64 clientId);
+    void startAccountSwitch(quint64 clientId);
     void startAccountLoginForAllCoins();
     void setAutoExecuteThresholds(int bossCount, int coinCount);
     void setHighPriceStopThreshold(int threshold);
@@ -123,10 +126,19 @@ private:
     void executeSelfThunderPlaceholder(quint64 clientId);
     bool markAccountBanned(quint64 clientId, QString& accountLine);
     bool appendBannedAccount(const QString& accountLine);
+    bool validateListingParameters(const QString& listingText, const QString& listingPrice,
+        int purchaseCount, bool loadoutMode, QString& errorText) const;
+    bool validateLoadoutParameters(const QString& weapon, const QString& backpack, const QString& egg,
+        const QString& bulletName, int perClick, int bulletTotal, QString& errorText) const;
     void handleAccountLoginReady(quint64 clientId);
     void clearPendingAccountLoginRequests(quint64 clientId);
     bool dispatchAccountLogin(quint64 clientId, bool skipCurrentAccount = false);
     void switchAccountAfterLowAmount(quint64 clientId, qint64 amount);
+    int availableAccountCount() const;
+    int assignedAccountCount() const;
+    void emitAccountQueueState();
+    bool appendUsedAccount(const QString& accountLine, qint64 amount);
+    bool markAccountUsed(quint64 clientId, qint64 amount, QString& accountLine);
 
     ServerConnectionManager connectionManager_;
     QTimer autoStartTimer_;
@@ -150,9 +162,11 @@ private:
         int purchaseCount = 1;
         bool loadoutMode = true;
     };
+    bool loadoutConfigForRole(ClientRole role, LoginReadyState& config, QString& errorText) const;
     QHash<int, LoginReadyState> pendingLoginReadyLoadouts_;
     QHash<int, quint64> pendingLoginReadyListings_;
     QHash<quint64, LoginReadyState> loginReadyStates_;
+    QHash<int, LoginReadyState> savedLoadoutConfigs_;
     qint64 autoStartCycleStartedAtMs_ = 0;
     int nextOcrRequestId_ = 1;
     int nextListingRequestId_ = 1;
@@ -195,6 +209,9 @@ private:
     int nextAccountLoginRequestId_ = 20000;
     qint64 accountSwitchAmountThreshold_ = 0;
     QSet<quint64> pendingAccountSwitches_;
+    QHash<quint64, bool> pendingStopAccountSwitches_;
+    QHash<int, quint64> accountLoginRequestGenerations_;
+    quint64 accountQueueGeneration_ = 1;
     bool preparingExecution_ = false;
     bool dispatchingPreparedExecution_ = false;
     QHash<int, quint64> pendingPrepareRequests_;
@@ -214,4 +231,5 @@ private:
     QString lastTriggerCompensationLeadText_ = QStringLiteral("1500");
     void processAutoExecuteTick();
     void handlePrepareResponse(quint64 clientId, int requestId, int status, const QString& text);
+    QString clientAddress(quint64 clientId) const;
 };

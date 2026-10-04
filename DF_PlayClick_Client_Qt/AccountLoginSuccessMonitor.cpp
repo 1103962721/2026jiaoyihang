@@ -43,6 +43,7 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
     emit monitorStatus(QStringLiteral("登录成功 OCR 已开始监测"));
     qint64 lastSpace = 0;
     qint64 tabStageStartedAt = 0;
+    qint64 readyStageStartedAt = 0;
     qint64 continueStageStartedAt = 0;
     qint64 enterGameStageStartedAt = 0;
     int phaseStage = stage_.load();
@@ -62,6 +63,11 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
             } else if (requestedStage != 7) {
                 enterGameStageStartedAt = 0;
             }
+            if (requestedStage == 2 && requestedStage != phaseStage) {
+                readyStageStartedAt = cycleStartedAt;
+            } else if (requestedStage != 2) {
+                readyStageStartedAt = 0;
+            }
             if (requestedStage != 4 && requestedStage != 5) {
                 continueStageStartedAt = 0;
             }
@@ -72,6 +78,16 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
         }
         if ((phaseStage == 4 || phaseStage == 5) && continueStageStartedAt == 0) {
             continueStageStartedAt = cycleStartedAt;
+        }
+        if (phaseStage == 2 && readyStageStartedAt == 0) {
+            readyStageStartedAt = cycleStartedAt;
+        }
+        if (phaseStage == 2 && cycleStartedAt - readyStageStartedAt >= 10000) {
+            emit monitorStatus(QStringLiteral("10 秒内未识别到“行前备战”，返回常驻检测"));
+            phaseStage = 0;
+            stage_.store(phaseStage);
+            readyStageStartedAt = 0;
+            continue;
         }
         if (phaseStage == 0 && cycleStartedAt - lastSpace >= 5000) {
             lastSpace = cycleStartedAt;
@@ -102,6 +118,11 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
                 enterGameStageStartedAt = cycleFinishedAt;
             } else {
                 enterGameStageStartedAt = 0;
+            }
+            if (phaseStage == 2) {
+                readyStageStartedAt = cycleFinishedAt;
+            } else {
+                readyStageStartedAt = 0;
             }
             if (phaseStage == 4 || phaseStage == 5) {
                 continueStageStartedAt = cycleFinishedAt;
