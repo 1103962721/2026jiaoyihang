@@ -89,9 +89,11 @@ ServerController::ServerController(QObject* parent)
     autoStartTimer_.setInterval(100);
     compensationSyncTimer_.setInterval(25);
     autoExecuteTimer_.setInterval(200);
+    accountDispatchRetryTimer_.setInterval(500);
     connect(&autoStartTimer_, &QTimer::timeout, this, &ServerController::processAutoStartTick);
     connect(&compensationSyncTimer_, &QTimer::timeout, this, &ServerController::processCompensationSync);
     connect(&autoExecuteTimer_, &QTimer::timeout, this, &ServerController::processAutoExecuteTick);
+    connect(&accountDispatchRetryTimer_, &QTimer::timeout, this, &ServerController::retryWaitingAccountDispatches);
     connect(&connectionManager_, &ServerConnectionManager::ocrResponseReceived, this, &ServerController::handleAutoStartOcrResponse);
     connect(&connectionManager_, &ServerConnectionManager::selfThunderResponseReceived, this, &ServerController::handleSelfThunderResponse);
     connect(&connectionManager_, &ServerConnectionManager::loadoutResponseReceived, this, &ServerController::handleLoadoutResponse);
@@ -383,6 +385,9 @@ void ServerController::startListening(const QString& portText)
 
 void ServerController::stopListening()
 {
+    waitingAccountDispatches_.clear();
+    waitingAccountDispatchReasons_.clear();
+    accountDispatchRetryTimer_.stop();
     connectionManager_.stopListening();
     emit statusChanged(QStringLiteral("已停止监听"), ServerStatusTone::Neutral);
 }
@@ -711,6 +716,8 @@ void ServerController::requestRebindAllWindows()
 
 void ServerController::requestForceStopAction(quint64 clientId)
 {
+    waitingAccountDispatches_.remove(clientId);
+    waitingAccountDispatchReasons_.remove(clientId);
     QString errorText;
     if (!connectionManager_.requestForceStopAction(clientId, errorText))
     {
@@ -747,6 +754,9 @@ void ServerController::setBossExpectedAmount(quint64 clientId, const QString& am
 
 void ServerController::requestForceStopAllActions()
 {
+    waitingAccountDispatches_.clear();
+    waitingAccountDispatchReasons_.clear();
+    accountDispatchRetryTimer_.stop();
     const int sentCount = connectionManager_.requestForceStopAllActions();
     pendingStopAccountSwitches_.clear();
     pendingAccountSwitches_.clear();
@@ -1437,6 +1447,11 @@ void ServerController::setClientNote(quint64 clientId, const QString& note)
 
 void ServerController::setClientRole(quint64 clientId, ClientRole role)
 {
+    if (role != ClientRole::Coin)
+    {
+        waitingAccountDispatches_.remove(clientId);
+        waitingAccountDispatchReasons_.remove(clientId);
+    }
     if (connectionManager_.setClientRole(clientId, role))
     {
         emit statusChanged(QStringLiteral("已更新客户端角色：%1")
@@ -1651,6 +1666,8 @@ void ServerController::requestMailAll()
 
 void ServerController::requestAccountLoginStop(quint64 clientId)
 {
+    waitingAccountDispatches_.remove(clientId);
+    waitingAccountDispatchReasons_.remove(clientId);
     QString errorText;
     if (!connectionManager_.requestAccountLoginStop(clientId, errorText))
     {
@@ -1695,6 +1712,9 @@ void ServerController::importAccounts(const QString& filePath)
     pendingAccountSwitches_.clear();
     pendingStopAccountSwitches_.clear();
     emitAccountQueueState();
+    emit connectionLogAppended(QStringLiteral("导入账号完成：可用 %1 个，等待分发 %2 个客户端")
+        .arg(availableAccountCount()).arg(waitingAccountDispatches_.size()));
+    retryWaitingAccountDispatches();
     emit statusChanged(skippedBanned > 0
         ? QStringLiteral("已导入 %1 个账号，跳过 %2 个封禁账号").arg(accounts_.size()).arg(skippedBanned)
         : QStringLiteral("已导入 %1 个账号").arg(accounts_.size()), ServerStatusTone::Success);
@@ -1736,6 +1756,9 @@ void ServerController::addAccounts(const QString& filePath)
         ++added;
     }
     emitAccountQueueState();
+    emit connectionLogAppended(QStringLiteral("增加账号完成：新增 %1 个，可用 %2 个，等待分发 %3 个客户端")
+        .arg(added).arg(availableAccountCount()).arg(waitingAccountDispatches_.size()));
+    retryWaitingAccountDispatches();
     emit statusChanged(QStringLiteral("已增加 %1 个账号，当前队列 %2/%3")
         .arg(added).arg(availableAccountCount()).arg(accounts_.size()),
         skippedBanned > 0 ? ServerStatusTone::Neutral : ServerStatusTone::Success);
@@ -1757,11 +1780,14 @@ void ServerController::clearAccounts()
     accounts_.clear();
     pendingAccountSwitches_.clear();
     pendingStopAccountSwitches_.clear();
+    waitingAccountDispatches_.clear();
     pendingLoginReadyLoadouts_.clear();
+    waitingAccountDispatchReasons_.clear();
     pendingLoginReadyListings_.clear();
     pendingLoadoutRequests_.clear();
     accountLoginRequestGenerations_.clear();
     loginReadyStates_.clear();
+    accountDispatchRetryTimer_.stop();
     emit accountQueueChanged(0, 0, 0);
     emit statusChanged(QStringLiteral("已清空账号队列"), ServerStatusTone::Success);
 }
@@ -2010,7 +2036,13 @@ bool ServerController::dispatchAccountLogin(quint64 clientId, bool skipCurrentAc
     }
     if (!selected)
     {
+        waitingAccountDispatches_.insert(clientId, skipCurrentAccount);
+        waitingAccountDispatchReasons_.remove(clientId);
         emit statusChanged(QStringLiteral("没有可分发的账号"), ServerStatusTone::Error);
+        emit connectionLogAppended(QStringLiteral("%1 暂无可分发账号，已加入等待队列：模式=%2")
+            .arg(clientAddress(clientId), skipCurrentAccount
+                ? QStringLiteral("切换下一账号")
+                : QStringLiteral("复用当前账号/首次账号")));
         return false;
     }
     if (skipCurrentAccount && current)
@@ -2073,6 +2105,93 @@ void ServerController::setAccountSwitchAmountThreshold(const QString& amountText
         return;
     }
     accountSwitchAmountThreshold_ = value;
+}
+
+void ServerController::retryWaitingAccountDispatches()
+{
+    if (waitingAccountDispatches_.isEmpty())
+    {
+        accountDispatchRetryTimer_.stop();
+        return;
+    }
+    if (availableAccountCount() <= 0)
+    {
+        accountDispatchRetryTimer_.stop();
+        return;
+    }
+    if (!accountDispatchRetryTimer_.isActive())
+        accountDispatchRetryTimer_.start();
+
+    // 只扫描明确等待分发的客户端，按连接 ID 排队，不扫描或启动其他币号。
+    auto waitingIds = waitingAccountDispatches_.keys();
+    std::sort(waitingIds.begin(), waitingIds.end());
+    for (quint64 clientId : waitingIds)
+    {
+        if (!waitingAccountDispatches_.contains(clientId))
+            continue;
+        const auto logReason = [this, clientId](const QString& reason) {
+            if (waitingAccountDispatchReasons_.value(clientId) != reason)
+            {
+                waitingAccountDispatchReasons_.insert(clientId, reason);
+                emit connectionLogAppended(QStringLiteral("%1 账号等待队列：%2")
+                    .arg(clientAddress(clientId), reason));
+            }
+        };
+        const auto clients = connectionManager_.clients();
+        const auto client = std::find_if(clients.cbegin(), clients.cend(),
+            [clientId](const ClientListItem& item) { return item.id == clientId; });
+        if (client == clients.cend() || !client->connected || client->role != ClientRole::Coin)
+        {
+            logReason(QStringLiteral("已离线或不再是币号，取消自动补发"));
+            waitingAccountDispatches_.remove(clientId);
+            waitingAccountDispatchReasons_.remove(clientId);
+            continue;
+        }
+        const bool hasAssignedAccount = std::any_of(accounts_.cbegin(), accounts_.cend(),
+            [clientId](const AccountCredential& account) {
+                return account.assigned && !account.banned && !account.skippedForLowAmount
+                    && account.clientId == clientId;
+            });
+        if (hasAssignedAccount)
+        {
+            logReason(QStringLiteral("已有有效分配账号，取消自动补发"));
+            waitingAccountDispatches_.remove(clientId);
+            waitingAccountDispatchReasons_.remove(clientId);
+            continue;
+        }
+        if (client->actionRunning)
+        {
+            logReason(QStringLiteral("仍在执行 %1，等待空闲后重试").arg(client->runningAction));
+            continue;
+        }
+        // 不越过原有停止握手和延迟回调，避免补发与换号回调重复下发。
+        if (pendingAccountSwitches_.contains(clientId) || pendingStopAccountSwitches_.contains(clientId))
+        {
+            logReason(QStringLiteral("仍在等待停止/换号回调，暂不补发"));
+            continue;
+        }
+        if (availableAccountCount() <= 0)
+            break;
+        QString error;
+        const auto config = loginReadyStates_.constFind(clientId);
+        if (config == loginReadyStates_.cend())
+        {
+            logReason(QStringLiteral("缺少上号配置，等待补全参数"));
+            continue;
+        }
+        if (!validateLoadoutParameters(config->weapon, config->backpack, config->egg,
+                config->bulletName, config->perClick, config->bulletTotal, error)
+            || !validateListingParameters(config->listingText, config->listingPrice,
+                config->purchaseCount, config->loadoutMode, error))
+        {
+            logReason(QStringLiteral("参数不完整，暂不补发：%1").arg(error));
+            continue;
+        }
+        logReason(QStringLiteral("已空闲且没有有效分配账号，尝试补发上号"));
+        dispatchAccountLogin(clientId, waitingAccountDispatches_.value(clientId));
+    }
+    if (waitingAccountDispatches_.isEmpty() || availableAccountCount() <= 0)
+        accountDispatchRetryTimer_.stop();
 }
 
 bool ServerController::validateListingParameters(const QString& listingText, const QString& listingPrice,
@@ -2373,6 +2492,8 @@ void ServerController::handlePrepareResponse(quint64 clientId, int requestId, in
 }
 void ServerController::kickClient(quint64 clientId)
 {
+    waitingAccountDispatches_.remove(clientId);
+    waitingAccountDispatchReasons_.remove(clientId);
     if (connectionManager_.kickClient(clientId))
     {
         emit statusChanged(QStringLiteral("已踢出客户端"), ServerStatusTone::Neutral);

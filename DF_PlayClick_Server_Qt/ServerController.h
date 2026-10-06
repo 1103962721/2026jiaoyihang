@@ -133,6 +133,7 @@ private:
     void handleAccountLoginReady(quint64 clientId);
     void clearPendingAccountLoginRequests(quint64 clientId);
     bool dispatchAccountLogin(quint64 clientId, bool skipCurrentAccount = false);
+    void retryWaitingAccountDispatches();
     void switchAccountAfterLowAmount(quint64 clientId, qint64 amount);
     int availableAccountCount() const;
     int assignedAccountCount() const;
@@ -144,6 +145,7 @@ private:
     QTimer autoStartTimer_;
     QTimer compensationSyncTimer_;
     QTimer autoExecuteTimer_;
+    QTimer accountDispatchRetryTimer_;
     QString autoStartCountdownText_;
     QHash<quint64, AutoStartClientState> autoStartClientStates_;
     QHash<int, quint64> pendingOcrRequests_;
@@ -210,6 +212,9 @@ private:
     qint64 accountSwitchAmountThreshold_ = 0;
     QSet<quint64> pendingAccountSwitches_;
     QHash<quint64, bool> pendingStopAccountSwitches_;
+    // 没有可用账号时保留待分发客户端，新增账号后自动重试。
+    QHash<quint64, bool> waitingAccountDispatches_;
+    QHash<quint64, QString> waitingAccountDispatchReasons_;
     QHash<int, quint64> accountLoginRequestGenerations_;
     quint64 accountQueueGeneration_ = 1;
     bool preparingExecution_ = false;
