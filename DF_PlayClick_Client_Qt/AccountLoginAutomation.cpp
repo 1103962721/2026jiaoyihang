@@ -214,11 +214,11 @@ void AccountLoginAutomation::start(const QString& username, const QString& passw
         QString error;
         const auto fail = [this](const QString& text) {
             QString ignored;
-            stopProcesses(ignored);
+            stopProcesses(ignored, QStringLiteral("上号失败收尾：%1").arg(text));
             emit finished(false, text);
         };
         emit progress(QStringLiteral("正在清理现有 Steam 和游戏进程"));
-        if (!stopProcesses(error) || cancelled_)
+        if (!stopProcesses(error, QStringLiteral("上号开始清理旧进程")) || cancelled_)
         {
             fail(cancelled_ ? QStringLiteral("已取消") : error);
             return;
@@ -247,7 +247,7 @@ void AccountLoginAutomation::start(const QString& username, const QString& passw
             }
 
             emit progress(QStringLiteral("30 秒内未找到 Steam 登录窗口，正在结束 Steam 并使用当前账号重试"));
-            if (!stopSteamProcesses(error) || cancelled())
+            if (!stopSteamProcesses(error, QStringLiteral("Steam 登录窗口 30 秒超时，使用当前账号重试")) || cancelled())
             {
                 fail(cancelled() ? QStringLiteral("已取消") : error);
                 return;
@@ -508,35 +508,39 @@ bool AccountLoginAutomation::prepareAndStartLauncher(QString& errorText) const
 }
 
 void AccountLoginAutomation::cancel() { cancelled_ = true; }
-void AccountLoginAutomation::cancelAndStopProcesses()
+void AccountLoginAutomation::cancelAndStopProcesses(const QString& reason)
 {
     cancelled_ = true;
     QString ignored;
-    stopProcesses(ignored);
+    stopProcesses(ignored, reason.isEmpty() ? QStringLiteral("外部取消上号") : reason);
 }
 bool AccountLoginAutomation::cancelled() const { return cancelled_.load(); }
 
-bool AccountLoginAutomation::stopProcesses(QString& errorText) const
+bool AccountLoginAutomation::stopProcesses(QString& errorText, const QString& reason)
 {
     const QStringList names{QStringLiteral("steam.exe"), QStringLiteral("steamwebhelper.exe"),
         QStringLiteral("df_launcher.exe"), QStringLiteral("DeltaForceClient-Win64-Shipping.exe"),
         QStringLiteral("eltaForceClient-Win64-Shipping.exe")};
     for (const QString& name : names)
     {
-        QProcess::execute(QStringLiteral("taskkill"), {QStringLiteral("/F"), QStringLiteral("/IM"), name});
+        const int result = QProcess::execute(QStringLiteral("taskkill"),
+            {QStringLiteral("/F"), QStringLiteral("/IM"), name});
+        emit logMessage(QStringLiteral("进程清理：原因=%1，目标=%2，taskkill返回=%3")
+            .arg(reason.isEmpty() ? QStringLiteral("未标注") : reason, name).arg(result));
     }
     Q_UNUSED(errorText);
     return true;
 }
 
-bool AccountLoginAutomation::stopSteamProcesses(QString& errorText) const
+bool AccountLoginAutomation::stopSteamProcesses(QString& errorText, const QString& reason)
 {
     const QStringList names{QStringLiteral("steam.exe"), QStringLiteral("steamwebhelper.exe")};
     for (const QString& name : names)
     {
         const int result = QProcess::execute(QStringLiteral("taskkill"),
             {QStringLiteral("/F"), QStringLiteral("/IM"), name});
-        Q_UNUSED(result);
+        emit logMessage(QStringLiteral("Steam进程清理：原因=%1，目标=%2，taskkill返回=%3")
+            .arg(reason.isEmpty() ? QStringLiteral("未标注") : reason, name).arg(result));
     }
     Q_UNUSED(errorText);
     return true;

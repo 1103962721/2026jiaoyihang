@@ -38,6 +38,7 @@ int main()
     assert(Protocol::BuildAccountLoginStopRequestMessage() == "ACCOUNT_LOGIN_STOP_REQUEST\n");
     assert(Protocol::BuildForceStopActionAckMessage() == "FORCE_STOP_ACTION_ACK\n");
     assert(Protocol::BuildClientKickedMessage() == "CLIENT_KICKED\n");
+    assert(Protocol::BuildExecutionResponseMessage(false, "窗口失效\n") == "EXECUTION_RESPONSE ERROR 窗口失效 \n");
     assert(Protocol::IsValidTeamCodePayload("ABC1234"));
     assert(!Protocol::IsValidTeamCodePayload("abc1234"));
     assert(!Protocol::IsValidTeamCodePayload("AB12345"));
@@ -235,6 +236,10 @@ int main()
     assert(parsed.type == Protocol::MessageType::AccountLoginStopRequest);
     assert(Protocol::ParseLine("CLIENT_KICKED", parsed));
     assert(parsed.type == Protocol::MessageType::ClientKicked);
+    assert(Protocol::ParseLine("EXECUTION_RESPONSE ERROR 窗口失效", parsed));
+    assert(parsed.type == Protocol::MessageType::ExecutionResponse);
+    assert(!parsed.success);
+    assert(parsed.payload == "窗口失效");
     assert(Protocol::ParseLine("ACCOUNT_LOGIN_RESPONSE 7 STARTED launching", parsed));
     assert(parsed.type == Protocol::MessageType::AccountLoginResponse);
     assert(parsed.value == 1);

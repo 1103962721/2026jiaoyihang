@@ -35,7 +35,7 @@ void AccountLoginSuccessMonitor::stop() {
     if (worker_.joinable()) worker_.join();
     running_ = false;
 }
-void AccountLoginSuccessMonitor::setStage(int stage) { stage_.store(qBound(0, stage, 7)); }
+void AccountLoginSuccessMonitor::setStage(int stage) { stage_.store(qBound(0, stage, 8)); }
 bool AccountLoginSuccessMonitor::isRunning() const { return running_.load(); }
 
 void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
@@ -50,7 +50,7 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
     while (!stopRequested_ && gameProcessAlive(hwnd)) {
         const qint64 cycleStartedAt = QDateTime::currentMSecsSinceEpoch();
         const int requestedStage = stage_.load();
-        if (requestedStage >= 0 && requestedStage <= 7) {
+        if (requestedStage >= 0 && requestedStage <= 8) {
             if (requestedStage != phaseStage && requestedStage == 1) {
                 tabStageStartedAt = cycleStartedAt;
             } else if (requestedStage != phaseStage && requestedStage == 4) {
@@ -58,9 +58,9 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
             } else if (requestedStage != 1) {
                 tabStageStartedAt = 0;
             }
-            if (requestedStage == 7 && requestedStage != phaseStage) {
+            if ((requestedStage == 7 || requestedStage == 8) && requestedStage != phaseStage) {
                 enterGameStageStartedAt = cycleStartedAt;
-            } else if (requestedStage != 7) {
+            } else if (requestedStage != 7 && requestedStage != 8) {
                 enterGameStageStartedAt = 0;
             }
             if (requestedStage == 2 && requestedStage != phaseStage) {
@@ -107,14 +107,14 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
 
         const qint64 cycleFinishedAt = QDateTime::currentMSecsSinceEpoch();
         const int changedStage = stage_.load();
-        if (changedStage >= 0 && changedStage <= 7 && changedStage != phaseStage) {
+        if (changedStage >= 0 && changedStage <= 8 && changedStage != phaseStage) {
             phaseStage = changedStage;
             if (phaseStage == 1) {
                 tabStageStartedAt = cycleFinishedAt;
             } else {
                 tabStageStartedAt = 0;
             }
-            if (phaseStage == 7) {
+            if (phaseStage == 7 || phaseStage == 8) {
                 enterGameStageStartedAt = cycleFinishedAt;
             } else {
                 enterGameStageStartedAt = 0;
@@ -145,8 +145,9 @@ void AccountLoginSuccessMonitor::run(HWND hwnd, QString exe, int port) {
             // 菜单命中后由 UI 线程等待 2 秒再按 Tab；等待期间暂停 OCR。
             continue;
         }
-        if (phaseStage == 7) {
-            // “进入游戏”是可选提示：最多识别 5 秒，命中或超时都继续后续流程。
+        if (phaseStage == 7 || phaseStage == 8) {
+            // 第一次点击后等待 2 秒进入复查阶段；复查最多 5 秒，未再次
+            // 识别到“进入游戏”时视为第一次点击已生效并继续后续流程。
             if (enterGameStageStartedAt == 0) {
                 enterGameStageStartedAt = cycleFinishedAt;
             }

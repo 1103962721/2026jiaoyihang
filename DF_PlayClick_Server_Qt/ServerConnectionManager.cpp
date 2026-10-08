@@ -1449,6 +1449,11 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
                 emit clientsChanged();
                 emit accountLoginResponseReceived(client->id, message.requestId, message.value, responseText);
             }
+            else if (message.type == Protocol::MessageType::ExecutionResponse)
+            {
+                const QString responseText = QString::fromUtf8(message.payload.data(), static_cast<int>(message.payload.size()));
+                emit executionResponseReceived(client->id, message.success, responseText);
+            }
             else if (message.type == Protocol::MessageType::ForceStopActionAck)
             {
                 forceResetClientAction(client->id);

@@ -80,6 +80,7 @@ signals:
     void listingResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void mailResponseReceived(quint64 clientId, int requestId, bool success, const QString& text);
     void accountLoginResponseReceived(quint64 clientId, int requestId, int status, const QString& text);
+    void executionResponseReceived(quint64 clientId, bool success, const QString& text);
     void forceStopActionAckReceived(quint64 clientId);
     void amountReportReceived(quint64 clientId, qint64 amount);
     void prepareResponseReceived(quint64 clientId, int requestId, int status, const QString& text);

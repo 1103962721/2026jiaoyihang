@@ -11,17 +11,18 @@ public:
     explicit AccountLoginAutomation(QObject* parent = nullptr);
     void start(const QString& username, const QString& password);
     void cancel();
-    void cancelAndStopProcesses();
+    void cancelAndStopProcesses(const QString& reason = QString());
 signals:
     void progress(const QString& text);
+    void logMessage(const QString& text);
     void finished(bool success, const QString& text);
 private:
     bool cancelled() const;
-    bool stopProcesses(QString& errorText) const;
+    bool stopProcesses(QString& errorText, const QString& reason = QString());
     bool launchSteam(QString& errorText) const;
     bool launchGame(QString& errorText) const;
     bool performSteamLogin(QString& errorText, bool& loginWindowTimedOut) const;
-    bool stopSteamProcesses(QString& errorText) const;
+    bool stopSteamProcesses(QString& errorText, const QString& reason = QString());
     bool acceptSteamAgreementIfPresent() const;
     bool clickSteamOpenGameIfPresent() const;
     bool prepareAndStartLauncher(QString& errorText) const;

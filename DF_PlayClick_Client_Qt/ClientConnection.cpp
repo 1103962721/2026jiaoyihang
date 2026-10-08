@@ -449,6 +449,21 @@ bool ClientConnection::sendAccountLoginResponse(int requestId, const QString& st
     return false;
 }
 
+bool ClientConnection::sendExecutionResponse(bool success, const QString& payload)
+{
+    std::lock_guard<std::mutex> lock(sendMutex_);
+    if (!connected_.load())
+        return false;
+    if (SocketUtil::SendLine(socket_, Protocol::BuildExecutionResponseMessage(
+        success, payload.toUtf8().toStdString())))
+        return true;
+    const int errorCode = WSAGetLastError();
+    QMetaObject::invokeMethod(this, [this, errorCode]() {
+        handleConnectionLost(QStringLiteral("发送执行结果失败，错误码：%1").arg(errorCode));
+    }, Qt::QueuedConnection);
+    return false;
+}
+
 bool ClientConnection::sendForceStopActionAck()
 {
     std::lock_guard<std::mutex> lock(sendMutex_);

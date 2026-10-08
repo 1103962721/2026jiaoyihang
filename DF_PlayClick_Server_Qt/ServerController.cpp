@@ -240,13 +240,26 @@ ServerController::ServerController(QObject* parent)
     connect(&connectionManager_, &ServerConnectionManager::accountLoginResponseReceived, this,
         [this](quint64 clientId, int requestId, int status, const QString& text) {
             const auto generation = accountLoginRequestGenerations_.find(requestId);
+            const auto requestClient = accountLoginRequestClients_.find(requestId);
             if (generation == accountLoginRequestGenerations_.end()
-                || generation.value() != accountQueueGeneration_)
+                || generation.value() != accountQueueGeneration_
+                || (requestClient != accountLoginRequestClients_.cend() && requestClient.value() != clientId))
             {
+                emit connectionLogAppended(QStringLiteral("%1 忽略过期上号回报：requestId=%2，状态=%3，内容=%4")
+                    .arg(clientAddress(clientId)).arg(requestId).arg(status).arg(text));
                 return;
             }
-            if (status != 1)
+            // STARTED 和 OK 都是上号过程的中间状态：前者表示已开始，后者表示
+            // Steam/游戏窗口已启动。必须保留请求代次，直到 READY、封禁或最终错误，
+            // 否则后续“行前备战，登录成功”会被误判为旧回调而丢弃。
+            const bool loginStarted = text.contains(QStringLiteral("已开始上号"), Qt::CaseInsensitive);
+            const bool loginLaunched = status == 2;
+            const bool loginReady = status == 3;
+            if (!loginStarted && !loginLaunched && !loginReady)
+            {
                 accountLoginRequestGenerations_.erase(generation);
+                accountLoginRequestClients_.remove(requestId);
+            }
             emit connectionLogAppended(QStringLiteral("%1 上号状态：%2").arg(clientAddress(clientId)).arg(text));
             if (status == -2)
             {
@@ -267,6 +280,8 @@ ServerController::ServerController(QObject* parent)
                     emit statusChanged(QStringLiteral("客户端 %1 检测到封号，但未找到对应账号记录").arg(clientId), ServerStatusTone::Error);
                 }
                 clearPendingAccountLoginRequests(clientId);
+                accountLoginRequestGenerations_.remove(requestId);
+                accountLoginRequestClients_.remove(requestId);
                 connectionManager_.forceResetClientAction(clientId);
                 startAccountLogin(clientId);
                 return;
@@ -298,6 +313,28 @@ ServerController::ServerController(QObject* parent)
                         }
                     });
                 }
+            }
+        });
+    connect(&connectionManager_, &ServerConnectionManager::executionResponseReceived, this,
+        [this](quint64 clientId, bool success, const QString& text) {
+            if (success)
+                return;
+            const auto currentClients = connectionManager_.clients();
+            const auto iterator = std::find_if(currentClients.cbegin(), currentClients.cend(),
+                [clientId](const ClientListItem& client) { return client.id == clientId; });
+            if (iterator == currentClients.cend())
+                return;
+            connectionManager_.forceResetClientAction(clientId);
+            resetAutoStartClient(clientId);
+            emit connectionLogAppended(QStringLiteral("%1 执行失败回报：%2，已清除服务端执行锁")
+                .arg(clientAddress(clientId), text));
+            if (iterator->role == ClientRole::Coin
+                && text.contains(QStringLiteral("绑定游戏窗口已失效"), Qt::CaseInsensitive))
+            {
+                clearPendingAccountLoginRequests(clientId);
+                emit statusChanged(QStringLiteral("%1 游戏窗口失效，已复用当前账号重新上号")
+                    .arg(clientAddress(clientId)), ServerStatusTone::Error);
+                startAccountLogin(clientId);
             }
         });
     connect(&connectionManager_, &ServerConnectionManager::amountReportReceived, this,
@@ -724,6 +761,8 @@ void ServerController::requestForceStopAction(quint64 clientId)
         emit statusChanged(errorText, ServerStatusTone::Error);
         return;
     }
+    emit connectionLogAppended(QStringLiteral("%1 发送强制停止指令：来源=手动/当前动作停止")
+        .arg(clientAddress(clientId)));
     resetAutoStartClient(clientId);
     emit statusChanged(QStringLiteral("已向客户端发送强制停止指令，等待停止完成确认"), ServerStatusTone::Success);
 }
@@ -758,6 +797,8 @@ void ServerController::requestForceStopAllActions()
     waitingAccountDispatchReasons_.clear();
     accountDispatchRetryTimer_.stop();
     const int sentCount = connectionManager_.requestForceStopAllActions();
+    emit connectionLogAppended(QStringLiteral("全局强制停止：已发送 %1 个客户端，来源=手动/全局停止")
+        .arg(sentCount));
     pendingStopAccountSwitches_.clear();
     pendingAccountSwitches_.clear();
     autoStartClientStates_.clear();
@@ -1674,6 +1715,8 @@ void ServerController::requestAccountLoginStop(quint64 clientId)
         emit statusChanged(errorText, ServerStatusTone::Error);
         return;
     }
+    emit connectionLogAppended(QStringLiteral("%1 发送中止上号指令：来源=手动")
+        .arg(clientAddress(clientId)));
     connectionManager_.forceResetClientAction(clientId);
     clearPendingAccountLoginRequests(clientId);
     emit statusChanged(QStringLiteral("已向客户端发送中止上号指令"), ServerStatusTone::Success);
@@ -1773,9 +1816,17 @@ void ServerController::clearAccounts()
             continue;
         QString stopError;
         if (client.runningAction == QStringLiteral("上号中"))
-            connectionManager_.requestAccountLoginStop(client.id, stopError);
+        {
+            if (connectionManager_.requestAccountLoginStop(client.id, stopError))
+                emit connectionLogAppended(QStringLiteral("%1 发送中止上号指令：来源=清空账号队列")
+                    .arg(clientAddress(client.id)));
+        }
         else
-            connectionManager_.requestForceStopAction(client.id, stopError);
+        {
+            if (connectionManager_.requestForceStopAction(client.id, stopError))
+                emit connectionLogAppended(QStringLiteral("%1 发送强制停止指令：来源=清空账号队列")
+                    .arg(clientAddress(client.id)));
+        }
     }
     accounts_.clear();
     pendingAccountSwitches_.clear();
@@ -1786,6 +1837,7 @@ void ServerController::clearAccounts()
     pendingLoginReadyListings_.clear();
     pendingLoadoutRequests_.clear();
     accountLoginRequestGenerations_.clear();
+    accountLoginRequestClients_.clear();
     loginReadyStates_.clear();
     accountDispatchRetryTimer_.stop();
     emit accountQueueChanged(0, 0, 0);
@@ -1899,6 +1951,7 @@ QString ServerController::clientAddress(quint64 clientId) const
 bool ServerController::setAccountLoginConfig(quint64 clientId, const QString& listingText,
     const QString& listingPrice, int purchaseCount)
 {
+    updateGlobalListingParameters(listingText, listingPrice, purchaseCount);
     LoginReadyState state;
     QString validationError;
     if (!loadoutConfigForRole(ClientRole::Coin, state, validationError)
@@ -1916,6 +1969,19 @@ bool ServerController::setAccountLoginConfig(quint64 clientId, const QString& li
     return true;
 }
 
+void ServerController::updateGlobalListingParameters(const QString& listingText, const QString& listingPrice, int purchaseCount)
+{
+    globalListingText_ = listingText.trimmed();
+    globalListingPrice_ = listingPrice.trimmed();
+    globalListingPurchaseCount_ = purchaseCount;
+    for (auto iterator = loginReadyStates_.begin(); iterator != loginReadyStates_.end(); ++iterator)
+    {
+        iterator->listingText = globalListingText_;
+        iterator->listingPrice = globalListingPrice_;
+        iterator->purchaseCount = globalListingPurchaseCount_;
+    }
+}
+
 void ServerController::startAccountLogin(quint64 clientId)
 {
     const auto currentClients = connectionManager_.clients();
@@ -1931,6 +1997,8 @@ void ServerController::startAccountLogin(quint64 clientId)
             emit statusChanged(errorText, ServerStatusTone::Error);
             return;
         }
+        emit connectionLogAppended(QStringLiteral("%1 发送中止上号指令：来源=再次点击上号，准备复用当前账号")
+            .arg(clientAddress(clientId)));
         connectionManager_.forceResetClientAction(clientId);
         clearPendingAccountLoginRequests(clientId);
         emit statusChanged(QStringLiteral("客户端 %1 正在结束旧上号流程，500ms 后重新执行").arg(clientId),
@@ -1965,6 +2033,8 @@ void ServerController::startAccountSwitch(quint64 clientId)
             emit statusChanged(QStringLiteral("换号前停止当前动作失败：%1").arg(errorText), ServerStatusTone::Error);
             return;
         }
+        emit connectionLogAppended(QStringLiteral("%1 发送停止指令：来源=手动换号，当前动作=%2")
+            .arg(clientAddress(clientId), current->runningAction));
         if (current->runningAction == QStringLiteral("上号中"))
         {
             pendingStopAccountSwitches_.insert(clientId, true);
@@ -1994,7 +2064,14 @@ bool ServerController::dispatchAccountLogin(quint64 clientId, bool skipCurrentAc
         emit statusChanged(QStringLiteral("请先填写完整的配装和上架参数，再执行上号"), ServerStatusTone::Error);
         return false;
     }
-    const LoginReadyState& loginState = loginReadyStates_[clientId];
+    LoginReadyState loginState = loginReadyStates_[clientId];
+    if (!globalListingPrice_.trimmed().isEmpty())
+    {
+        loginState.listingText = globalListingText_;
+        loginState.listingPrice = globalListingPrice_;
+        loginState.purchaseCount = globalListingPurchaseCount_;
+        loginReadyStates_[clientId] = loginState;
+    }
     QString validationError;
     if (!validateLoadoutParameters(loginState.weapon, loginState.backpack, loginState.egg,
             loginState.bulletName, loginState.perClick, loginState.bulletTotal, validationError)
@@ -2064,13 +2141,31 @@ bool ServerController::dispatchAccountLogin(quint64 clientId, bool skipCurrentAc
         emit statusChanged(errorText, ServerStatusTone::Error);
         return false;
     }
+    // 同一客户端只保留当前登录会话的回报映射，避免旧账号的延迟回报触发新一轮换号。
+    QList<int> staleRequestIds;
+    for (auto iterator = accountLoginRequestClients_.cbegin(); iterator != accountLoginRequestClients_.cend(); ++iterator)
+    {
+        if (iterator.value() == clientId)
+            staleRequestIds.push_back(iterator.key());
+    }
+    for (int staleRequestId : staleRequestIds)
+    {
+        accountLoginRequestClients_.remove(staleRequestId);
+        accountLoginRequestGenerations_.remove(staleRequestId);
+    }
     accountLoginRequestGenerations_.insert(requestId, accountQueueGeneration_);
+    accountLoginRequestClients_.insert(requestId, clientId);
+    waitingAccountDispatches_.remove(clientId);
+    waitingAccountDispatchReasons_.remove(clientId);
     if (!selected->assigned)
     {
         selected->assigned = true;
         selected->clientId = clientId;
         emitAccountQueueState();
     }
+    emit connectionLogAppended(QStringLiteral("%1 下发上号：requestId=%2，模式=%3")
+        .arg(clientAddress(clientId)).arg(requestId)
+        .arg(skipCurrentAccount ? QStringLiteral("切换下一账号") : QStringLiteral("复用当前账号/首次账号")));
     emit statusChanged(QStringLiteral("已向币号客户端 %1 下发上号指令").arg(clientId), ServerStatusTone::Neutral);
     return true;
 }
@@ -2264,6 +2359,9 @@ void ServerController::switchAccountAfterLowAmount(quint64 clientId, qint64 amou
     }
     emitAccountQueueState();
 
+    // 先登记“停止完成后换号”，再发送停止指令，避免客户端快速回 ACK 时
+    // 竞态地走普通停止分支，导致下一账号没有被下发。
+    pendingStopAccountSwitches_.insert(clientId, true);
     QString errorText;
     const bool stopSent = connectionManager_.requestForceStopAction(clientId, errorText);
     emit connectionLogAppended(QStringLiteral("%1 资金 %2 低于换号金额，已发送停止并准备换号")
@@ -2271,11 +2369,10 @@ void ServerController::switchAccountAfterLowAmount(quint64 clientId, qint64 amou
     if (!stopSent)
     {
         pendingAccountSwitches_.remove(clientId);
+        pendingStopAccountSwitches_.remove(clientId);
         emit statusChanged(QStringLiteral("客户端 %1 换号前停止失败：%2").arg(clientId).arg(errorText), ServerStatusTone::Error);
         return;
     }
-
-    pendingStopAccountSwitches_.insert(clientId, true);
 }
 
 void ServerController::handleAccountLoginReady(quint64 clientId)

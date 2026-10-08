@@ -41,6 +41,7 @@ public:
     bool sendAmountReport(qint64 amount);
     bool sendTimeSyncResponse(int requestId, qint64 clientReceiveMs, qint64 clientSendMs);
     bool sendAccountLoginResponse(int requestId, const QString& status, const QString& payload);
+    bool sendExecutionResponse(bool success, const QString& payload);
     bool sendForceStopActionAck();
 
 signals:

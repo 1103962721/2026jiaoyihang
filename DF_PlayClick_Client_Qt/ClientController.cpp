@@ -229,7 +229,7 @@ ClientController::ClientController(QObject* parent)
         // 接收线程先取消同步自动化和登录进程，避免踢出后仍继续执行当前指令。
         accountLoginStopExcluded_.store(false);
         automationCancelRequested_.store(true);
-        accountLoginAutomation_.cancelAndStopProcesses();
+        accountLoginAutomation_.cancelAndStopProcesses(QStringLiteral("收到服务端踢出指令"));
     }, Qt::DirectConnection);
     connect(&connection_, &ClientConnection::clientKicked, this, &ClientController::handleClientKicked,
         Qt::QueuedConnection);
@@ -240,7 +240,7 @@ ClientController::ClientController(QObject* parent)
         accountBanMonitor_.stop();
         accountLoginSuccessMonitor_.stop();
         loginOcrRunning_ = false;
-        accountLoginAutomation_.cancelAndStopProcesses();
+        accountLoginAutomation_.cancelAndStopProcesses(QStringLiteral("收到服务端中止上号指令"));
         automationCancelRequested_ = true;
         automationActionRunning_ = false;
         connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("ERROR"), QStringLiteral("已中止上号并结束 Steam、df_launcher 和 Delta Force 进程"));
@@ -250,7 +250,7 @@ ClientController::ClientController(QObject* parent)
         // 接收线程直接取消自动化并结束目标进程；UI 线程随后负责收尾状态和监测线程。
         accountLoginStopExcluded_ = false;
         automationCancelRequested_.store(true);
-        accountLoginAutomation_.cancelAndStopProcesses();
+        accountLoginAutomation_.cancelAndStopProcesses(QStringLiteral("收到服务端立即中止上号指令"));
     }, Qt::DirectConnection);
     connect(&connection_, &ClientConnection::ocrRequestReceived, this, &ClientController::handleOcrRequest);
     connect(&connection_, &ClientConnection::selfThunderRequestReceived, this, &ClientController::handleSelfThunderRequest);
@@ -262,6 +262,8 @@ ClientController::ClientController(QObject* parent)
     connect(&accountLoginAutomation_, &AccountLoginAutomation::progress, this, [this](const QString& text) {
         setStatus(text);
     });
+    connect(&accountLoginAutomation_, &AccountLoginAutomation::logMessage, this,
+        [this](const QString& text) { emit connectionLogAppended(text); });
     connect(&accountBanMonitor_, &AccountBanMonitor::bannedDetected, this, &ClientController::handleAccountBanned);
     connect(&accountBanMonitor_, &AccountBanMonitor::startupFailedDetected, this, &ClientController::handleAccountStartupFailed);
     connect(&accountBanMonitor_, &AccountBanMonitor::monitorStatus, this, [this](const QString& text) {
@@ -552,7 +554,7 @@ void ClientController::stopAllActionsImmediately(bool stopLoginProcesses)
     automationCancelRequested_.store(true);
     if (stopLoginProcesses)
     {
-        accountLoginAutomation_.cancelAndStopProcesses();
+        accountLoginAutomation_.cancelAndStopProcesses(QStringLiteral("停止全部动作并结束登录相关进程"));
     }
     else
     {
@@ -1180,7 +1182,10 @@ void ClientController::clickEnabledTasks()
 {
     if (!boundHwnd_ || !binder_.isValid(boundHwnd_))
     {
-        emit messageRequested(QStringLiteral("提示"), QStringLiteral("绑定游戏窗口已失效，请重启客户端后重试"), false);
+        const QString errorText = QStringLiteral("绑定游戏窗口已失效，请重启客户端后重试");
+        emit connectionLogAppended(QStringLiteral("执行失败：%1，已回报服务端").arg(errorText));
+        setStatus(errorText);
+        connection_.sendExecutionResponse(false, errorText);
         return;
     }
 
@@ -1217,21 +1222,20 @@ void ClientController::clickEnabledTasks()
     const auto reportStableAmount = [this, &errorText](POINT movePoint, int moveReferenceWidth, int moveReferenceHeight,
         int x, int y, int width, int height, const QString& prefix, bool reportToServer) {
         QRegularExpression amountPattern(QStringLiteral(R"((\d[\d,.]*\d|\d)[\s]*([KkMm])?)"));
-        // 资金面板可能因鼠标已在附近而没有重新弹出，最多向右偏移 3、6 像素重试。
-        for (int attempt = 0; attempt < 3; ++attempt)
+        // 资金面板可能因鼠标已在附近而没有重新弹出。每次未识别到金额就向右
+        // 偏移 3 像素，取消总尝试次数和超时，直到金额稳定识别成功或收到停止信号。
+        int attempt = 0;
+        for (;; ++attempt)
         {
             QString previous;
             int stableCount = 0;
-            QElapsedTimer timer;
             POINT retryPoint = movePoint;
             retryPoint.x += attempt * 3;
             if (!input_.moveReferencePoint(boundHwnd_, retryPoint, moveReferenceWidth, moveReferenceHeight, errorText))
                 return false;
             if (!waitForAutomation(1000, errorText))
                 return false;
-            timer.start();
-            // 每次重新移动后最多识别 5 秒；失败才进入下一偏移点。
-            while (timer.elapsed() < 5000)
+            for (;;)
             {
             OcrRegionConfig region;
             region.enabled = true;
@@ -1304,12 +1308,13 @@ void ClientController::clickEnabledTasks()
                 emit connectionLogAppended(QStringLiteral("金额OCR[%1]：未识别到金额，OCR文本“%2”错误“%3”")
                     .arg(prefix, text, ocrError));
             }
+                // 当前偏移点没有有效金额时，结束本点并向右移动 3 像素；
+                // 识别到金额后则留在当前点完成连续稳定校验。
+                if (!match.hasMatch())
+                    break;
                 if (!waitForAutomation(100, errorText)) return false;
             }
         }
-        if (errorText.isEmpty())
-            errorText = QStringLiteral("资金面板在原坐标及右移 3/6 像素后仍未识别到稳定金额");
-        return false;
     };
     // 出发点不接受用户取点，只按角色使用 2560x1440 固定坐标并适配当前客户区。
     if (!input_.clickReferencePoint(boundHwnd_, point, 2560, 1440, clickQueueDelayMs_, errorText))
@@ -2520,7 +2525,6 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
             QStringLiteral(R"((\d[\d,.]*\d|\d)[\s]*([KkMm])?)"));
         QString previous;
         int stableCount = 0;
-        QElapsedTimer timer;
         // 移动到金额区域后只等待一次，随后每 100ms 重新截图识别。
         int bossClientWidth = 0;
         int bossClientHeight = 0;
@@ -2534,7 +2538,8 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
         const POINT bossAmountMovePoint = bossWindow1K ? POINT{ 1639, 54 } : POINT{ 2128, 67 };
         const int bossReferenceWidth = bossWindow1K ? 1920 : 2560;
         const int bossReferenceHeight = bossWindow1K ? 1080 : 1440;
-        for (int attempt = 0; attempt < 3; ++attempt)
+        int attempt = 0;
+        for (;; ++attempt)
         {
             previous.clear();
             stableCount = 0;
@@ -2545,8 +2550,7 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
                 return false;
             if (!waitForAutomation(1000, errorText))
                 return false;
-            timer.start();
-            while (timer.elapsed() < 5000)
+            for (;;)
             {
             OcrRegionConfig region;
             region.enabled = true;
@@ -2615,13 +2619,12 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
                     }
                 }
             }
+                if (!match.hasMatch())
+                    break;
                 if (!waitForAutomation(100, errorText))
                     return false;
             }
         }
-        if (errorText.isEmpty())
-            errorText = QStringLiteral("5 秒内未识别到老板金额基线（已重试右移 3/6 像素）");
-        return false;
     };
 
     const auto waitForBossInitialReady = [this, &errorText]() {
@@ -2795,12 +2798,12 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
             panelQuantityRegion.referenceWidth = ReferenceWidth;
             panelQuantityRegion.referenceHeight = ReferenceHeight;
             const QRegularExpression panelQuantityPattern(QStringLiteral(R"((\d+)\s*/\s*(\d+))"));
-            for (int panelAttempt = 1; panelAttempt <= 3; ++panelAttempt)
+            for (;;)
             {
                 QString panelOcrError;
                 const QString panelImage = captureOcrRegion(
                     panelQuantityRegion,
-                    QStringLiteral("boss_price_panel_quantity_%1").arg(panelAttempt), panelOcrError);
+                    QStringLiteral("boss_price_panel_quantity_%1").arg(++attempt), panelOcrError);
                 QString panelText;
                 if (!panelImage.isEmpty())
                 {
@@ -2809,7 +2812,7 @@ bool ClientController::executeBossListingSequence(const QString& listingPrice, Q
                     QFile::remove(panelImage);
                 }
                 const QRegularExpressionMatch panelMatch = panelQuantityPattern.match(panelText);
-                if (!panelMatch.hasMatch() || panelMatch.captured(1).toInt() != 1 || panelAttempt == 3)
+                if (panelMatch.hasMatch() && panelMatch.captured(1).toInt() != 1)
                     break;
                 if (!click(panelPoint) || !waitForAutomation(300, errorText))
                     return false;
@@ -3198,10 +3201,16 @@ void ClientController::handleAccountLoginRequest(int requestId, const QString& u
         accountBanMonitor_.stop();
         accountLoginSuccessMonitor_.stop();
         loginOcrRunning_ = false;
-        accountLoginAutomation_.cancelAndStopProcesses();
+        accountLoginAutomation_.cancelAndStopProcesses(QStringLiteral("再次收到上号请求，清理上一轮登录流程"));
         accountLoginRunning_ = false;
         automationActionRunning_ = false;
     }
+    // 新账号登录后，自动执行只能使用随后收到的最新上架请求，不能复用旧账号的价格快照。
+    hasLastListingRequest_ = false;
+    lastListingRequestId_ = 0;
+    lastListingPrice_.clear();
+    lastListingText_.clear();
+    lastListingPurchaseCount_ = 0;
     const quint64 loginGeneration = ++accountLoginFlowGeneration_;
     if (!beginAutomationAction(QStringLiteral("上号")))
     {
@@ -3231,7 +3240,7 @@ void ClientController::handleAccountBanned(const QString& recognizedText)
     accountLoginSuccessMonitor_.stop();
     loginOcrRunning_ = false;
     automationCancelRequested_.store(true);
-    accountLoginAutomation_.cancelAndStopProcesses();
+    accountLoginAutomation_.cancelAndStopProcesses(QStringLiteral("封禁 OCR 命中"));
     countdownTimer_.stop();
     scheduledTriggerTimer_.stop();
     countdown_ = 0;
@@ -3260,7 +3269,7 @@ void ClientController::handleAccountStartupFailed(const QString& recognizedText)
     accountLoginSuccessMonitor_.stop();
     loginOcrRunning_ = false;
     automationCancelRequested_.store(true);
-    accountLoginAutomation_.cancelAndStopProcesses();
+    accountLoginAutomation_.cancelAndStopProcesses(QStringLiteral("启动器登录组件报错，重试当前账号"));
     countdownTimer_.stop();
     scheduledTriggerTimer_.stop();
     countdown_ = 0;
@@ -3279,6 +3288,9 @@ void ClientController::handleLoginReady()
 {
     if (accountLoginReadyReported_ || !accountLoginRunning_ || !boundHwnd_) return;
     accountLoginReadyReported_ = true;
+    // 行前备战已确认登录完成；从此刻起停止指令必须能够打断后续配装/上架，
+    // 不能继续沿用“上号期间忽略停止”的保护状态。
+    accountLoginStopExcluded_.store(false);
     // “行前备战”已经证明登录成功。停止登录成功判定线程，封禁监测由
     // AccountBanMonitor 独立负责，避免同一张截图被两个 OCR 流程重复处理。
     accountLoginSuccessMonitor_.stop();
@@ -3312,7 +3324,7 @@ void ClientController::runLoginSuccessOcr(int stage)
     // “行前备战”按钮会随窗口客户区和分辨率缩放，不能依赖固定的右下角小区域。
     // Tab 成功后改为识别完整客户区，由 OCR 返回文字位置；该阶段只识别文字，不点击。
     else if (stage == 2) { region = {true, 1946, 1262, 500, 56, 2560, 1440}; }
-    else if (stage == 7) { region = {true, 1084, 849, 400, 80, 2560, 1440}; }
+    else if (stage == 7 || stage == 8) { region = {true, 1084, 849, 400, 80, 2560, 1440}; }
     else { region = {true, 0, 0, 2560, 1440, 2560, 1440}; }
     const QString executable = config_.loadUmiOcrPath();
     const int port = config_.loadUmiOcrPort();
@@ -3320,7 +3332,7 @@ void ClientController::runLoginSuccessOcr(int stage)
         : stage == 1 ? QStringLiteral("Tab/战术部门/研发部门/医疗部门")
         : stage == 2 ? QStringLiteral("行前备战")
         : stage == 4 ? QStringLiteral("继续/参加/跳转/前往参加/前往跳转")
-        : stage == 7 ? QStringLiteral("进入游戏") : QStringLiteral("行前备战");
+        : (stage == 7 || stage == 8) ? QStringLiteral("进入游戏") : QStringLiteral("行前备战");
     const HWND gameWindow = boundHwnd_;
     QPointer<ClientController> controller(this);
     std::thread([controller, gameWindow, region, stage, executable, port, keyword]() {
@@ -3375,7 +3387,7 @@ void ClientController::runLoginSuccessOcr(int stage)
             const QString stageName = stage == 0 ? QStringLiteral("常驻")
                 : stage == 1 ? QStringLiteral("菜单")
                 : stage == 2 ? QStringLiteral("行前备战")
-                : stage == 7 ? QStringLiteral("进入游戏") : QStringLiteral("前往获取");
+                : (stage == 7 || stage == 8) ? QStringLiteral("进入游戏") : QStringLiteral("前往获取");
             QMetaObject::invokeMethod(controller, [controller, stageName, found, recognizedText, error, elapsed]() {
                 if (controller)
                 {
@@ -3408,7 +3420,7 @@ void ClientController::finishLoginSuccessOcr(int stage, bool found, const QStrin
         {
             setStatus(QStringLiteral("Tab 已执行，继续识别“行前备战”"));
         }
-        else if (stage != 0 && stage != 1 && stage != 4 && stage != 7)
+        else if (stage != 0 && stage != 1 && stage != 4 && stage != 7 && stage != 8)
         {
             accountLoginSuccessMonitor_.setStage(0);
         }
@@ -3422,7 +3434,7 @@ void ClientController::finishLoginSuccessOcr(int stage, bool found, const QStrin
         // 常驻点击后先独立识别最多 5 秒的可选“进入游戏”提示，再进入继续/参加/跳转流程。
         accountLoginSuccessMonitor_.setStage(7);
     }
-    else if (stage == 7)
+    else if (stage == 7 || stage == 8)
     {
         if (bounds.isValid() && boundHwnd_ && IsWindow(boundHwnd_))
         {
@@ -3443,8 +3455,25 @@ void ClientController::finishLoginSuccessOcr(int stage, bool found, const QStrin
                 }
             }
         }
-        // 可选提示只处理一次，随后进入“继续/参加/跳转”阶段。
-        accountLoginSuccessMonitor_.setStage(4);
+        if (stage == 7)
+        {
+            // 首次点击后等待 2 秒，再进入同一区域的二次 OCR 复查。
+            setStatus(QStringLiteral("已点击进入游戏，2 秒后复查"));
+            accountLoginSuccessMonitor_.setStage(6);
+            const int loginRequestId = accountLoginRequestId_;
+            QTimer::singleShot(2000, this, [this, loginRequestId]() {
+                if (loginRequestId != accountLoginRequestId_ || !accountLoginRunning_
+                    || accountLoginReadyReported_ || !boundHwnd_
+                    || !binder_.isValid(boundHwnd_))
+                    return;
+                accountLoginSuccessMonitor_.setStage(8);
+                setStatus(QStringLiteral("开始复查进入游戏，超时 5 秒视为已生效"));
+            });
+        }
+        else
+        {
+            accountLoginSuccessMonitor_.setStage(4);
+        }
     }
     else if (stage == 4)
     {
@@ -3872,10 +3901,11 @@ bool ClientController::executeSaveLoadoutSequence(const QString& weapon, const Q
     listRegion.referenceHeight = ReferenceHeight;
 
     const auto findWithScroll = [&](const QString& keyword, const QString& filePrefix, QRect& bounds) {
-        QElapsedTimer timer;
-        timer.start();
+        bool scrollDown = true;
+        QElapsedTimer directionTimer;
+        directionTimer.start();
         int attempt = 0;
-        while (timer.elapsed() < 20000)
+        for (;;)
         {
             if (stopIfRequested())
                 return false;
@@ -3890,13 +3920,20 @@ bool ClientController::executeSaveLoadoutSequence(const QString& weapon, const Q
             }
             if (found)
                 return true;
-            if (!input_.scrollReferencePoint(boundHwnd_, POINT{ 342, 700 }, ReferenceWidth, ReferenceHeight, -WHEEL_DELTA * 5, errorText))
+            if (directionTimer.elapsed() >= 20000)
+            {
+                scrollDown = !scrollDown;
+                directionTimer.restart();
+                emit connectionLogAppended(QStringLiteral(
+                    "保存配装：%1 单方向查找超时，切换为向%2滚动并重新开始20秒识别")
+                    .arg(keyword, scrollDown ? QStringLiteral("下") : QStringLiteral("上")));
+            }
+            const int wheelDelta = scrollDown ? -WHEEL_DELTA * 5 : WHEEL_DELTA * 5;
+            if (!input_.scrollReferencePoint(boundHwnd_, POINT{ 342, 700 }, ReferenceWidth, ReferenceHeight, wheelDelta, errorText))
                 return false;
             if (!waitForAutomation(150, errorText))
                 return false;
         }
-        errorText = QStringLiteral("20 秒内未找到“%1”").arg(keyword);
-        return false;
     };
 
     SetForegroundWindow(boundHwnd_);
@@ -3930,6 +3967,10 @@ bool ClientController::executeSaveLoadoutSequence(const QString& weapon, const Q
         || normalizedPreparationText.contains(QStringLiteral("出发"));
     if (!isPreBattlePreparation && !isLoadoutOrDeparture)
     {
+        emit connectionLogAppended(QStringLiteral(
+            "保存配装：入口 OCR 未识别到“行前备战/配装/出发”，最后文本：%1；OCR错误：%2")
+            .arg(normalizedPreparationText.isEmpty() ? QStringLiteral("<空>") : normalizedPreparationText,
+                 preparationOcrError.isEmpty() ? QStringLiteral("<无>") : preparationOcrError));
         errorText = QStringLiteral("未识别到“行前备战”“配装”或“出发”：%1").arg(normalizedPreparationText);
         return false;
     }
@@ -4149,6 +4190,8 @@ bool ClientController::executeSaveLoadoutSequence(const QString& weapon, const Q
             return false;
         if (!moveThenRightClick(POINT{ 702, 1091 })
             || !moveThenRightClick(POINT{ 792, 1091 })
+            || !moveThenRightClick(POINT{ 703, 1176 })
+            || !moveThenRightClick(POINT{ 794, 1166 })
             || !waitForAutomation(1000, errorText))
         {
             return false;
@@ -4419,7 +4462,37 @@ bool ClientController::executeListingSequence(bool hasExchange, int purchaseCoun
         {
             if (stopIfRequested()) return false;
             if (!click(panelPoint) || !waitForAutomation(1500, errorText)
-                || !click(inputPoint) || !waitForAutomation(500, errorText)
+                ) return false;
+
+            OcrRegionConfig panelQuantityRegion;
+            panelQuantityRegion.enabled = true;
+            panelQuantityRegion.x = 1957;
+            panelQuantityRegion.y = 678;
+            panelQuantityRegion.width = 80;
+            panelQuantityRegion.height = 32;
+            panelQuantityRegion.referenceWidth = ReferenceWidth;
+            panelQuantityRegion.referenceHeight = ReferenceHeight;
+            const QRegularExpression panelQuantityPattern(QStringLiteral(R"((\d+)\s*/\s*(\d+))"));
+            for (;;)
+            {
+                if (stopIfRequested()) return false;
+                QString panelOcrError;
+                const QString panelImage = captureOcrRegion(
+                    panelQuantityRegion, QStringLiteral("%1_panel_quantity_%2").arg(filePrefix).arg(++attempt), panelOcrError);
+                QString panelText;
+                if (!panelImage.isEmpty())
+                {
+                    panelText = umiOcrRunner_.recognizeImage(
+                        panelImage, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), panelOcrError);
+                    QFile::remove(panelImage);
+                }
+                const QRegularExpressionMatch panelMatch = panelQuantityPattern.match(panelText);
+                if (panelMatch.hasMatch() && panelMatch.captured(1).toInt() != 1)
+                    break;
+                if (!click(panelPoint) || !waitForAutomation(300, errorText))
+                    return false;
+            }
+            if (!click(inputPoint) || !waitForAutomation(500, errorText)
                 || !click(inputPoint)
                 || !input_.pressKeyRepeated(VK_BACK, 5, 20, errorText)
                 || !waitForAutomation(500, errorText)
@@ -4609,6 +4682,8 @@ bool ClientController::executeListingSequence(bool hasExchange, int purchaseCoun
         preparationTimer.start();
         bool preparationFound = false;
         bool loadoutEntryFound = false;
+        QString lastPreparationText;
+        QString lastPreparationOcrError;
         int preparationAttempt = 0;
         while (preparationTimer.elapsed() < 3000 && !preparationFound && !loadoutEntryFound)
         {
@@ -4621,8 +4696,14 @@ bool ClientController::executeListingSequence(bool hasExchange, int purchaseCoun
                 const QString text = umiOcrRunner_.recognizeImage(
                     imagePath, config_.loadUmiOcrPath(), config_.loadUmiOcrPort(), ocrError).simplified();
                 QFile::remove(imagePath);
+                lastPreparationText = text;
+                lastPreparationOcrError = ocrError;
                 preparationFound = text.contains(QStringLiteral("行前备战"), Qt::CaseInsensitive);
                 loadoutEntryFound = text.contains(QStringLiteral("配装"), Qt::CaseInsensitive);
+            }
+            else
+            {
+                lastPreparationOcrError = ocrError;
             }
             if (!ocrError.isEmpty() && !ocrError.contains(QStringLiteral("No text found in image"), Qt::CaseInsensitive))
             {
@@ -4633,6 +4714,10 @@ bool ClientController::executeListingSequence(bool hasExchange, int purchaseCoun
         }
         if (!preparationFound && !loadoutEntryFound)
         {
+            emit connectionLogAppended(QStringLiteral(
+                "配装上架：入口 OCR 超时，最后文本：%1；OCR错误：%2")
+                .arg(lastPreparationText.isEmpty() ? QStringLiteral("<空>") : lastPreparationText,
+                     lastPreparationOcrError.isEmpty() ? QStringLiteral("<无>") : lastPreparationOcrError));
             errorText = QStringLiteral("3 秒内未识别到“行前备战”或“配装”");
             return false;
         }

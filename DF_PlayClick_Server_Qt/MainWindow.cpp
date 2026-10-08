@@ -11,6 +11,7 @@
 #include <QFileDialog>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFont>
 #include <QGroupBox>
 #include <QGridLayout>
 #include <QHeaderView>
@@ -50,13 +51,24 @@ QString formatAmountForDisplay(const QString& amount)
     return digits;
 }
 
-QString clientNoteKey(const ClientListItem& client)
+QString clientNoteKey(const ClientListItem& client, const QVector<ClientListItem>& clients)
 {
     const QString deviceId = client.deviceId.trimmed();
     // HELLO 到达前 deviceId 可能暂时为空。不能让所有未完成握手的客户端
     // 共用同一个空键，否则给其中一个客户端编辑备注会覆盖其他客户端。
-    return deviceId.isEmpty()
-        ? QStringLiteral("Session/%1").arg(client.id)
+    if (deviceId.isEmpty())
+        return QStringLiteral("Session/%1").arg(client.id);
+
+    int sameDeviceCount = 0;
+    for (const ClientListItem& candidate : clients)
+    {
+        if (candidate.deviceId.trimmed() == deviceId)
+            ++sameDeviceCount;
+    }
+    // 复制客户端配置会造成多个连接上报相同 DeviceId。此时不能共用持久化键，
+    // 使用本次连接的客户端 ID 隔离备注，避免修改一行同步到其他行。
+    return sameDeviceCount > 1
+        ? QStringLiteral("DuplicateDevice/%1/Session/%2").arg(deviceId).arg(client.id)
         : deviceId;
 }
 }
@@ -397,6 +409,9 @@ void MainWindow::buildUi()
     clientTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
     clientTable_->setSelectionMode(QAbstractItemView::SingleSelection);
     clientTable_->setContextMenuPolicy(Qt::CustomContextMenu);
+    QFont clientTableFont = clientTable_->font();
+    clientTableFont.setBold(true);
+    clientTable_->setFont(clientTableFont);
     tableLayout->addWidget(clientTable_);
     auto* clientPageLayout = new QVBoxLayout(clientsPage);
     clientPageLayout->setContentsMargins(0, 0, 0, 0);
@@ -404,8 +419,24 @@ void MainWindow::buildUi()
     auto* clientsHeading = new QLabel(QStringLiteral("客户端列表"), clientsPage);
     clientsHeading->setObjectName(QStringLiteral("pageHeading"));
     clientPageLayout->addWidget(clientsHeading);
-    clientPageLayout->addWidget(new QLabel(QStringLiteral("客户端状态表和右键操作已放在“总览与执行”页。"), clientsPage));
-    clientPageLayout->addStretch();
+    clientListTable_ = new QTableWidget(0, 7, clientsPage);
+    clientListTable_->setHorizontalHeaderLabels({
+        QStringLiteral("客户端 IP"), QStringLiteral("角色 / 备注"),
+        QStringLiteral("上架/准备状态"), QStringLiteral("期望金额"), QStringLiteral("当前金额"),
+        QStringLiteral("累计收益"), QStringLiteral("低价/高价")
+    });
+    clientListTable_->horizontalHeader()->setDefaultAlignment(Qt::AlignCenter);
+    clientListTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    clientListTable_->verticalHeader()->setVisible(false);
+    clientListTable_->verticalHeader()->setDefaultSectionSize(40);
+    clientListTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    clientListTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    clientListTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    clientListTable_->setContextMenuPolicy(Qt::CustomContextMenu);
+    QFont clientListTableFont = clientListTable_->font();
+    clientListTableFont.setBold(true);
+    clientListTable_->setFont(clientListTableFont);
+    clientPageLayout->addWidget(clientListTable_);
 
     flowPreviewLabel_ = new QLabel(this);
     flowPreviewLabel_->setObjectName(QStringLiteral("flowPreview"));
@@ -493,6 +524,20 @@ void MainWindow::buildUi()
 
 void MainWindow::connectSignals()
 {
+    const auto syncListingParameters = [this]() {
+        controller_.updateGlobalListingParameters(
+            listingTextEdit_->text(), listingPriceEdit_->text(), listingPurchaseCountSpin_->value());
+    };
+    syncListingParameters();
+    connect(listingTextEdit_, &QLineEdit::textChanged, this, [syncListingParameters](const QString&) {
+        syncListingParameters();
+    });
+    connect(listingPriceEdit_, &QLineEdit::textChanged, this, [syncListingParameters](const QString&) {
+        syncListingParameters();
+    });
+    connect(listingPurchaseCountSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [syncListingParameters](int) {
+        syncListingParameters();
+    });
     connect(listenButton_, &QPushButton::clicked, this, [this]() {
         controller_.startListening(portEdit_->text());
     });
@@ -520,13 +565,14 @@ void MainWindow::connectSignals()
     connect(mailAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestMailAll);
     connect(rebindAllButton_, &QPushButton::clicked, &controller_, &ServerController::requestRebindAllWindows);
     connect(settingsButton_, &QPushButton::clicked, this, &MainWindow::showSettingsDialog);
-    connect(clientTable_, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& position) {
-        const QModelIndex index = clientTable_->indexAt(position);
+    const auto showClientContextMenu = [this](QTableWidget* table, const QPoint& position) {
+        const QModelIndex index = table->indexAt(position);
         if (!index.isValid())
             return;
         const int row = index.row();
-        clientTable_->selectRow(row);
-        const quint64 clientId = clientIdForRow(row);
+        table->selectRow(row);
+        const QTableWidgetItem* idItem = table->item(row, 0);
+        const quint64 clientId = idItem ? idItem->data(Qt::UserRole).toULongLong() : 0;
         if (clientId == 0)
             return;
         const QVector<ClientListItem> currentClients = controller_.clients();
@@ -535,6 +581,7 @@ void MainWindow::connectSignals()
         if (iterator == currentClients.cend())
             return;
         const ClientListItem client = *iterator;
+        const QString noteKey = clientNoteKey(client, currentClients);
         QMenu menu(this);
         QAction* coinAction = menu.addAction(QStringLiteral("设置为币号"));
         QAction* bossAction = menu.addAction(QStringLiteral("设置为老板"));
@@ -561,7 +608,7 @@ void MainWindow::connectSignals()
         QAction* stopAction = menu.addAction(accountLoginRunning
             ? QStringLiteral("中止上号") : QStringLiteral("停止动作"));
         QAction* kickAction = menu.addAction(QStringLiteral("断开客户端"));
-        QAction* chosen = menu.exec(clientTable_->viewport()->mapToGlobal(position));
+        QAction* chosen = menu.exec(table->viewport()->mapToGlobal(position));
         if (chosen == coinAction)
             controller_.setClientRole(clientId, ClientRole::Coin);
         else if (chosen == bossAction)
@@ -569,7 +616,6 @@ void MainWindow::connectSignals()
         else if (chosen == noteAction)
         {
             bool accepted = false;
-            const QString noteKey = clientNoteKey(client);
             const QString currentNote = clientNotes_.value(noteKey, client.clientNote);
             const QString note = QInputDialog::getText(this, QStringLiteral("编辑备注"),
                 QStringLiteral("备注"), QLineEdit::Normal, currentNote, &accepted);
@@ -578,7 +624,8 @@ void MainWindow::connectSignals()
                 clientNotes_[noteKey] = note;
                 // 只有真实设备标识才写入持久化配置；握手尚未完成时使用会话键，
                 // 防止空 deviceId 造成多个客户端共享备注。
-                if (!client.deviceId.trimmed().isEmpty())
+                const bool duplicateDevice = noteKey.startsWith(QStringLiteral("DuplicateDevice/"));
+                if (!client.deviceId.trimmed().isEmpty() && !duplicateDevice)
                 {
                     QSettings settings(QCoreApplication::applicationDirPath() + QStringLiteral("/DF_PlayClick_Server.ini"), QSettings::IniFormat);
                     settings.setValue(QStringLiteral("ClientNotes/%1").arg(noteKey), note);
@@ -589,9 +636,9 @@ void MainWindow::connectSignals()
         }
         else if (chosen == clearNoteAction)
         {
-            const QString noteKey = clientNoteKey(client);
             clientNotes_.remove(noteKey);
-            if (!client.deviceId.trimmed().isEmpty())
+            const bool duplicateDevice = noteKey.startsWith(QStringLiteral("DuplicateDevice/"));
+            if (!client.deviceId.trimmed().isEmpty() && !duplicateDevice)
             {
                 QSettings settings(QCoreApplication::applicationDirPath() + QStringLiteral("/DF_PlayClick_Server.ini"), QSettings::IniFormat);
                 settings.remove(QStringLiteral("ClientNotes/%1").arg(noteKey));
@@ -634,11 +681,19 @@ void MainWindow::connectSignals()
         }
         else if (chosen == kickAction)
             controller_.kickClient(clientId);
-    });
+    };
     connect(importAccountsButton_, &QPushButton::clicked, this, [this]() {
         const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("导入账号文件"), QString(), QStringLiteral("文本文件 (*.txt)"));
         if (!path.isEmpty()) controller_.importAccounts(path);
     });
+    connect(clientTable_, &QTableWidget::customContextMenuRequested, this,
+        [this, showClientContextMenu](const QPoint& position) {
+            showClientContextMenu(clientTable_, position);
+        });
+    connect(clientListTable_, &QTableWidget::customContextMenuRequested, this,
+        [this, showClientContextMenu](const QPoint& position) {
+            showClientContextMenu(clientListTable_, position);
+        });
     connect(addAccountsButton_, &QPushButton::clicked, this, [this]() {
         const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("增加账号文件"), QString(), QStringLiteral("文本文件 (*.txt)"));
         if (!path.isEmpty()) controller_.addAccounts(path);
@@ -1063,23 +1118,7 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
     std::stable_sort(displayClients.begin(), displayClients.end(), [](const ClientListItem& left, const ClientListItem& right) {
         if (left.role != right.role)
             return left.role == ClientRole::Boss;
-        if (left.role == ClientRole::Coin)
-        {
-            const auto failureRank = [](const ClientListItem& client) {
-                if (client.listingStatus == QStringLiteral("失败"))
-                    return 0;
-                if (client.listingStatus == QStringLiteral("少")
-                    || client.listingStatus == QStringLiteral("超出"))
-                {
-                    return 1;
-                }
-                return 2;
-            };
-            const int leftRank = failureRank(left);
-            const int rightRank = failureRank(right);
-            if (leftRank != rightRank)
-                return leftRank < rightRank;
-        }
+        // 老板保持置顶；币号不再按状态插队，统一按客户端 ID 固定排序。
         return left.id < right.id;
     });
     for (const ClientListItem& client : displayClients)
@@ -1122,7 +1161,11 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
         clientTable_->setItem(row, 0, ipItem);
 
         const QString roleText = QString::fromStdWString(ClientRoleUtil::ToDisplayText(client.role));
-        const QString displayNote = clientNotes_.value(clientNoteKey(client), client.clientNote);
+        // 当前连接对象的备注优先于持久化缓存，避免旧设备键或重复 deviceId
+        // 在刷新时覆盖另一条连接的独立备注。
+        const QString displayNote = !client.clientNote.isEmpty()
+            ? client.clientNote
+            : clientNotes_.value(clientNoteKey(client, clients));
         auto* roleNoteItem = new QTableWidgetItem(QStringLiteral("%1 / %2").arg(roleText,
             displayNote.isEmpty() ? QStringLiteral("（无备注）") : displayNote));
         roleNoteItem->setToolTip(displayNote);
@@ -1189,6 +1232,43 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
 
         auto* idItem = clientTable_->item(row, 0);
         idItem->setData(Qt::UserRole + 1, client.deviceId);
+    }
+    if (clientListTable_)
+    {
+        clientListTable_->setRowCount(0);
+        for (int sourceRow = 0; sourceRow < clientTable_->rowCount(); ++sourceRow)
+        {
+            const ClientListItem& client = displayClients.at(sourceRow);
+            const int row = clientListTable_->rowCount();
+            clientListTable_->insertRow(row);
+            for (int column = 0; column < clientTable_->columnCount(); ++column)
+            {
+                QString text;
+                const QTableWidgetItem* sourceItem = clientTable_->item(sourceRow, column);
+                if (column == 3 && client.role == ClientRole::Boss)
+                {
+                    text = client.expectedAmount == QStringLiteral("-")
+                        ? QStringLiteral("-") : formatAmountForDisplay(client.expectedAmount);
+                }
+                else if (sourceItem)
+                {
+                    text = sourceItem->text();
+                }
+                auto* item = new QTableWidgetItem(text);
+                item->setFont(clientListTable_->font());
+                if (sourceItem)
+                {
+                    item->setForeground(sourceItem->foreground());
+                }
+                item->setTextAlignment(Qt::AlignCenter);
+                if (column == 0)
+                {
+                    item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(client.id));
+                    item->setData(Qt::UserRole + 1, client.deviceId);
+                }
+                clientListTable_->setItem(row, column, item);
+            }
+        }
     }
     clientCountBadge_->setText(QStringLiteral("%1 客户端").arg(clients.size()));
 }

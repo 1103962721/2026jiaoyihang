@@ -50,7 +50,8 @@ namespace Protocol
         AccountLoginRequest,
         AccountLoginResponse,
         AccountLoginStopRequest,
-        ClientKicked
+        ClientKicked,
+        ExecutionResponse
     };
 
     enum class LoadoutType
@@ -334,6 +335,12 @@ namespace Protocol
         return "CLIENT_KICKED\n";
     }
 
+    inline std::string BuildExecutionResponseMessage(bool success, const std::string& payload)
+    {
+        return std::string("EXECUTION_RESPONSE ") + (success ? "OK " : "ERROR ")
+            + NormalizeLinePayload(payload) + "\n";
+    }
+
     inline std::string BuildAccountLoginRequestMessage(int requestId, const std::string& username, const std::string& password)
     {
         return "ACCOUNT_LOGIN_REQUEST " + std::to_string(requestId) + " "
@@ -415,6 +422,22 @@ namespace Protocol
                 return false;
             message.type = MessageType::Hello;
             message.payload = deviceId;
+            return true;
+        }
+
+        if (command == "EXECUTION_RESPONSE")
+        {
+            std::string status;
+            stream >> status;
+            if (stream.fail() || (status != "OK" && status != "ERROR"))
+                return false;
+            std::string payload;
+            std::getline(stream, payload);
+            if (!payload.empty() && payload.front() == ' ')
+                payload.erase(0, 1);
+            message.type = MessageType::ExecutionResponse;
+            message.success = status == "OK";
+            message.payload = payload;
             return true;
         }
 

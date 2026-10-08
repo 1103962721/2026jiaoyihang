@@ -43,6 +43,7 @@ private:
     void savePersistentLoadoutSettings() const;
     void appendConnectionLog(const QString& text);
     quint64 clientIdForRow(int row) const;
+    void showClientContextMenu(QTableWidget* table, const QPoint& position);
 
     ServerController controller_;
     QLabel* listenBadge_ = nullptr;
@@ -80,7 +81,7 @@ private:
     QLabel* listingSuccessClientsLabel_ = nullptr;
     QLabel* accountQueueLabel_ = nullptr;
     bool coinFirst_ = true;
-    bool compensationEnabled_ = true;
+    bool compensationEnabled_ = false;
     bool bruteCaptcha_ = true;
     bool tradePurchase_ = false;
     QPushButton* listenButton_ = nullptr;
@@ -98,6 +99,7 @@ private:
     QPushButton* exportAccountsButton_ = nullptr;
     QPushButton* accountLoginAllButton_ = nullptr;
     QTableWidget* clientTable_ = nullptr;
+    QTableWidget* clientListTable_ = nullptr;
     QHash<QString, QString> clientNotes_;
     QTextEdit* connectionLogEdit_ = nullptr;
     QTimer serverTimeTimer_;

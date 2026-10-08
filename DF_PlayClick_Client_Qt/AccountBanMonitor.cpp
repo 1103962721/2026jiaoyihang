@@ -131,10 +131,13 @@ bool IsBanText(const QString& recognizedText)
         || text.contains(QStringLiteral("停封"), Qt::CaseInsensitive)
         || text.contains(QStringLiteral("限制登录"), Qt::CaseInsensitive)
         || text.contains(QStringLiteral("被限制"), Qt::CaseInsensitive);
+    const bool temporaryRestriction = text.contains(QStringLiteral("临时限制"), Qt::CaseInsensitive)
+        && (text.contains(QStringLiteral("第三方作弊插件"), Qt::CaseInsensitive)
+            || accountContext);
 
     // 登录阶段的弹窗通常包含完整的“游戏环境及行为数据异常”文案，
     // 游戏运行中弹出的封禁提示可能只保留“账号 + 封禁/冻结”等短文案。
-    return (abnormalEnvironment && banAction) || (accountContext && banAction);
+    return temporaryRestriction || (abnormalEnvironment && banAction) || (accountContext && banAction);
 }
 
 bool IsStartupFailureText(const QString& recognizedText)

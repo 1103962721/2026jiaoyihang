@@ -73,6 +73,7 @@ public slots:
     void kickClient(quint64 clientId);
     void setBossExpectedAmount(quint64 clientId, const QString& amountText);
     void setAccountSwitchAmountThreshold(const QString& amountText);
+    void updateGlobalListingParameters(const QString& listingText, const QString& listingPrice, int purchaseCount);
 
 signals:
     void clientsChanged(const QVector<ClientListItem>& clients);
@@ -168,6 +169,9 @@ private:
     QHash<int, LoginReadyState> pendingLoginReadyLoadouts_;
     QHash<int, quint64> pendingLoginReadyListings_;
     QHash<quint64, LoginReadyState> loginReadyStates_;
+    QString globalListingText_;
+    QString globalListingPrice_;
+    int globalListingPurchaseCount_ = 1;
     QHash<int, LoginReadyState> savedLoadoutConfigs_;
     qint64 autoStartCycleStartedAtMs_ = 0;
     int nextOcrRequestId_ = 1;
@@ -216,6 +220,7 @@ private:
     QHash<quint64, bool> waitingAccountDispatches_;
     QHash<quint64, QString> waitingAccountDispatchReasons_;
     QHash<int, quint64> accountLoginRequestGenerations_;
+    QHash<int, quint64> accountLoginRequestClients_;
     quint64 accountQueueGeneration_ = 1;
     bool preparingExecution_ = false;
     bool dispatchingPreparedExecution_ = false;
