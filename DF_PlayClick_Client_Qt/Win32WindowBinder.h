@@ -15,6 +15,8 @@ struct TargetWindowInfo
     int clientHeight = 0;
     QString hwndText;
     bool isGameBody = false;
+    bool isCloudPhone = false;
+    bool isCloudPhoneSurface = false;
 };
 
 class Win32WindowBinder

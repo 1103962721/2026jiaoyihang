@@ -1,11 +1,19 @@
 #include "MainWindow.h"
 
+#include <algorithm>
+#include <QAbstractItemView>
+#include <QComboBox>
 #include <QDoubleValidator>
 #include <QHBoxLayout>
-#include <QIntValidator>
 #include <QMessageBox>
+#include <QIntValidator>
+#include <QProcess>
+#include <QRegularExpression>
+#include <QScrollArea>
 #include <QShowEvent>
 #include <QSizePolicy>
+#include <QThread>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -23,6 +31,7 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    clearCloudBossSessions();
     controller_.shutdownForExit();
 }
 
@@ -34,6 +43,7 @@ void MainWindow::showEvent(QShowEvent* event)
         initialized_ = true;
         // 控制器依赖真实 HWND，必须等窗口首次显示并创建原生句柄后再初始化。
         controller_.initialize(reinterpret_cast<HWND>(winId()));
+        refreshCloudWindowOptions();
     }
 }
 
@@ -121,7 +131,9 @@ void MainWindow::buildUi()
     setWindowFlag(Qt::FramelessWindowHint, true);
     setAttribute(Qt::WA_StyledBackground, true);
     resize(620, 760);
-    setMinimumSize(580, 720);
+    // 内容区使用滚动容器承载，窗口缩放到较小高度时不再压缩卡片内部控件。
+    // 宽度仍保留原有下限，高度不再设置 720px 的硬限制。
+    setMinimumSize(580, 0);
 
     auto* root = new QWidget(this);
     root->setObjectName(QStringLiteral("windowRoot"));
@@ -136,6 +148,20 @@ void MainWindow::buildUi()
     auto* bodyLayout = new QVBoxLayout(body);
     bodyLayout->setContentsMargins(13, 10, 13, 11);
     bodyLayout->setSpacing(8);
+    bodyLayout->setSizeConstraint(QLayout::SetMinimumSize);
+
+    auto* modeLayout = new QHBoxLayout();
+    modeLayout->setSpacing(8);
+    auto* modeLabel = new QLabel(QStringLiteral("绑定模式"), this);
+    modeLabel->setObjectName(QStringLiteral("fieldLabel"));
+    bindingModeCombo_ = new QComboBox(this);
+    bindingModeCombo_->addItem(QStringLiteral("PC：Delta Force 窗口"));
+    bindingModeCombo_->addItem(QStringLiteral("手机：红手指 ADB"));
+    bindingModeCombo_->setMaximumWidth(220);
+    modeLayout->addWidget(modeLabel);
+    modeLayout->addWidget(bindingModeCombo_);
+    modeLayout->addStretch();
+    bodyLayout->addLayout(modeLayout);
 
     auto* connectionLayout = new QVBoxLayout();
     connectionLayout->setSpacing(7);
@@ -231,7 +257,8 @@ void MainWindow::buildUi()
     ocrHint->setObjectName(QStringLiteral("hintText"));
     ocrHint->setWordWrap(true);
     ocrLayout->addWidget(ocrHint);
-    bodyLayout->addWidget(createCard(QStringLiteral("OCR 上架判定"), ocrLayout));
+    pcOcrCard_ = createCard(QStringLiteral("OCR 上架判定"), ocrLayout);
+    bodyLayout->addWidget(pcOcrCard_);
 
     auto* executionLayout = new QVBoxLayout();
     executionLayout->setSpacing(7);
@@ -273,7 +300,48 @@ void MainWindow::buildUi()
     executionHint->setObjectName(QStringLiteral("hintText"));
     executionHint->setWordWrap(true);
     executionLayout->addWidget(executionHint);
-    bodyLayout->addWidget(createCard(QStringLiteral("本机执行状态"), executionLayout));
+    pcExecutionCard_ = createCard(QStringLiteral("本机执行状态"), executionLayout);
+    bodyLayout->addWidget(pcExecutionCard_);
+
+    auto* cloudLayout = new QVBoxLayout();
+    cloudLayout->setSpacing(6);
+    auto* cloudRow = new QHBoxLayout();
+    cloudRow->setSpacing(6);
+    auto* cloudLabel = new QLabel(QStringLiteral("ADB 端口"), this);
+    cloudLabel->setObjectName(QStringLiteral("fieldLabel"));
+    cloudAdbPortEdit_ = new QLineEdit(QStringLiteral("63651"), this);
+    cloudAdbPortEdit_->setValidator(new QIntValidator(1, 65535, cloudAdbPortEdit_));
+    cloudAdbPortEdit_->setMinimumWidth(140);
+    cloudAdbPortEdit_->setMaximumWidth(180);
+    cloudAdbPortEdit_->setToolTip(QStringLiteral("用于标识对应的红手指云手机，例如 63651"));
+    cloudRefreshButton_ = new QPushButton(QStringLiteral("刷新窗口"), this);
+    cloudAddButton_ = new QPushButton(QStringLiteral("添加老板云手机"), this);
+    cloudRow->addWidget(cloudLabel);
+    cloudRow->addWidget(cloudAdbPortEdit_);
+    cloudRow->addWidget(cloudRefreshButton_);
+    cloudRow->addWidget(cloudAddButton_);
+    cloudRow->addStretch();
+    cloudLayout->addLayout(cloudRow);
+    cloudWindowList_ = new QListWidget(this);
+    cloudWindowList_->setObjectName(QStringLiteral("cloudWindowList"));
+    cloudWindowList_->setSelectionMode(QAbstractItemView::SingleSelection);
+    cloudWindowList_->setMinimumHeight(58);
+    cloudWindowList_->setMaximumHeight(112);
+    cloudWindowList_->setAlternatingRowColors(true);
+    cloudWindowList_->setToolTip(QStringLiteral("选择要绑定的红手指云手机画面窗口"));
+    cloudLayout->addWidget(cloudWindowList_);
+    cloudSessionList_ = new QListWidget(this);
+    cloudSessionList_->setObjectName(QStringLiteral("cloudSessionList"));
+    cloudSessionList_->setMinimumHeight(52);
+    cloudSessionList_->setAlternatingRowColors(true);
+    cloudLayout->addWidget(cloudSessionList_);
+    auto* cloudHint = new QLabel(QStringLiteral("每个 ADB 端口对应一个独立老板客户端；截图和 OCR 仍直接使用绑定 VM 窗口客户区。"), this);
+    cloudHint->setObjectName(QStringLiteral("hintText"));
+    cloudHint->setWordWrap(true);
+    cloudLayout->addWidget(cloudHint);
+    cloudSessionCard_ = createCard(QStringLiteral("手机老板会话"), cloudLayout);
+    cloudSessionCard_->hide();
+    bodyLayout->addWidget(cloudSessionCard_);
 
     connectionLogEdit_ = new QTextEdit(this);
     connectionLogEdit_->setObjectName(QStringLiteral("connectionLog"));
@@ -282,7 +350,14 @@ void MainWindow::buildUi()
     connectionLogEdit_->setPlaceholderText(QStringLiteral("连接、OCR 与本地执行日志将在这里显示。"));
     bodyLayout->addWidget(connectionLogEdit_, 1);
 
-    rootLayout->addWidget(body, 1);
+    auto* bodyScrollArea = new QScrollArea(root);
+    bodyScrollArea->setObjectName(QStringLiteral("bodyScrollArea"));
+    bodyScrollArea->setFrameShape(QFrame::NoFrame);
+    bodyScrollArea->setWidgetResizable(true);
+    bodyScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    bodyScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    bodyScrollArea->setWidget(body);
+    rootLayout->addWidget(bodyScrollArea, 1);
     setCentralWidget(root);
     applyStyle();
 }
@@ -304,6 +379,10 @@ void MainWindow::connectSignals()
     });
     connect(unitPriceEdit_, &QLineEdit::editingFinished, this, &MainWindow::saveOcrParameters);
     connect(bulletTotalEdit_, &QLineEdit::editingFinished, this, &MainWindow::saveOcrParameters);
+    connect(cloudAddButton_, &QPushButton::clicked, this, &MainWindow::addCloudBossSession);
+    connect(cloudRefreshButton_, &QPushButton::clicked, this, &MainWindow::refreshCloudWindowOptions);
+    connect(bindingModeCombo_, qOverload<int>(&QComboBox::currentIndexChanged),
+        this, &MainWindow::applyClientBindingMode);
 
     connect(&controller_, &ClientController::connectedChanged, this, &MainWindow::updateConnectedState);
     connect(&controller_, &ClientController::reconnectingChanged, this, &MainWindow::updateReconnectingState);
@@ -383,6 +462,8 @@ void MainWindow::applyStyle()
         #appTitle { color:white; font-size:19px; font-weight:800; }
         #appSubtitle { color:#d5f5ef; font-size:12px; }
         #body { background:#edf5f3; }
+        #bodyScrollArea { background:#edf5f3; border:0; }
+        #bodyScrollArea > QWidget > QWidget { background:#edf5f3; }
         #card { background:#ffffff; border:1px solid #d9e7e3; border-radius:11px; }
         #cardTitle { color:#163b38; font-size:14px; font-weight:800; }
         #fieldLabel, #hintText { color:#738784; font-size:11px; }
@@ -403,7 +484,321 @@ void MainWindow::applyStyle()
         #executionStatus { padding:7px 9px; border-radius:7px; background:#e3f3f0; color:#176c64; font-weight:700; }
         #connectionDetail { color:#16817b; font-weight:700; }
         #connectionLog { min-height:62px; background:#0f172a; color:#a7f3d0; border:1px solid #1f2b45; border-radius:9px; padding:8px; font-family:"Consolas","Microsoft YaHei UI"; }
+        #cloudSessionList { background:#f8fcfb; border:1px solid #cbdcd8; border-radius:7px; color:#244944; }
+        #cloudWindowList { background:#ffffff; border:1px solid #cbdcd8; border-radius:7px; color:#244944; padding:2px; }
+        #cloudWindowList::item { min-height:26px; padding:3px 7px; }
+        #cloudWindowList::item:selected { background:#d8f1ed; color:#124f4a; }
     )"));
+}
+
+void MainWindow::addCloudBossSession()
+{
+    if (!bindingModeCombo_ || bindingModeCombo_->currentIndex() != 1)
+    {
+        showControllerMessage(QStringLiteral("模式错误"), QStringLiteral("请先切换到手机模式"), false);
+        return;
+    }
+    bool ok = false;
+    const int adbPort = cloudAdbPortEdit_->text().trimmed().toInt(&ok);
+    if (!ok || adbPort < 1 || adbPort > 65535)
+    {
+        showControllerMessage(QStringLiteral("端口错误"), QStringLiteral("请输入有效的 ADB 端口"), true);
+        return;
+    }
+    QString adbDetail;
+    const AdbPortCheckResult adbResult = checkAdbPort(adbPort, adbDetail);
+    if (adbResult != AdbPortCheckResult::Online)
+    {
+        QString title;
+        switch (adbResult)
+        {
+        case AdbPortCheckResult::ConnectFailed:
+            title = QStringLiteral("ADB connect 失败");
+            break;
+        case AdbPortCheckResult::DeviceOffline:
+            title = QStringLiteral("设备未上线");
+            break;
+        case AdbPortCheckResult::ValidationFailed:
+        default:
+            title = QStringLiteral("ADB 设备校验失败");
+            break;
+        }
+        showControllerMessage(title,
+            QStringLiteral("端口 %1 未创建客户端会话。\n\n%2")
+                .arg(adbPort).arg(adbDetail), true);
+        return;
+    }
+    for (int index = 0; index < cloudSessions_.size(); ++index)
+    {
+        if (cloudSessions_[index].adbPort == adbPort)
+        {
+            if (!cloudSessions_[index].kicked && cloudSessions_[index].connectedOnce)
+            {
+                showControllerMessage(QStringLiteral("设备已存在"), QStringLiteral("该 ADB 端口已经添加"), false);
+                return;
+            }
+            // 连接服务端失败时，旧会话已经创建但从未成功上线；删除残留行，允许用新端口重试。
+            removeCloudBossSession(index);
+            break;
+        }
+    }
+    const int serverPort = portEdit_->text().trimmed().toInt(&ok);
+    if (!ok || ipEdit_->text().trimmed().isEmpty())
+    {
+        showControllerMessage(QStringLiteral("连接参数错误"), QStringLiteral("请先填写有效的服务端 IP 和端口"), true);
+        return;
+    }
+
+    auto* controller = new ClientController(this);
+    controller->initializeExternalBossSession(reinterpret_cast<HWND>(winId()));
+    controller->setSessionDeviceId(QStringLiteral("ADB-%1").arg(adbPort));
+    auto* item = new QListWidgetItem(QStringLiteral("ADB:%1 · 正在绑定 VM 窗口 · 未连接").arg(adbPort), cloudSessionList_);
+    cloudSessions_.append({ controller, adbPort, item, false, false, false });
+    const QString serverIp = ipEdit_->text().trimmed();
+    connect(controller, &ClientController::statusChanged, this,
+        [this, controller, item, adbPort, serverIp, serverPort](const QString& text) {
+        auto sessionIt = std::find_if(cloudSessions_.begin(), cloudSessions_.end(), [controller](const CloudBossSession& session) {
+            return session.controller == controller;
+        });
+        if (sessionIt == cloudSessions_.end())
+            return;
+        if (item)
+            item->setText(QStringLiteral("ADB:%1 · %2").arg(adbPort).arg(text));
+        if (text.contains(QStringLiteral("已被服务端踢出")))
+            sessionIt->kicked = true;
+
+        const bool initialConnectionFailure = !sessionIt->connectedOnce
+            && (text == QStringLiteral("连接服务端失败")
+                || text == QStringLiteral("服务端 IP 格式无效")
+                || text.contains(QStringLiteral("连接建立后发送"))
+                || text.contains(QStringLiteral("连接后发送默认准备状态")));
+        if (initialConnectionFailure)
+        {
+            if (!sessionIt->connectionFailureShown)
+            {
+                sessionIt->connectionFailureShown = true;
+                showControllerMessage(QStringLiteral("连接服务端失败"),
+                    QStringLiteral("无法连接服务端 %1:%2，未创建客户端会话。\n\n%3")
+                        .arg(serverIp).arg(serverPort).arg(text), true);
+            }
+            // Initial connection failures must not leave a reusable ADB port
+            // occupied by a controller that never reached the server.
+            QTimer::singleShot(0, this, [this, controller]() {
+                const auto failedIt = std::find_if(cloudSessions_.begin(), cloudSessions_.end(),
+                    [controller](const CloudBossSession& session) {
+                        return session.controller == controller;
+                    });
+                if (failedIt == cloudSessions_.end() || failedIt->connectedOnce
+                    || failedIt->kicked || failedIt->controller->isConnected()
+                    || failedIt->controller->isReconnecting())
+                {
+                    return;
+                }
+                removeCloudBossSession(static_cast<int>(std::distance(cloudSessions_.begin(), failedIt)));
+            });
+        }
+    });
+    connect(controller, &ClientController::connectedChanged, this, [this, controller, item, adbPort](bool connected) {
+        auto sessionIt = std::find_if(cloudSessions_.begin(), cloudSessions_.end(), [controller](const CloudBossSession& session) {
+            return session.controller == controller;
+        });
+        if (sessionIt == cloudSessions_.end())
+            return;
+        if (connected)
+            sessionIt->connectedOnce = true;
+        if (item)
+            item->setText(QStringLiteral("ADB:%1 · %2").arg(adbPort).arg(connected ? QStringLiteral("已连接") : QStringLiteral("未连接")));
+    });
+    bool bound = false;
+    const QListWidgetItem* selectedWindow = cloudWindowList_->currentItem();
+    if (!selectedWindow)
+    {
+        item->setText(QStringLiteral("ADB:%1 · 未找到 VM 窗口").arg(adbPort));
+    }
+    else
+    {
+        const quintptr hwndValue = selectedWindow->data(Qt::UserRole).value<quintptr>();
+        const QString windowName = selectedWindow->text();
+        bound = controller->bindExternalWindow(reinterpret_cast<HWND>(hwndValue), windowName);
+        if (!bound)
+            item->setText(QStringLiteral("ADB:%1 · VM 窗口绑定失败").arg(adbPort));
+    }
+    if (bound)
+        controller->connectOrDisconnect(ipEdit_->text().trimmed(), serverPort);
+    else
+        item->setText(QStringLiteral("ADB:%1 · 等待选择有效 VM 窗口").arg(adbPort));
+    cloudAdbPortEdit_->setText(QString::number(adbPort + 1));
+}
+
+void MainWindow::removeCloudBossSession(int index)
+{
+    if (index < 0 || index >= cloudSessions_.size())
+        return;
+
+    const CloudBossSession session = cloudSessions_.takeAt(index);
+    if (session.controller)
+    {
+        disconnect(session.controller, nullptr, this, nullptr);
+        session.controller->shutdownForExit();
+        delete session.controller;
+    }
+    if (session.item)
+    {
+        const int row = cloudSessionList_->row(session.item);
+        if (row >= 0)
+            delete cloudSessionList_->takeItem(row);
+    }
+}
+
+void MainWindow::clearCloudBossSessions()
+{
+    while (!cloudSessions_.isEmpty())
+        removeCloudBossSession(cloudSessions_.size() - 1);
+}
+
+void MainWindow::applyClientBindingMode(int modeIndex)
+{
+    const bool phoneMode = modeIndex == 1;
+    if (cloudSessionCard_)
+        cloudSessionCard_->setVisible(phoneMode);
+    if (pcOcrCard_)
+        pcOcrCard_->setVisible(!phoneMode);
+    if (pcExecutionCard_)
+        pcExecutionCard_->setVisible(!phoneMode);
+
+    if (phoneMode)
+    {
+        if (controller_.isConnected() || controller_.isReconnecting())
+            controller_.connectOrDisconnect(ipEdit_->text().trimmed(), portEdit_->text().toInt());
+        controller_.forceStopCurrentAction();
+        refreshCloudWindowOptions();
+    }
+    else
+    {
+        clearCloudBossSessions();
+        controller_.rebindGameWindow();
+    }
+    refreshConnectionControls();
+}
+
+MainWindow::AdbPortCheckResult MainWindow::checkAdbPort(int adbPort, QString& detail) const
+{
+    const QString adbPath = controller_.loadAdbPath();
+    const QString expectedSerial = QStringLiteral("127.0.0.1:%1").arg(adbPort);
+
+    QProcess connectProcess;
+    connectProcess.start(adbPath, { QStringLiteral("connect"), expectedSerial });
+    if (!connectProcess.waitForFinished(4000))
+    {
+        detail = QStringLiteral("无法在 4 秒内执行 adb connect %1，请确认 adb.exe 已可用。")
+            .arg(expectedSerial);
+        return AdbPortCheckResult::ConnectFailed;
+    }
+    const QString connectOutput = QString::fromUtf8(connectProcess.readAllStandardOutput()).trimmed();
+    const QString connectError = QString::fromUtf8(connectProcess.readAllStandardError()).trimmed();
+    const QRegularExpression connectFailurePattern(
+        QStringLiteral("failed to connect|unable to connect|cannot connect|could not connect|connection refused|connection timed out|no route to host"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (connectProcess.exitCode() != 0 || connectFailurePattern.match(connectOutput).hasMatch()
+        || connectFailurePattern.match(connectError).hasMatch())
+    {
+        detail = connectError.isEmpty()
+            ? (connectOutput.isEmpty() ? QStringLiteral("adb connect 执行失败。") : connectOutput)
+            : connectError;
+        return AdbPortCheckResult::ConnectFailed;
+    }
+
+    QString latestOutput;
+    QString latestError;
+    bool devicesCommandFailed = false;
+    // adb connect may return before the new endpoint appears in adb devices.
+    // Give the adb server a short window to publish the endpoint, while
+    // keeping the add-session action bounded and synchronous.
+    for (int attempt = 0; attempt < 5; ++attempt)
+    {
+        QProcess process;
+        process.start(adbPath, { QStringLiteral("devices") });
+        if (!process.waitForFinished(1000))
+        {
+            devicesCommandFailed = true;
+            latestError = QStringLiteral("无法在 1 秒内完成 adb devices 校验。");
+        }
+        else
+        {
+            latestOutput = QString::fromUtf8(process.readAllStandardOutput());
+            latestError = QString::fromUtf8(process.readAllStandardError()).trimmed();
+            if (process.exitCode() != 0)
+            {
+                devicesCommandFailed = true;
+            }
+            else
+            {
+                const QStringList lines = latestOutput.split(
+                    QRegularExpression(QStringLiteral("[\\r\\n]+")), Qt::SkipEmptyParts);
+                for (const QString& rawLine : lines)
+                {
+                    const QString line = rawLine.trimmed();
+                    const QStringList fields = line.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+                    if (fields.size() >= 2
+                        && fields.at(0) == expectedSerial
+                        && fields.at(1) == QStringLiteral("device"))
+                    {
+                        detail = QStringLiteral("已确认在线设备：%1").arg(expectedSerial);
+                        return AdbPortCheckResult::Online;
+                    }
+                }
+                devicesCommandFailed = false;
+            }
+        }
+        if (attempt < 4)
+            QThread::msleep(250);
+    }
+
+    if (devicesCommandFailed)
+    {
+        detail = latestError.isEmpty() ? QStringLiteral("adb devices 执行失败。") : latestError;
+        return AdbPortCheckResult::ValidationFailed;
+    }
+    detail = QStringLiteral("adb connect 已执行，但在 adb devices 中未找到状态为 device 的设备 %1。当前列表：%2")
+        .arg(expectedSerial, latestOutput.trimmed().isEmpty() ? QStringLiteral("空") : latestOutput.trimmed());
+    return AdbPortCheckResult::DeviceOffline;
+}
+
+void MainWindow::refreshCloudWindowOptions()
+{
+    cloudWindowList_->clear();
+    controller_.refreshWindows();
+    const QVector<TargetWindowInfo> candidates = controller_.windows();
+    bool hasSurface = false;
+    for (const TargetWindowInfo& window : candidates)
+    {
+        if (window.isCloudPhoneSurface && window.hwnd)
+        {
+            hasSurface = true;
+            break;
+        }
+    }
+    for (const TargetWindowInfo& window : candidates)
+    {
+        if (!window.isCloudPhone || !window.hwnd || (hasSurface && !window.isCloudPhoneSurface))
+            continue;
+        const QString text = QStringLiteral("%1 · %2×%3 · HWND %4")
+            .arg(window.title.isEmpty() ? QStringLiteral("红手指窗口") : window.title)
+            .arg(window.clientWidth)
+            .arg(window.clientHeight)
+            .arg(window.hwndText);
+        auto* item = new QListWidgetItem(text, cloudWindowList_);
+        item->setData(Qt::UserRole, QVariant::fromValue<quintptr>(reinterpret_cast<quintptr>(window.hwnd)));
+    }
+    if (cloudWindowList_->count() == 0)
+    {
+        auto* item = new QListWidgetItem(QStringLiteral("未检测到 VM 云手机画面窗口，请确认红手指已打开"), cloudWindowList_);
+        item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
+    }
+    else
+    {
+        cloudWindowList_->setCurrentRow(0);
+    }
 }
 
 void MainWindow::saveOcrParameters()
@@ -430,14 +825,20 @@ void MainWindow::saveOcrParameters()
 
 void MainWindow::refreshConnectionControls()
 {
+    const bool phoneMode = bindingModeCombo_ && bindingModeCombo_->currentIndex() == 1;
     const bool connected = controller_.isConnected();
     const bool reconnecting = controller_.isReconnecting();
-    connectButton_->setEnabled(!connected && !reconnecting);
-    disconnectButton_->setEnabled(connected || reconnecting);
-    ipEdit_->setEnabled(!connected && !reconnecting);
-    portEdit_->setEnabled(!connected && !reconnecting);
+    connectButton_->setEnabled(!phoneMode && !connected && !reconnecting);
+    disconnectButton_->setEnabled(!phoneMode && (connected || reconnecting));
+    ipEdit_->setEnabled(phoneMode || (!connected && !reconnecting));
+    portEdit_->setEnabled(phoneMode || (!connected && !reconnecting));
 
-    if (connected)
+    if (phoneMode)
+    {
+        connectionBadge_->setText(QStringLiteral("手机模式"));
+        connectionDetailLabel_->setText(QStringLiteral("各 ADB 会话分别连接"));
+    }
+    else if (connected)
     {
         connectionBadge_->setText(QStringLiteral("已连接"));
         connectionDetailLabel_->setText(QStringLiteral("连接正常"));

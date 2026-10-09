@@ -44,6 +44,7 @@ public:
     void shutdownForExit();
 
     QString lastServerIp() const;
+    QString loadAdbPath() const;
     QVector<TargetWindowInfo> windows() const;
     QVector<ClickTask> tasks() const;
     int boundWindowIndex() const;
@@ -59,6 +60,9 @@ public:
     ClientRole clientRole() const;
 
     bool initialize(HWND mainWindowHandle);
+    bool initializeExternalBossSession(HWND mainWindowHandle);
+    void setSessionDeviceId(const QString& deviceId);
+    bool bindExternalWindow(HWND hwnd, const QString& displayName = QString());
     bool nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result) override;
     void refreshWindows();
     bool autoBindGameWindow(bool showMessage);
@@ -213,6 +217,7 @@ private:
     int lastTeamReadyTotal_ = -1;
     bool ready_ = false;
     bool automationActionRunning_ = false;
+    bool externalBossSession_ = false;
     bool forceStopActionAckPending_ = false;
     std::atomic_bool automationCancelRequested_ = false;
     bool teamReadyOcrRunning_ = false;

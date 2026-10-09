@@ -14,6 +14,15 @@ struct EnumContext
     QVector<TargetWindowInfo>* windows = nullptr;
 };
 
+void appendWindowInfo(EnumContext* context, HWND hwnd, bool cloudSurface);
+
+BOOL CALLBACK enumCloudChildProc(HWND hwnd, LPARAM lParam)
+{
+    auto* context = reinterpret_cast<EnumContext*>(lParam);
+    appendWindowInfo(context, hwnd, true);
+    return TRUE;
+}
+
 QString fromWide(const wchar_t* text)
 {
     return QString::fromWCharArray(text ? text : L"");
@@ -44,29 +53,28 @@ QString processNameForWindow(HWND hwnd)
     return name;
 }
 
-BOOL CALLBACK enumWindowsProc(HWND hwnd, LPARAM lParam)
+void appendWindowInfo(EnumContext* context, HWND hwnd, bool cloudSurface)
 {
-    auto* context = reinterpret_cast<EnumContext*>(lParam);
     if (!context || !context->windows || hwnd == context->excludeHwnd || !IsWindowVisible(hwnd))
     {
-        return TRUE;
+        return;
     }
 
     wchar_t title[256]{};
     GetWindowTextW(hwnd, title, 256);
-    if (title[0] == L'\0')
+    wchar_t className[128]{};
+    GetClassNameW(hwnd, className, 128);
+    if (title[0] == L'\0' && !(cloudSurface && lstrcmpiW(className, L"PlayUI") == 0))
     {
-        return TRUE;
+        return;
     }
 
     RECT client{};
     if (!GetClientRect(hwnd, &client))
     {
-        return TRUE;
+        return;
     }
 
-    wchar_t className[128]{};
-    GetClassNameW(hwnd, className, 128);
     const QString processName = processNameForWindow(hwnd);
 
     TargetWindowInfo item;
@@ -79,8 +87,21 @@ BOOL CALLBACK enumWindowsProc(HWND hwnd, LPARAM lParam)
     item.hwndText = fromWide(FormatHwndLow8Hex(hwnd).c_str());
     item.isGameBody = IsDeltaForceGameBodyTitle(title)
         && IsDeltaForceGameBodyProcessName(reinterpret_cast<const wchar_t*>(processName.utf16()));
+    item.isCloudPhone = cloudSurface || IsCloudPhoneWindowTitle(title) || IsCloudPhoneWindowClass(className);
+    item.isCloudPhoneSurface = cloudSurface || IsCloudPhoneWindowTitle(title)
+        || lstrcmpiW(className, L"PlayUI") == 0;
 
     context->windows->append(item);
+    if (!cloudSurface && item.isCloudPhone)
+    {
+        EnumChildWindows(hwnd, enumCloudChildProc, reinterpret_cast<LPARAM>(context));
+    }
+}
+
+BOOL CALLBACK enumWindowsProc(HWND hwnd, LPARAM lParam)
+{
+    auto* context = reinterpret_cast<EnumContext*>(lParam);
+    appendWindowInfo(context, hwnd, false);
     return TRUE;
 }
 }

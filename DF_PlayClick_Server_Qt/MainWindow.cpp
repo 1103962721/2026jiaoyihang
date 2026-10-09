@@ -1,4 +1,4 @@
-#include "MainWindow.h"
+﻿#include "MainWindow.h"
 
 #include <algorithm>
 #include <QAbstractItemView>
@@ -397,7 +397,7 @@ void MainWindow::buildUi()
     tableLayout->setContentsMargins(0, 0, 0, 0);
     clientTable_ = new QTableWidget(0, 7, this);
     clientTable_->setHorizontalHeaderLabels({
-        QStringLiteral("客户端 IP"), QStringLiteral("角色 / 备注"),
+        QStringLiteral("客户端 IP / ADB端口"), QStringLiteral("角色 / 备注"),
         QStringLiteral("上架/准备状态"), QStringLiteral("期望金额"), QStringLiteral("当前金额"),
         QStringLiteral("累计收益"), QStringLiteral("低价/高价")
     });
@@ -421,7 +421,7 @@ void MainWindow::buildUi()
     clientPageLayout->addWidget(clientsHeading);
     clientListTable_ = new QTableWidget(0, 7, clientsPage);
     clientListTable_->setHorizontalHeaderLabels({
-        QStringLiteral("客户端 IP"), QStringLiteral("角色 / 备注"),
+        QStringLiteral("客户端 IP / ADB端口"), QStringLiteral("角色 / 备注"),
         QStringLiteral("上架/准备状态"), QStringLiteral("期望金额"), QStringLiteral("当前金额"),
         QStringLiteral("累计收益"), QStringLiteral("低价/高价")
     });
@@ -1156,7 +1156,15 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
         const int row = clientTable_->rowCount();
         clientTable_->insertRow(row);
 
-        auto* ipItem = new QTableWidgetItem(client.ip);
+        QString displayAddress = client.ip;
+        const QString deviceId = client.deviceId.trimmed();
+        if (deviceId.startsWith(QStringLiteral("ADB-"), Qt::CaseInsensitive))
+        {
+            const QString adbPort = deviceId.mid(4).trimmed();
+            if (!adbPort.isEmpty())
+                displayAddress += QStringLiteral(":%1").arg(adbPort);
+        }
+        auto* ipItem = new QTableWidgetItem(displayAddress);
         ipItem->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(client.id));
         clientTable_->setItem(row, 0, ipItem);
 

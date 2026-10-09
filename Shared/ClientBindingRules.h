@@ -58,6 +58,37 @@ inline bool IsDeltaForceGameBodyTitle(const wchar_t* title)
     return *rest == L'\0';
 }
 
+inline bool IsCloudPhoneWindowTitle(const wchar_t* title)
+{
+    if (!title)
+    {
+        return false;
+    }
+
+    // 红手指窗口标题通常包含形如“003 (VM010186126193)”的 VM 设备标识。
+    // 只按标题识别，不依赖云手机厂商进程名，避免影响现有游戏窗口识别。
+    for (const wchar_t* cursor = title; *cursor != L'\0'; ++cursor)
+    {
+        if ((cursor[0] == L'V' || cursor[0] == L'v')
+            && (cursor[1] == L'M' || cursor[1] == L'm'))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool IsCloudPhoneWindowClass(const wchar_t* className)
+{
+    if (!className)
+    {
+        return false;
+    }
+    return lstrcmpiW(className, L"红手指专业版") == 0
+        || lstrcmpiW(className, L"ADB") == 0
+        || lstrcmpiW(className, L"PlayUI") == 0;
+}
+
 inline bool TryGetAutoClickPoint(int hwndClientWidth, int hwndClientHeight, POINT& point)
 {
     if (hwndClientWidth <= 0 || hwndClientHeight <= 0)

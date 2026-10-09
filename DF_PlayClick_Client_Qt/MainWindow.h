@@ -5,6 +5,10 @@
 #include <QMainWindow>
 #include <QPushButton>
 #include <QTextEdit>
+#include <QListWidget>
+#include <QComboBox>
+#include <QVector>
+#include <QProcess>
 
 #include "ClientController.h"
 
@@ -37,6 +41,29 @@ private:
     void updateReconnectingState(bool reconnecting);
     void appendConnectionLog(const QString& text);
     void showControllerMessage(const QString& title, const QString& text, bool error);
+    void applyClientBindingMode(int modeIndex);
+    void addCloudBossSession();
+    void removeCloudBossSession(int index);
+    void clearCloudBossSessions();
+    void refreshCloudWindowOptions();
+    enum class AdbPortCheckResult
+    {
+        Online,
+        ConnectFailed,
+        DeviceOffline,
+        ValidationFailed
+    };
+    AdbPortCheckResult checkAdbPort(int adbPort, QString& detail) const;
+
+    struct CloudBossSession
+    {
+        ClientController* controller = nullptr;
+        int adbPort = 0;
+        QListWidgetItem* item = nullptr;
+        bool kicked = false;
+        bool connectedOnce = false;
+        bool connectionFailureShown = false;
+    };
 
     ClientController controller_;
     bool initialized_ = false;
@@ -57,4 +84,14 @@ private:
     QLabel* clickStrategyLabel_ = nullptr;
     QLabel* executionStatusLabel_ = nullptr;
     QTextEdit* connectionLogEdit_ = nullptr;
+    QComboBox* bindingModeCombo_ = nullptr;
+    QWidget* pcOcrCard_ = nullptr;
+    QWidget* pcExecutionCard_ = nullptr;
+    QWidget* cloudSessionCard_ = nullptr;
+    QLineEdit* cloudAdbPortEdit_ = nullptr;
+    QListWidget* cloudWindowList_ = nullptr;
+    QPushButton* cloudRefreshButton_ = nullptr;
+    QPushButton* cloudAddButton_ = nullptr;
+    QListWidget* cloudSessionList_ = nullptr;
+    QVector<CloudBossSession> cloudSessions_;
 };

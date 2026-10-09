@@ -1,11 +1,13 @@
 $ErrorActionPreference = 'Stop'
 
-$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$script:projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = $script:projectRoot
 $qtRoot = Join-Path $projectRoot '.qt\6.6.3\msvc2019_64_static'
 $qmake = Join-Path $qtRoot 'bin\qmake.exe'
 $vsDevCmd = 'E:\VisualStudio\VisualStudioIDE\Common7\Tools\VsDevCmd.bat'
 $buildRoot = Join-Path $projectRoot 'build\qt-release'
 $outputRoot = Join-Path $projectRoot 'Relase'
+$outputRootPhysical = $outputRoot
 $projectDrive = 'P:'
 $qtDrive = 'Q:'
 
@@ -49,7 +51,11 @@ function Invoke-NmakeTarget([string]$projectFile, [string]$targetName) {
     )
     $exe = $exeCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if (-not $exe) { throw "Build output not found under: $physicalTargetBuild" }
-    Copy-Item -LiteralPath $exe -Destination (Join-Path $outputRoot "$targetName.exe") -Force
+    # Andirons 分支的成品保留独立文件名，不覆盖稳定版成品。
+    $releaseDir = Join-Path -Path (Get-Location).Path -ChildPath 'Relase'
+    $outputExe = "$releaseDir\$targetName`_Andirons.exe"
+    Copy-Item -LiteralPath $exe -Destination $outputExe -Force
+    if (-not (Test-Path -LiteralPath $outputExe)) { throw "Release output not found: $outputExe" }
 }
 
 $env:PATH = "$mappedQtRoot\bin;E:\VisualStudio\VisualStudioIDE\MSBuild\Current\Bin;$env:PATH"
@@ -65,5 +71,5 @@ Invoke-NmakeTarget (Join-Path $mappedProjectRoot 'DF_PlayClick_Client_Qt\DF_Play
 Invoke-NmakeTarget (Join-Path $mappedProjectRoot 'DF_PlayClick_Server_Qt\DF_PlayClick_Server_Qt.pro') 'DF_PlayClick_Server_Qt'
 
 Write-Host "Built outputs:" -ForegroundColor Green
-Write-Host (Join-Path $outputRoot 'DF_PlayClick_Client_Qt.exe')
-Write-Host (Join-Path $outputRoot 'DF_PlayClick_Server_Qt.exe')
+Write-Host ([System.IO.Path]::Combine($script:projectRoot, 'Relase', 'DF_PlayClick_Client_Qt_Andirons.exe'))
+Write-Host ([System.IO.Path]::Combine($script:projectRoot, 'Relase', 'DF_PlayClick_Server_Qt_Andirons.exe'))

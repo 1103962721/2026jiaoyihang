@@ -89,6 +89,32 @@ int ClientConfig::loadUmiOcrPort() const
     return GetPrivateProfileIntW(L"OCR", L"Port", 1224, reinterpret_cast<LPCWSTR>(configPath().utf16()));
 }
 
+QString ClientConfig::loadAdbPath() const
+{
+    wchar_t buffer[MAX_PATH * 2]{};
+    const QString path = configPath();
+    GetPrivateProfileStringW(L"ADB", L"Path", L"", buffer,
+        static_cast<DWORD>(sizeof(buffer) / sizeof(buffer[0])),
+        reinterpret_cast<LPCWSTR>(path.utf16()));
+    const QString configuredPath = QString::fromWCharArray(buffer).trimmed();
+    if (!configuredPath.isEmpty() && QFileInfo::exists(configuredPath))
+        return configuredPath;
+
+    const QDir appDir(QCoreApplication::applicationDirPath());
+    const QStringList candidates{
+        appDir.filePath(QStringLiteral("adb.exe")),
+        appDir.filePath(QStringLiteral("platform-tools/adb.exe")),
+        QStringLiteral("E:/IDMDownLoad_2026-8-4/QtScrcpy-win-x64-v4.1.1/QtScrcpy-win-x64-v4.1.1/adb.exe"),
+        QStringLiteral("E:/IDMDownLoad_2026-8-4/WASD+/tools/adb/adb.exe")
+    };
+    for (const QString& candidate : candidates)
+    {
+        if (QFileInfo::exists(candidate))
+            return candidate;
+    }
+    return QStringLiteral("adb.exe");
+}
+
 int ClientConfig::loadTeamReadyOcrIntervalMs() const
 {
     const int intervalMs = GetPrivateProfileIntW(L"TeamReadyOCR", L"IntervalMs", 1500, reinterpret_cast<LPCWSTR>(configPath().utf16()));

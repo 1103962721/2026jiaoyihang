@@ -455,6 +455,53 @@ bool ClientController::initialize(HWND mainWindowHandle)
     return bound;
 }
 
+QString ClientController::loadAdbPath() const
+{
+    return config_.loadAdbPath();
+}
+
+bool ClientController::initializeExternalBossSession(HWND mainWindowHandle)
+{
+    // 云手机会话复用现有窗口截图、客户区坐标和老板流程入口；不自动绑定，
+    // 由会话面板显式选择对应的 VM 窗口，避免误绑定到其他云手机。
+    mainWindowHandle_ = mainWindowHandle;
+    externalBossSession_ = true;
+    reloadSharedClickQueueDelay();
+    return true;
+}
+
+void ClientController::setSessionDeviceId(const QString& deviceId)
+{
+    connection_.setDeviceId(deviceId);
+}
+
+bool ClientController::bindExternalWindow(HWND hwnd, const QString& displayName)
+{
+    if (!binder_.isValid(hwnd))
+    {
+        setStatus(QStringLiteral("云手机窗口已失效，请刷新窗口列表"));
+        return false;
+    }
+
+    int clientWidth = 0;
+    int clientHeight = 0;
+    if (!binder_.prepareForBinding(hwnd, clientWidth, clientHeight))
+    {
+        setStatus(QStringLiteral("云手机窗口客户区无效"));
+        return false;
+    }
+
+    boundHwnd_ = hwnd;
+    boundWindowIndex_ = -1;
+    selectedTaskIndex_ = -1;
+    emit boundWindowChanged(QStringLiteral("已绑定云手机：%1 · %2×%3")
+        .arg(displayName.isEmpty() ? QStringLiteral("VM 窗口") : displayName)
+        .arg(clientWidth)
+        .arg(clientHeight));
+    setStatus(QStringLiteral("已绑定云手机老板窗口"));
+    return true;
+}
+
 bool ClientController::nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result)
 {
     Q_UNUSED(eventType);
@@ -1530,6 +1577,11 @@ void ClientController::handleTeamCodeRequest()
 
 bool ClientController::beginAutomationAction(const QString& actionName)
 {
+    if (externalBossSession_ && currentRole_ != ClientRole::Boss)
+    {
+        setStatus(QStringLiteral("云手机会话仅允许老板角色执行"));
+        return false;
+    }
     if (automationActionRunning_)
     {
         return false;
