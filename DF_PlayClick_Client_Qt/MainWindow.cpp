@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <QAbstractItemView>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDoubleValidator>
+#include <QApplication>
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QIntValidator>
@@ -27,6 +29,13 @@
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
+    if (qApp)
+    {
+        connect(qApp, &QCoreApplication::aboutToQuit, this, [this]() {
+            clearCloudBossSessions();
+            controller_.shutdownForExit();
+        }, Qt::DirectConnection);
+    }
     connectionLogFlushTimer_.setSingleShot(true);
     connectionLogFlushTimer_.setInterval(100);
     connect(&connectionLogFlushTimer_, &QTimer::timeout, this, &MainWindow::flushConnectionLog);

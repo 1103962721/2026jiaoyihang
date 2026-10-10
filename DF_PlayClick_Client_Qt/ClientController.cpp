@@ -433,6 +433,17 @@ void ClientController::shutdownForExit()
     {
         qApp->removeNativeEventFilter(this);
     }
+    // 关闭窗口时不能把仍在执行的 ADB worker 留给已经停止的 Qt 事件循环。
+    // 取消标志先让 adb/OCR 尽快返回，再在这里同步回收线程，确保不会继续点击设备。
+    if (adbWorker_)
+    {
+        QThread* worker = adbWorker_;
+        disconnect(worker, nullptr, this, nullptr);
+        worker->wait();
+        adbWorker_ = nullptr;
+        delete worker;
+        finishAutomationAction();
+    }
 }
 
 QString ClientController::lastServerIp() const
@@ -562,11 +573,14 @@ bool ClientController::runAdbCommand(const QStringList& arguments, QByteArray& s
     struct Result { QByteArray output; QString error; bool ok = false; };
     const auto result = [this, executable, serial, arguments]() {
         Result result;
+        QElapsedTimer commandTimer;
+        commandTimer.start();
         QProcess process;
         process.start(executable, QStringList{ QStringLiteral("-s"), serial } + arguments);
         if (!process.waitForStarted(1000))
         {
             result.error = QStringLiteral("ADB 程序启动失败：%1").arg(process.errorString());
+            const_cast<ClientController*>(this)->adbCommandElapsedMs_ += commandTimer.elapsed();
             return result;
         }
         QElapsedTimer timer;
@@ -578,6 +592,7 @@ bool ClientController::runAdbCommand(const QStringList& arguments, QByteArray& s
             result.error = QStringLiteral("ADB 命令失败或超时：%1").arg(process.errorString());
             process.kill();
             process.waitForFinished(1000);
+            const_cast<ClientController*>(this)->adbCommandElapsedMs_ += commandTimer.elapsed();
             return result;
         }
         result.output = process.readAllStandardOutput();
@@ -585,6 +600,7 @@ bool ClientController::runAdbCommand(const QStringList& arguments, QByteArray& s
         result.ok = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
         if (!result.ok)
             result.error = QStringLiteral("ADB 命令执行失败（退出码 %1）：%2").arg(process.exitCode()).arg(detail);
+        const_cast<ClientController*>(this)->adbCommandElapsedMs_ += commandTimer.elapsed();
         return result;
     }();
     if (automationCancelRequested_.load())
@@ -633,14 +649,15 @@ bool ClientController::adbReadText(int x, int y, int width, int height, const QS
     QString& text, QString& errorText, int scaleFactor)
 {
     text.clear();
-    QElapsedTimer stageTimer;
-    stageTimer.start();
     QByteArray screenshot;
     if (!runAdbCommand({ QStringLiteral("exec-out"), QStringLiteral("screencap"),
         QStringLiteral("-p") }, screenshot, errorText))
         return false;
+    QElapsedTimer stageTimer;
+    stageTimer.start();
     const QImage deviceImage = QImage::fromData(screenshot, "PNG");
     const qint64 captureElapsedMs = stageTimer.elapsed();
+    adbCaptureElapsedMs_ += captureElapsedMs;
     if (deviceImage.isNull())
     {
         errorText = QStringLiteral("ADB 设备截图不是有效的 PNG 图像");
@@ -694,15 +711,17 @@ bool ClientController::adbReadText(int x, int y, int width, int height, const QS
     const QString ocrExecutable = config_.loadUmiOcrPath();
     const int ocrPort = config_.loadUmiOcrPort();
     stageTimer.restart();
-    const auto recognized = [ocrImagePath, ocrExecutable, ocrPort]() {
+    const auto recognized = [this, ocrImagePath, ocrExecutable, ocrPort]() {
         QString error;
         // ADB OCR is full-device recognition. Two worker threads avoid starving the UI.
-        const QString value = UmiOcrRunner().recognizeImage(ocrImagePath, ocrExecutable, ocrPort, error, 2);
+        const QString value = UmiOcrRunner().recognizeImage(ocrImagePath, ocrExecutable, ocrPort, error, 2,
+            [this]() { return automationCancelRequested_.load(); });
         return std::make_pair(value, error);
     }();
     text = recognized.first.simplified();
     ocrError = recognized.second;
     const qint64 ocrElapsedMs = stageTimer.elapsed();
+    adbOcrElapsedMs_ += ocrElapsedMs;
     const QString displayedText = text.size() > 240 ? text.left(240) + QStringLiteral("…") : text;
     const QString displayedError = ocrError.size() > 240 ? ocrError.left(240) + QStringLiteral("…") : ocrError;
     const QString scaleText = scaleFactor > 1 ? QStringLiteral("，放大 %1 倍").arg(scaleFactor) : QString();
@@ -2131,6 +2150,19 @@ bool ClientController::executeAdbBossPrepareCheck(int requestId, QString& errorT
 
 bool ClientController::executeAdbBossListingSequence(const QString& listingPrice, QString& errorText)
 {
+    QElapsedTimer flowTimer;
+    flowTimer.start();
+    adbCommandElapsedMs_ = 0;
+    adbCaptureElapsedMs_ = 0;
+    adbOcrElapsedMs_ = 0;
+    adbWaitElapsedMs_ = 0;
+    auto logFlowTiming = [this, &flowTimer](const QString& result) {
+        emit connectionLogAppended(QStringLiteral("ADB 老板流程耗时：总计 %1ms，ADB命令 %2ms，设备截图处理 %3ms，OCR %4ms，固定等待 %5ms，其他 %6ms，结果=%7")
+            .arg(flowTimer.elapsed()).arg(adbCommandElapsedMs_).arg(adbCaptureElapsedMs_)
+            .arg(adbOcrElapsedMs_).arg(adbWaitElapsedMs_)
+            .arg(qMax<qint64>(0, flowTimer.elapsed() - adbCommandElapsedMs_ - adbCaptureElapsedMs_ - adbOcrElapsedMs_ - adbWaitElapsedMs_)).arg(result));
+    };
+    struct FlowLog { decltype(logFlowTiming)& log; ~FlowLog() { log(QStringLiteral("结束")); } } flowLog{ logFlowTiming };
     if (listingPrice.trimmed().isEmpty())
     {
         errorText = QStringLiteral("服务端未下发老板上架价格");
@@ -2904,6 +2936,8 @@ bool ClientController::waitForAutomation(int milliseconds, QString& errorText)
         }
         QThread::msleep(25);
     }
+    if (externalBossSession_)
+        adbWaitElapsedMs_ += timer.elapsed();
     return true;
 }
 

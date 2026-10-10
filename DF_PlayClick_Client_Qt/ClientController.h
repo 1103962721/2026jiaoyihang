@@ -241,6 +241,11 @@ private:
     QThread* adbWorker_ = nullptr;
     bool adbShuttingDown_ = false;
     int adbClickDelayMs_ = 50;
+    qint64 adbFlowElapsedMs_ = 0;
+    qint64 adbCommandElapsedMs_ = 0;
+    qint64 adbCaptureElapsedMs_ = 0;
+    qint64 adbOcrElapsedMs_ = 0;
+    qint64 adbWaitElapsedMs_ = 0;
     bool forceStopActionAckPending_ = false;
     std::atomic_bool automationCancelRequested_ = false;
     bool teamReadyOcrRunning_ = false;

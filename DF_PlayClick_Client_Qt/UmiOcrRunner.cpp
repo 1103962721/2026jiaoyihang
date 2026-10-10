@@ -24,9 +24,10 @@ constexpr int OcrReadyWaitRounds = 20;
 constexpr int OcrReadyWaitMs = 250;
 // OCR 请求在后台线程执行；较短的网络超时可以避免停止监测时长时间占用 OCR 调度。
 constexpr int OcrHttpTimeoutMs = 5000;
+constexpr int OcrCancelPollTimeoutMs = 100;
 std::mutex g_ocrRequestMutex;
 
-bool ConnectLocalSocket(SOCKET& socketHandle, int port)
+bool ConnectLocalSocket(SOCKET& socketHandle, int port, int timeoutMs)
 {
     socketHandle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (socketHandle == INVALID_SOCKET)
@@ -34,9 +35,9 @@ bool ConnectLocalSocket(SOCKET& socketHandle, int port)
         return false;
     }
 
-    const DWORD timeoutMs = OcrHttpTimeoutMs;
-    setsockopt(socketHandle, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
-    setsockopt(socketHandle, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+    const DWORD socketTimeoutMs = static_cast<DWORD>(qMax(1, timeoutMs));
+    setsockopt(socketHandle, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&socketTimeoutMs), sizeof(socketTimeoutMs));
+    setsockopt(socketHandle, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&socketTimeoutMs), sizeof(socketTimeoutMs));
 
     sockaddr_in address{};
     address.sin_family = AF_INET;
@@ -78,10 +79,20 @@ QString NormalizeOcrMatchText(const QString& value)
 }
 
 bool UmiOcrRunner::requestOcr(const QString& imagePath, const QString& executablePath, int port, const QString& dataFormat,
-    QJsonObject& responseObject, QString& errorText, int cpuThreads) const
+    QJsonObject& responseObject, QString& errorText, int cpuThreads,
+    const std::function<bool()>& isCancelled) const
 {
     // UmiOCR 本地接口在并发截图请求时会明显增加延迟，登录成功和封禁检测统一排队。
-    std::unique_lock<std::mutex> requestLock(g_ocrRequestMutex);
+    std::unique_lock<std::mutex> requestLock(g_ocrRequestMutex, std::defer_lock);
+    while (!requestLock.try_lock())
+    {
+        if (isCancelled && isCancelled())
+        {
+            errorText = QStringLiteral("OCR 请求已取消");
+            return false;
+        }
+        QThread::msleep(10);
+    }
     errorText.clear();
     QFile imageFile(imagePath);
     if (!imageFile.open(QIODevice::ReadOnly))
@@ -90,7 +101,7 @@ bool UmiOcrRunner::requestOcr(const QString& imagePath, const QString& executabl
         return false;
     }
 
-    if (!ensureServerRunning(executablePath, port, errorText))
+    if (!ensureServerRunning(executablePath, port, errorText, isCancelled))
     {
         return false;
     }
@@ -119,7 +130,8 @@ bool UmiOcrRunner::requestOcr(const QString& imagePath, const QString& executabl
     }
 
     SOCKET socketHandle = INVALID_SOCKET;
-    if (!ConnectLocalSocket(socketHandle, port))
+    const int socketTimeoutMs = isCancelled ? OcrCancelPollTimeoutMs : OcrHttpTimeoutMs;
+    if (!ConnectLocalSocket(socketHandle, port, socketTimeoutMs))
     {
         errorText = QStringLiteral("连接 UmiOCR 本地接口失败");
         return false;
@@ -143,6 +155,12 @@ bool UmiOcrRunner::requestOcr(const QString& imagePath, const QString& executabl
     char buffer[4096]{};
     while (true)
     {
+        if (isCancelled && isCancelled())
+        {
+            closesocket(socketHandle);
+            errorText = QStringLiteral("OCR 请求已取消");
+            return false;
+        }
         const int received = recv(socketHandle, buffer, sizeof(buffer), 0);
         if (received == 0)
         {
@@ -150,6 +168,8 @@ bool UmiOcrRunner::requestOcr(const QString& imagePath, const QString& executabl
         }
         if (received < 0)
         {
+            if (WSAGetLastError() == WSAETIMEDOUT)
+                continue;
             closesocket(socketHandle);
             errorText = QStringLiteral("读取 UmiOCR 响应失败");
             return false;
@@ -183,10 +203,10 @@ bool UmiOcrRunner::requestOcr(const QString& imagePath, const QString& executabl
 }
 
 QString UmiOcrRunner::recognizeImage(const QString& imagePath, const QString& executablePath, int port, QString& errorText,
-    int cpuThreads) const
+    int cpuThreads, const std::function<bool()>& isCancelled) const
 {
     QJsonObject responseObject;
-    if (!requestOcr(imagePath, executablePath, port, QStringLiteral("text"), responseObject, errorText, cpuThreads))
+    if (!requestOcr(imagePath, executablePath, port, QStringLiteral("text"), responseObject, errorText, cpuThreads, isCancelled))
     {
         return {};
     }
@@ -368,9 +388,11 @@ bool UmiOcrRunner::findBulletTextBounds(const QString& imagePath, const QString&
     return false;
 }
 
-bool UmiOcrRunner::ensureServerRunning(const QString& executablePath, int port, QString& errorText) const
+bool UmiOcrRunner::ensureServerRunning(const QString& executablePath, int port, QString& errorText,
+    const std::function<bool()>& isCancelled) const
 {
-    if (isServerReady(port))
+    const int readyTimeoutMs = isCancelled ? OcrCancelPollTimeoutMs : OcrHttpTimeoutMs;
+    if (isServerReady(port, readyTimeoutMs))
     {
         return true;
     }
@@ -391,9 +413,13 @@ bool UmiOcrRunner::ensureServerRunning(const QString& executablePath, int port, 
 
     for (int round = 0; round < OcrReadyWaitRounds; ++round)
     {
+        if (isCancelled && isCancelled())
+        {
+            errorText = QStringLiteral("OCR 启动已取消");
+            return false;
+        }
         QThread::msleep(OcrReadyWaitMs);
-        QCoreApplication::processEvents();
-        if (isServerReady(port))
+        if (isServerReady(port, readyTimeoutMs))
         {
             return true;
         }
@@ -403,7 +429,7 @@ bool UmiOcrRunner::ensureServerRunning(const QString& executablePath, int port, 
     return false;
 }
 
-bool UmiOcrRunner::isServerReady(int port) const
+bool UmiOcrRunner::isServerReady(int port, int timeoutMs) const
 {
     SocketUtil::WsaSession session;
     if (!session.Ok())
@@ -412,7 +438,7 @@ bool UmiOcrRunner::isServerReady(int port) const
     }
 
     SOCKET socketHandle = INVALID_SOCKET;
-    const bool connected = ConnectLocalSocket(socketHandle, port);
+    const bool connected = ConnectLocalSocket(socketHandle, port, timeoutMs);
     if (socketHandle != INVALID_SOCKET)
     {
         closesocket(socketHandle);
