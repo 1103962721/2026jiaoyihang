@@ -170,9 +170,11 @@ private:
     bool adbKey(const QString& keyCode, QString& errorText) const;
     bool adbInputText(const QString& text, QString& errorText) const;
     bool adbFindAndTap(const QString& keyword, int x, int y, int timeoutMs, int pollMs,
-        QString& errorText, const QString& prefix = QString());
+        QString& errorText, const QString& prefix = QString(),
+        int regionX = 0, int regionY = 0, int regionWidth = 0, int regionHeight = 0);
     bool adbWaitForText(const QString& keyword, int timeoutMs, int pollMs,
-        QString& errorText, const QString& prefix = QString());
+        QString& errorText, const QString& prefix = QString(),
+        int regionX = 0, int regionY = 0, int regionWidth = 0, int regionHeight = 0);
     bool adbReadText(int x, int y, int width, int height, const QString& prefix,
         QString& text, QString& errorText, int scaleFactor = 1);
     bool waitForAutomation(int milliseconds, QString& errorText);

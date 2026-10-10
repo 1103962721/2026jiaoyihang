@@ -749,7 +749,7 @@ bool ClientController::adbReadText(int x, int y, int width, int height, const QS
 }
 
 bool ClientController::adbFindAndTap(const QString& keyword, int x, int y, int timeoutMs, int pollMs,
-    QString& errorText, const QString& prefix)
+    QString& errorText, const QString& prefix, int regionX, int regionY, int regionWidth, int regionHeight)
 {
     QElapsedTimer timer;
     timer.start();
@@ -763,7 +763,7 @@ bool ClientController::adbFindAndTap(const QString& keyword, int x, int y, int t
         }
         QString recognized;
         QString ocrError;
-        if (adbReadText(0, 0, 0, 0,
+        if (adbReadText(regionX, regionY, regionWidth, regionHeight,
             QStringLiteral("%1_%2").arg(prefix.isEmpty() ? keyword : prefix).arg(++attempt),
             recognized, ocrError))
         {
@@ -784,7 +784,7 @@ bool ClientController::adbFindAndTap(const QString& keyword, int x, int y, int t
 }
 
 bool ClientController::adbWaitForText(const QString& keyword, int timeoutMs, int pollMs,
-    QString& errorText, const QString& prefix)
+    QString& errorText, const QString& prefix, int regionX, int regionY, int regionWidth, int regionHeight)
 {
     QElapsedTimer timer;
     timer.start();
@@ -798,7 +798,7 @@ bool ClientController::adbWaitForText(const QString& keyword, int timeoutMs, int
         }
         QString recognized;
         QString ocrError;
-        if (adbReadText(0, 0, 0, 0,
+        if (adbReadText(regionX, regionY, regionWidth, regionHeight,
             QStringLiteral("%1_%2").arg(prefix.isEmpty() ? keyword : prefix).arg(++attempt),
             recognized, ocrError)
             && recognized.contains(keyword, Qt::CaseInsensitive))
@@ -2174,6 +2174,11 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
         const QString& prefix, int timeoutMs, int pollMs) {
         return adbFindAndTap(keyword, x, y, timeoutMs, pollMs, errorText, prefix);
     };
+    const auto findAndTapRegion = [this, &errorText](const QString& keyword, int x, int y,
+        const QString& prefix, int timeoutMs, int pollMs, int regionX, int regionY, int regionWidth, int regionHeight) {
+        return adbFindAndTap(keyword, x, y, timeoutMs, pollMs, errorText, prefix,
+            regionX, regionY, regionWidth, regionHeight);
+    };
     const auto readText = [this, &errorText](int x, int y, int width, int height,
         const QString& prefix, QString& text, int scaleFactor = 1) {
         QString ocrError;
@@ -2262,19 +2267,23 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
         return true;
     }
 
-    if (!findAndTap(QStringLiteral("仓库"), 896, 666, QStringLiteral("adb_warehouse"), TimeoutMs, PollMs))
+    if (!findAndTapRegion(QStringLiteral("仓库"), 896, 666, QStringLiteral("adb_warehouse"), TimeoutMs, PollMs,
+        607, 622, 356, 75))
     {
         bool retryPromptFound = false;
         if (!waitPromptClear(retryPromptFound)
-            || !findAndTap(QStringLiteral("仓库"), 896, 666,
-                QStringLiteral("adb_warehouse_retry"), TimeoutMs, PollMs))
+            || !findAndTapRegion(QStringLiteral("仓库"), 896, 666,
+                QStringLiteral("adb_warehouse_retry"), TimeoutMs, PollMs, 607, 622, 356, 75))
             return false;
     }
-    if (!findAndTap(QStringLiteral("转移全部"), 457, 664, QStringLiteral("adb_transfer_all"), TimeoutMs, PollMs)
+    if (!findAndTapRegion(QStringLiteral("转移全部"), 457, 664, QStringLiteral("adb_transfer_all"), TimeoutMs, PollMs,
+        75, 634, 460, 58)
         || !findAndTap(QStringLiteral("携带物资"), 26, 31, QStringLiteral("adb_carry"), TimeoutMs, PollMs)
         || !findAndTap(QStringLiteral("装备配置"), 26, 31, QStringLiteral("adb_loadout"), TimeoutMs, PollMs)
-        || !findAndTap(QStringLiteral("交易行"), 329, 667, QStringLiteral("adb_market"), TimeoutMs, PollMs)
-        || !findAndTap(QStringLiteral("出售"), 58, 189, QStringLiteral("adb_sell"), TimeoutMs, PollMs))
+        || !findAndTapRegion(QStringLiteral("交易行"), 329, 667, QStringLiteral("adb_market"), TimeoutMs, PollMs,
+            23, 627, 747, 67)
+        || !findAndTapRegion(QStringLiteral("出售"), 58, 189, QStringLiteral("adb_sell"), TimeoutMs, PollMs,
+            2, 57, 117, 259))
         return false;
 
     const auto findListingItem = [this, &errorText, &readText, TimeoutMs, PollMs](int clickX, int clickY,
@@ -2288,7 +2297,7 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
                 && (!adbTap(clickX, clickY, errorText) || !waitForAutomation(300, errorText)))
                 return false;
             QString text;
-            if (readText(0, 0, 0, 0,
+            if (readText(3, 0, 325, 109,
                 QStringLiteral("%1_%2").arg(prefix).arg(++attempt), text)
                 && text.contains(QStringLiteral("上架物品"), Qt::CaseInsensitive))
                 return true;
@@ -2473,9 +2482,11 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
             if (match.hasMatch() && match.captured(1).toInt() == 0)
                 break;
         }
-        if (!findAndTap(QStringLiteral("下架"), 445, 204, QStringLiteral("adb_dismount_first"), TimeoutMs, PollMs)
+        if (!findAndTapRegion(QStringLiteral("下架"), 445, 204, QStringLiteral("adb_dismount_first"), TimeoutMs, PollMs,
+            134, 96, 410, 145)
             || !waitForAutomation(1500, errorText)
-            || !findAndTap(QStringLiteral("下架"), 785, 529, QStringLiteral("adb_dismount_second"), TimeoutMs, PollMs)
+            || !findAndTapRegion(QStringLiteral("下架"), 785, 529, QStringLiteral("adb_dismount_second"), TimeoutMs, PollMs,
+                654, 463, 306, 64)
             || !waitForAutomation(1500, errorText))
             return false;
         performedDismount = true;
@@ -2514,7 +2525,7 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
     if (!adbTap(516, 79, errorText) || !waitForAutomation(2000, errorText))
         return false;
     if (!adbWaitForText(QStringLiteral("领取完成"), TimeoutMs, PollMs,
-        errorText, QStringLiteral("adb_claim_complete")))
+        errorText, QStringLiteral("adb_claim_complete"), 331, 31, 597, 181))
         return false;
     if (!waitForAutomation(1500, errorText))
         return false;
@@ -2522,11 +2533,14 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
         return false;
     if (!adbTap(29, 34, errorText) || !waitForAutomation(1500, errorText))
         return false;
-    if (!findAndTap(QStringLiteral("出发"), 900, 674, QStringLiteral("adb_depart"), TimeoutMs, PollMs)
+    if (!findAndTapRegion(QStringLiteral("出发"), 900, 674, QStringLiteral("adb_depart"), TimeoutMs, PollMs,
+        948, 599, 316, 98)
         || !waitForAutomation(1000, errorText)
-        || !findAndTap(QStringLiteral("方案"), 790, 665, QStringLiteral("adb_plan"), TimeoutMs, PollMs)
+        || !findAndTapRegion(QStringLiteral("方案"), 790, 665, QStringLiteral("adb_plan"), TimeoutMs, PollMs,
+            607, 622, 356, 75)
         || !waitForAutomation(1000, errorText)
-        || !findAndTap(QStringLiteral("一键配装"), 116, 315, QStringLiteral("adb_quick_loadout"), TimeoutMs, PollMs)
+        || !findAndTapRegion(QStringLiteral("一键配装"), 116, 315, QStringLiteral("adb_quick_loadout"), TimeoutMs, PollMs,
+            0, 0, 206, 67)
         || !waitForAutomation(1000, errorText))
         return false;
 
