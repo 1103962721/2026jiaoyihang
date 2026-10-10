@@ -9,6 +9,8 @@
 #include <QComboBox>
 #include <QVector>
 #include <QProcess>
+#include <QStringList>
+#include <QTimer>
 
 #include "ClientController.h"
 
@@ -40,6 +42,7 @@ private:
     void updateConnectedState(bool connected);
     void updateReconnectingState(bool reconnecting);
     void appendConnectionLog(const QString& text);
+    void flushConnectionLog();
     void showControllerMessage(const QString& title, const QString& text, bool error);
     void applyClientBindingMode(int modeIndex);
     void addCloudBossSession();
@@ -84,6 +87,8 @@ private:
     QLabel* clickStrategyLabel_ = nullptr;
     QLabel* executionStatusLabel_ = nullptr;
     QTextEdit* connectionLogEdit_ = nullptr;
+    QTimer connectionLogFlushTimer_;
+    QStringList pendingConnectionLogs_;
     QComboBox* bindingModeCombo_ = nullptr;
     QWidget* pcOcrCard_ = nullptr;
     QWidget* pcExecutionCard_ = nullptr;

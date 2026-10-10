@@ -1,4 +1,4 @@
-#include "MainWindow.h"
+﻿#include "MainWindow.h"
 
 #include <algorithm>
 #include <QAbstractItemView>
@@ -14,6 +14,9 @@
 #include <QSizePolicy>
 #include <QThread>
 #include <QTimer>
+#include <QTextCursor>
+#include <QTextDocument>
+#include <QScrollBar>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -24,6 +27,9 @@
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
+    connectionLogFlushTimer_.setSingleShot(true);
+    connectionLogFlushTimer_.setInterval(100);
+    connect(&connectionLogFlushTimer_, &QTimer::timeout, this, &MainWindow::flushConnectionLog);
     buildUi();
     connectSignals();
     refreshConnectionControls();
@@ -335,7 +341,7 @@ void MainWindow::buildUi()
     cloudSessionList_->setMinimumHeight(52);
     cloudSessionList_->setAlternatingRowColors(true);
     cloudLayout->addWidget(cloudSessionList_);
-    auto* cloudHint = new QLabel(QStringLiteral("每个 ADB 端口对应一个独立老板客户端；截图和 OCR 仍直接使用绑定 VM 窗口客户区。"), this);
+    auto* cloudHint = new QLabel(QStringLiteral("每个 ADB 端口对应一个独立老板客户端；截图和 OCR 直接使用设备 1280×720 分辨率。"), this);
     cloudHint->setObjectName(QStringLiteral("hintText"));
     cloudHint->setWordWrap(true);
     cloudLayout->addWidget(cloudHint);
@@ -552,6 +558,7 @@ void MainWindow::addCloudBossSession()
     auto* controller = new ClientController(this);
     controller->initializeExternalBossSession(reinterpret_cast<HWND>(winId()));
     controller->setSessionDeviceId(QStringLiteral("ADB-%1").arg(adbPort));
+    controller->setSessionAdbPort(adbPort);
     auto* item = new QListWidgetItem(QStringLiteral("ADB:%1 · 正在绑定 VM 窗口 · 未连接").arg(adbPort), cloudSessionList_);
     cloudSessions_.append({ controller, adbPort, item, false, false, false });
     const QString serverIp = ipEdit_->text().trimmed();
@@ -598,6 +605,10 @@ void MainWindow::addCloudBossSession()
             });
         }
     });
+    connect(controller, &ClientController::connectionLogAppended, this,
+        [this, adbPort](const QString& text) {
+        appendConnectionLog(QStringLiteral("[ADB:%1] %2").arg(adbPort).arg(text));
+    });
     connect(controller, &ClientController::connectedChanged, this, [this, controller, item, adbPort](bool connected) {
         auto sessionIt = std::find_if(cloudSessions_.begin(), cloudSessions_.end(), [controller](const CloudBossSession& session) {
             return session.controller == controller;
@@ -640,7 +651,8 @@ void MainWindow::removeCloudBossSession(int index)
     {
         disconnect(session.controller, nullptr, this, nullptr);
         session.controller->shutdownForExit();
-        delete session.controller;
+        if (!session.controller->hasAdbWorker())
+            delete session.controller;
     }
     if (session.item)
     {
@@ -659,6 +671,7 @@ void MainWindow::clearCloudBossSessions()
 void MainWindow::applyClientBindingMode(int modeIndex)
 {
     const bool phoneMode = modeIndex == 1;
+    connectionLogEdit_->document()->setMaximumBlockCount(phoneMode ? 600 : 0);
     if (cloudSessionCard_)
         cloudSessionCard_->setVisible(phoneMode);
     if (pcOcrCard_)
@@ -869,7 +882,36 @@ void MainWindow::updateReconnectingState(bool reconnecting)
 
 void MainWindow::appendConnectionLog(const QString& text)
 {
-    connectionLogEdit_->append(text);
+    // 仅 ADB 老板流程使用批量刷新，保持 PC/币号流程原有日志时序。
+    if (!text.startsWith(QStringLiteral("[ADB:")))
+    {
+        flushConnectionLog();
+        connectionLogEdit_->append(text);
+        return;
+    }
+    // ADB OCR can produce results faster than a rich-text control can reflow.
+    // Coalesce updates and retain only a bounded recent history.
+    pendingConnectionLogs_.append(text);
+    constexpr int MaxPendingLines = 160;
+    if (pendingConnectionLogs_.size() > MaxPendingLines)
+        pendingConnectionLogs_.erase(pendingConnectionLogs_.begin(),
+            pendingConnectionLogs_.begin() + (pendingConnectionLogs_.size() - MaxPendingLines));
+    if (!connectionLogFlushTimer_.isActive())
+        connectionLogFlushTimer_.start();
+}
+
+void MainWindow::flushConnectionLog()
+{
+    if (!connectionLogEdit_ || pendingConnectionLogs_.isEmpty())
+        return;
+    const bool followTail = connectionLogEdit_->verticalScrollBar()->value()
+        >= connectionLogEdit_->verticalScrollBar()->maximum() - 2;
+    QTextCursor cursor(connectionLogEdit_->document());
+    cursor.movePosition(QTextCursor::End);
+    cursor.insertText(pendingConnectionLogs_.join(QLatin1Char('\n')) + QLatin1Char('\n'));
+    pendingConnectionLogs_.clear();
+    if (followTail)
+        connectionLogEdit_->verticalScrollBar()->setValue(connectionLogEdit_->verticalScrollBar()->maximum());
 }
 
 void MainWindow::showControllerMessage(const QString& title, const QString& text, bool error)

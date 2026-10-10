@@ -1,4 +1,4 @@
-#include "UmiOcrRunner.h"
+﻿#include "UmiOcrRunner.h"
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -78,7 +78,7 @@ QString NormalizeOcrMatchText(const QString& value)
 }
 
 bool UmiOcrRunner::requestOcr(const QString& imagePath, const QString& executablePath, int port, const QString& dataFormat,
-    QJsonObject& responseObject, QString& errorText) const
+    QJsonObject& responseObject, QString& errorText, int cpuThreads) const
 {
     // UmiOCR 本地接口在并发截图请求时会明显增加延迟，登录成功和封禁检测统一排队。
     std::unique_lock<std::mutex> requestLock(g_ocrRequestMutex);
@@ -102,7 +102,7 @@ bool UmiOcrRunner::requestOcr(const QString& imagePath, const QString& executabl
     // 保持当前 OCR 截图的原始尺寸，避免 UmiOCR 缩放后返回的文字框坐标
     // 与客户端截图坐标不一致，导致后续点击偏移到分隔线或空白区域。
     options.insert(QStringLiteral("ocr.maxSideLen"), 2048);
-    options.insert(QStringLiteral("ocr.cpuThreads"), 12);
+    options.insert(QStringLiteral("ocr.cpuThreads"), qBound(1, cpuThreads, 12));
     options.insert(QStringLiteral("tbpu.parser"), QStringLiteral("single_line"));
     options.insert(QStringLiteral("data.format"), dataFormat);
 
@@ -182,10 +182,11 @@ bool UmiOcrRunner::requestOcr(const QString& imagePath, const QString& executabl
     return true;
 }
 
-QString UmiOcrRunner::recognizeImage(const QString& imagePath, const QString& executablePath, int port, QString& errorText) const
+QString UmiOcrRunner::recognizeImage(const QString& imagePath, const QString& executablePath, int port, QString& errorText,
+    int cpuThreads) const
 {
     QJsonObject responseObject;
-    if (!requestOcr(imagePath, executablePath, port, QStringLiteral("text"), responseObject, errorText))
+    if (!requestOcr(imagePath, executablePath, port, QStringLiteral("text"), responseObject, errorText, cpuThreads))
     {
         return {};
     }

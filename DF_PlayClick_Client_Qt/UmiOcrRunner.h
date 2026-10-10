@@ -8,7 +8,8 @@ class QJsonObject;
 class UmiOcrRunner
 {
 public:
-    QString recognizeImage(const QString& imagePath, const QString& executablePath, int port, QString& errorText) const;
+    QString recognizeImage(const QString& imagePath, const QString& executablePath, int port, QString& errorText,
+        int cpuThreads = 12) const;
     bool findTextBounds(const QString& imagePath, const QString& executablePath, int port, const QString& keyword,
         QRect& bounds, QString& errorText, bool exactMatch = false, QString* recognizedText = nullptr) const;
     bool findBulletTextBounds(const QString& imagePath, const QString& executablePath, int port,
@@ -16,7 +17,7 @@ public:
 
 private:
     bool requestOcr(const QString& imagePath, const QString& executablePath, int port, const QString& dataFormat,
-        QJsonObject& responseObject, QString& errorText) const;
+        QJsonObject& responseObject, QString& errorText, int cpuThreads = 12) const;
     bool ensureServerRunning(const QString& executablePath, int port, QString& errorText) const;
     bool isServerReady(int port) const;
 };

@@ -10,6 +10,7 @@
 #include <QAbstractNativeEventFilter>
 #include <QDateTime>
 #include <QRect>
+#include <QThread>
 
 #include "ClientConfig.h"
 #include "ClientConnection.h"
@@ -41,6 +42,8 @@ class ClientController : public QObject, public QAbstractNativeEventFilter
 
 public:
     explicit ClientController(QObject* parent = nullptr);
+    ~ClientController() override;
+    bool hasAdbWorker() const;
     void shutdownForExit();
 
     QString lastServerIp() const;
@@ -62,6 +65,7 @@ public:
     bool initialize(HWND mainWindowHandle);
     bool initializeExternalBossSession(HWND mainWindowHandle);
     void setSessionDeviceId(const QString& deviceId);
+    void setSessionAdbPort(int adbPort);
     bool bindExternalWindow(HWND hwnd, const QString& displayName = QString());
     bool nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result) override;
     void refreshWindows();
@@ -156,11 +160,26 @@ private:
         int timeoutMs = 10000, bool* performedDismount = nullptr);
     bool executeBossListingSequence(const QString& listingPrice, QString& errorText);
     bool executeBossPrepareCheck(int requestId, QString& errorText);
+    bool executeAdbBossPrepareCheck(int requestId, QString& errorText);
+    bool executeAdbBossListingSequence(const QString& listingPrice, QString& errorText);
+    void startAdbWorker(bool prepare, int requestId = 0);
+    bool reportAdbAmount(qint64 amount);
+    void reportAdbReady(bool ready);
+    bool runAdbCommand(const QStringList& arguments, QByteArray& standardOutput, QString& errorText) const;
+    bool adbTap(int x, int y, QString& errorText) const;
+    bool adbKey(const QString& keyCode, QString& errorText) const;
+    bool adbInputText(const QString& text, QString& errorText) const;
+    bool adbFindAndTap(const QString& keyword, int x, int y, int timeoutMs, int pollMs,
+        QString& errorText, const QString& prefix = QString());
+    bool adbWaitForText(const QString& keyword, int timeoutMs, int pollMs,
+        QString& errorText, const QString& prefix = QString());
+    bool adbReadText(int x, int y, int width, int height, const QString& prefix,
+        QString& text, QString& errorText, int scaleFactor = 1);
     bool waitForAutomation(int milliseconds, QString& errorText);
     bool beginAutomationAction(const QString& actionName);
     void finishAutomationAction();
     void sendTeamCodeResult(const QString& payload, const QString& statusText);
-    QString captureOcrRegion(const OcrRegionConfig& region, const QString& filePrefix, QString& errorText) const;
+    QString captureOcrRegion(const OcrRegionConfig& region, const QString& filePrefix, QString& errorText);
     bool sendTeamReadyResult(const TeamReadyResult& result);
 
     ClientConfig config_;
@@ -218,6 +237,10 @@ private:
     bool ready_ = false;
     bool automationActionRunning_ = false;
     bool externalBossSession_ = false;
+    int sessionAdbPort_ = 0;
+    QThread* adbWorker_ = nullptr;
+    bool adbShuttingDown_ = false;
+    int adbClickDelayMs_ = 50;
     bool forceStopActionAckPending_ = false;
     std::atomic_bool automationCancelRequested_ = false;
     bool teamReadyOcrRunning_ = false;
