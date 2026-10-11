@@ -3,6 +3,7 @@
 .qt-tools/
 .superpowers/
 .vs/
+/build/
 Debug/
 debug/
 Release/
@@ -23,6 +24,7 @@ x64/Release/
 *.log
 *.recipe
 *.exe
+!DF_PlayClick_Client_Qt/Resources/adb/adb.exe
 *.ini
 *.rar
 *.cbt

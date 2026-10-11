@@ -1,12 +1,14 @@
 ﻿#include "ClientConfig.h"
 
 #include <windows.h>
+#include "BundledAdb.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
 #include <QUuid>
 #include <QStringList>
+#include <QStandardPaths>
 #include <QtGlobal>
 
 QString ClientConfig::configPath() const
@@ -89,8 +91,9 @@ int ClientConfig::loadUmiOcrPort() const
     return GetPrivateProfileIntW(L"OCR", L"Port", 1224, reinterpret_cast<LPCWSTR>(configPath().utf16()));
 }
 
-QString ClientConfig::loadAdbPath() const
+QString ClientConfig::loadAdbPath(QString* errorText) const
 {
+    if (errorText) errorText->clear();
     wchar_t buffer[MAX_PATH * 2]{};
     const QString path = configPath();
     GetPrivateProfileStringW(L"ADB", L"Path", L"", buffer,
@@ -103,16 +106,20 @@ QString ClientConfig::loadAdbPath() const
     const QDir appDir(QCoreApplication::applicationDirPath());
     const QStringList candidates{
         appDir.filePath(QStringLiteral("adb.exe")),
-        appDir.filePath(QStringLiteral("platform-tools/adb.exe")),
-        QStringLiteral("E:/IDMDownLoad_2026-8-4/QtScrcpy-win-x64-v4.1.1/QtScrcpy-win-x64-v4.1.1/adb.exe"),
-        QStringLiteral("E:/IDMDownLoad_2026-8-4/WASD+/tools/adb/adb.exe")
+        appDir.filePath(QStringLiteral("platform-tools/adb.exe"))
     };
     for (const QString& candidate : candidates)
     {
         if (QFileInfo::exists(candidate))
             return candidate;
     }
-    return QStringLiteral("adb.exe");
+    QString error;
+    const QString bundled = BundledAdb::executablePath(error);
+    if (!bundled.isEmpty()) return bundled;
+    const QString installed = QStandardPaths::findExecutable(QStringLiteral("adb.exe"));
+    if (!installed.isEmpty()) return installed;
+    if (errorText) *errorText = error;
+    return {};
 }
 
 int ClientConfig::loadTeamReadyOcrIntervalMs() const

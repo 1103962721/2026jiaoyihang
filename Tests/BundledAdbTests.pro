@@ -1,0 +1,9 @@
+TEMPLATE = app
+TARGET = BundledAdbTests
+QT = core
+CONFIG += console c++17
+CONFIG -= app_bundle
+DEFINES += UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
+SOURCES += BundledAdbTests.cpp ../DF_PlayClick_Client_Qt/BundledAdb.cpp ../DF_PlayClick_Client_Qt/ClientConfig.cpp
+HEADERS += ../DF_PlayClick_Client_Qt/BundledAdb.h ../DF_PlayClick_Client_Qt/ClientConfig.h
+RESOURCES += ../DF_PlayClick_Client_Qt/BundledAdb.qrc

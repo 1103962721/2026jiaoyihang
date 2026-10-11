@@ -8,7 +8,7 @@ LIBS += -lWs2_32 -lUser32 -lGdi32 -lAdvapi32 -lShell32 -luiautomationcore -lole3
 
 win32:RC_ICONS = AppIcon.ico
 
-RESOURCES += AppIcon.qrc
+RESOURCES += AppIcon.qrc BundledAdb.qrc
 
 SOURCES += \
     ../Shared/FramelessTitleBar.cpp \
@@ -23,6 +23,7 @@ SOURCES += \
     Win32InputDispatcher.cpp \
     HotkeyManager.cpp \
     ClientConfig.cpp \
+    BundledAdb.cpp \
     SponsorDialog.cpp \
     TeamReadyParser.cpp \
     UmiOcrRunner.cpp \
@@ -33,6 +34,7 @@ HEADERS += \
     ../Shared/FramelessTitleBar.h \
     MainWindow.h \
     ClientController.h \
+    AdbWindowOcr.h \
     ClientConnection.h \
     AccountLoginAutomation.h \
     AccountBanMonitor.h \
@@ -41,6 +43,7 @@ HEADERS += \
     Win32InputDispatcher.h \
     HotkeyManager.h \
     ClientConfig.h \
+    BundledAdb.h \
     SponsorDialog.h \
     TeamReadyParser.h \
     UmiOcrRunner.h \

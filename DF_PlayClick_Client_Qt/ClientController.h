@@ -18,6 +18,7 @@
 #include "TeamReadyParser.h"
 #include "UmiOcrRunner.h"
 #include "Win32InputDispatcher.h"
+#include "AdbWindowOcr.h"
 #include "Win32WindowBinder.h"
 #include "AccountLoginAutomation.h"
 #include "AccountBanMonitor.h"
@@ -47,7 +48,7 @@ public:
     void shutdownForExit();
 
     QString lastServerIp() const;
-    QString loadAdbPath() const;
+    QString loadAdbPath(QString* errorText = nullptr) const;
     QVector<TargetWindowInfo> windows() const;
     QVector<ClickTask> tasks() const;
     int boundWindowIndex() const;
@@ -239,6 +240,8 @@ private:
     bool ready_ = false;
     bool automationActionRunning_ = false;
     bool externalBossSession_ = false;
+    QTimer adbWindowSizeTimer_;
+    AdbWindowOcr::SizeLock adbWindowSizeLock_;
     int sessionAdbPort_ = 0;
     QThread* adbWorker_ = nullptr;
     bool adbShuttingDown_ = false;

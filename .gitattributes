@@ -1,0 +1,2 @@
+# Keep the upstream embedded ADB notice byte-for-byte, including its whitespace.
+DF_PlayClick_Client_Qt/Resources/adb/NOTICE.txt -text -whitespace

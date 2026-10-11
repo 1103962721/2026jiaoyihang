@@ -39,7 +39,7 @@ public:
     int loadClickQueueDelayMs() const;
     void saveClickQueueDelayMs(int delayMs) const;
     QString loadUmiOcrPath() const;
-    QString loadAdbPath() const;
+    QString loadAdbPath(QString* errorText = nullptr) const;
     int loadUmiOcrPort() const;
     int loadTeamReadyOcrIntervalMs() const;
     OcrRegionConfig loadTeamReadyRegion() const;

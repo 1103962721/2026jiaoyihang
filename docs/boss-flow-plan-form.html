@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>老板执行流程改版填写表</title>
+  <style>
+    :root { color-scheme: light; --ink:#1f2937; --muted:#667085; --line:#d9dee7; --head:#f3f5f8; --accent:#2563eb; --accent-soft:#eff6ff; }
+    * { box-sizing: border-box; }
+    body { margin:0; color:var(--ink); background:#f7f8fa; font:14px/1.5 "Microsoft YaHei", "Segoe UI", sans-serif; }
+    .page { max-width: 1800px; margin: 0 auto; padding: 24px; }
+    h1 { margin:0 0 6px; font-size:24px; }
+    .subtitle { margin:0 0 18px; color:var(--muted); }
+    .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:14px; }
+    button { border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--ink); padding:8px 13px; cursor:pointer; }
+    button:hover { border-color:var(--accent); color:var(--accent); }
+    button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+    .save-state { color:var(--muted); margin-left:4px; }
+    .note { border-left:4px solid var(--accent); background:var(--accent-soft); padding:10px 12px; margin-bottom:14px; color:#344054; }
+    .table-wrap { overflow:auto; border:1px solid var(--line); background:#fff; }
+    table { width:100%; min-width:1500px; border-collapse:separate; border-spacing:0; }
+    th, td { border-right:1px solid var(--line); border-bottom:1px solid var(--line); vertical-align:top; padding:10px; }
+    th { position:sticky; top:0; z-index:2; background:var(--head); text-align:left; font-weight:600; white-space:nowrap; }
+    th:first-child, td:first-child { position:sticky; left:0; z-index:1; background:#fff; width:54px; text-align:center; }
+    th:first-child { z-index:3; background:var(--head); }
+    .stage { min-width:190px; font-weight:600; }
+    .current { min-width:460px; color:#475467; white-space:pre-line; }
+    .new-cell { min-width:820px; }
+    .fields { display:grid; grid-template-columns:repeat(5, minmax(140px, 1fr)); gap:8px; }
+    label { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px; }
+    textarea { width:100%; min-height:58px; resize:vertical; padding:7px 8px; border:1px solid var(--line); border-radius:5px; color:var(--ink); background:#fff; font:13px/1.4 "Microsoft YaHei", sans-serif; }
+    textarea:focus { outline:2px solid #bfdbfe; border-color:var(--accent); }
+    tr:last-child td { border-bottom:0; }
+    th:last-child, td:last-child { border-right:0; }
+    .footer { margin-top:12px; color:var(--muted); font-size:12px; }
+    @media print {
+      body { background:#fff; }
+      .page { max-width:none; padding:0; }
+      .toolbar, .subtitle, .note, .footer { display:none; }
+      h1 { margin-bottom:10px; }
+      .table-wrap { overflow:visible; border:0; }
+      table { min-width:0; font-size:10px; }
+      th, td { padding:5px; }
+      .new-cell { min-width:0; }
+      .fields { display:block; }
+      label { display:inline-block; width:19%; vertical-align:top; margin-right:1%; }
+      textarea { min-height:42px; font-size:10px; }
+      th:first-child, td:first-child { position:static; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>老板执行流程改版填写表</h1>
+    <p class="subtitle">当前实现值用于参考；请在“新方案填写”区域逐行填写新的坐标、OCR 区域、识别文本、延迟和备注。</p>
+    <div class="toolbar">
+      <button class="primary" id="saveBtn">保存填写内容</button>
+      <button id="exportBtn">导出 JSON</button>
+      <button id="importBtn">导入 JSON</button>
+      <button id="printBtn">打印 / 导出 PDF</button>
+      <button id="clearBtn">清空填写</button>
+      <input id="fileInput" type="file" accept="application/json" hidden>
+      <span class="save-state" id="saveState">尚未保存</span>
+    </div>
+    <div class="note">坐标默认按游戏客户区填写。若新流程使用动态 OCR 点击，请在“点击坐标”中写“识别框中心”或填写具体固定点；延迟请注明单位（ms）。</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>序号</th>
+            <th>流程阶段</th>
+            <th>当前实现</th>
+            <th>新方案填写</th>
+          </tr>
+        </thead>
+        <tbody id="flowBody"></tbody>
+      </table>
+    </div>
+    <p class="footer">数据保存在当前浏览器的本地存储中；导出 JSON 后可备份或发回继续整理。</p>
+  </main>
+  <script>
+    const storageKey = "df-playclick-boss-flow-plan-v1";
+    const rows = [
+      [0, "OCR 公共服务", "点击：无\nOCR：由调用方指定\n文本：返回纯文本或文字边界\n延迟：HTTP 超时 5000ms；启动最多 20 次，每次 250ms"],
+      [1, "服务端准备老板", "点击：无\nOCR：无\n文本：筛选已连接、已准备、空闲的老板\n延迟：等待所有目标老板回报"],
+      [2, "准备检查：清理价格提示", "按键：ESC\nOCR：(538,313,275,60)\n文本：价格变动提醒；确认实现方案\n延迟：最长 5s；ESC 后等待 1500ms"],
+      [3, "准备检查：确认老板已准备", "点击：无\nOCR：(2048,1123,400,80)\n文本：区域内出现任意数字\n延迟：最长 5s；150ms 轮询"],
+      [4, "准备检查：读取金额基线", "移动：1K 窗口 (1639,54)；普通窗口 (2128,67)\nOCR：(2015,325,450,95)\n文本：金额数字，支持逗号、句点、K/M；连续稳定 3/3\n延迟：移动后 1000ms；100ms 轮询；右移 3/6px 重试"],
+      [5, "老板正式出发", "点击：(2262,1159)\nOCR：无\n文本：老板固定出发点\n延迟：倒计时结束后使用客户端 clickQueueDelayMs_"],
+      [6, "出发后等待界面稳定", "点击：无\nOCR：无\n文本：无\n延迟：1000ms"],
+      [7, "出发后再次清理价格提示", "按键：ESC\nOCR：(538,313,275,60)\n文本：价格变动提醒；确认实现方案\n延迟：最长 5s；ESC 后 1500ms；发现提示时可能直接结束本轮"],
+      [8, "再次确认老板准备数字", "点击：无\nOCR：(2048,1123,400,80)\n文本：任意数字\n延迟：最长 5s；150ms 轮询"],
+      [9, "进入仓库", "点击：OCR 识别框中心\nOCR：(173,44,1217,60)\n文本：仓库\n延迟：最长 5s；150ms 轮询"],
+      [10, "转移全部物品", "点击：OCR 识别框中心\nOCR：(394,1380,80,45)\n文本：转移全部\n延迟：最长 5s；150ms 轮询"],
+      [11, "进入交易行", "点击：OCR 识别框中心\nOCR：(173,44,1217,60)\n文本：交易行\n延迟：最长 5s；150ms 轮询"],
+      [12, "进入出售页面", "点击：OCR 识别框中心\nOCR：(195,125,495,46)\n文本：出售\n延迟：最长 5s；150ms 轮询"],
+      [13, "打开价格/物品区域", "点击：(1693,293)\nOCR：无\n文本：打开上架物品区域\n延迟：首次 2000ms；后续点击间隔 300ms"],
+      [14, "查找上架物品", "点击：OCR 识别框中心\nOCR：(540,309,190,55)\n文本：上架物品\n延迟：最长 5s；150ms 轮询"],
+      [15, "打开价格面板并检查数量", "点击：(1939,745)\nOCR：(1957,678,80,32)\n文本：X/N，要求 X != 1\n延迟：点击后 300ms；不满足时重复，无独立超时"],
+      [16, "输入并校验老板价格", "点击：(1827,858)\nOCR：(1548,837,400,50)\n文本：输入后的价格数字，必须等于服务端价格\n延迟：500ms、500ms、粘贴后 1500ms；失败后 150ms 重试"],
+      [17, "派发/提交上架", "点击：(1756,1000)\nOCR：无\n文本：无\n延迟：1500ms"],
+      [18, "检查上架数量", "点击：无\nOCR：(108,185,189,45)\n文本：0/N；数量为 0 才继续\n延迟：老板最长 15s；150ms 轮询；成功后 1500ms"],
+      [19, "数量未归零时下架", "点击：OCR 识别框中心\nOCR：第一处 (895,358,210,40)；第二处 (1296,899,400,75)\n文本：下架\n延迟：每处最长 5s；每次下架后 1500ms"],
+      [20, "下架后重新检查数量", "点击：无\nOCR：(108,185,189,45)\n文本：继续识别 X/N\n延迟：下架后每 300ms 检查；X=0 后 1500ms"],
+      [21, "减价重新上架", "点击：(1693,282)，随后重复价格输入\nOCR：(540,309,190,55)\n文本：上架物品\n延迟：重新查找最长 5s；价格为当前价格减 20；找不到视为已被买走"],
+      [22, "点击领取收益", "点击：(1224,205)\nOCR：无\n文本：无\n延迟：2000ms"],
+      [23, "确认领取完成", "按键：SPACE\nOCR：(1153,152,285,375)\n文本：领取完成\n延迟：最长 5s；150ms 轮询；识别后 1500ms + SPACE + 1500ms"],
+      [24, "返回准备界面", "按键：ESC；点击返回 (495,1400)；最终选择 (234,563)\nOCR：无\n文本：无\n延迟：ESC 后 1500ms；返回后 1500ms；最终选择后无额外等待"],
+      [25, "返回后读取老板金额", "移动：1K 窗口 (1639,54)；普通窗口 (2128,67)\nOCR：(2015,325,450,95)\n文本：金额数字；连续稳定 3/3\n延迟：移动后 1000ms；100ms 轮询；失败时向右偏移 3px 持续重试"],
+      [26, "最终确认老板准备状态", "点击：无\nOCR：(2048,1123,400,80)\n文本：任意数字；有数字回报 [1/1]\n延迟：最长 5s；150ms 轮询"],
+    ];
+
+    const emptyFields = () => ({ coord:"", ocr:"", text:"", delay:"", notes:"" });
+    let values = loadValues();
+    const flowBody = document.getElementById("flowBody");
+    const fieldNames = ["coord", "ocr", "text", "delay", "notes"];
+    const fieldLabels = { coord:"点击坐标 / 按键", ocr:"OCR 区域", text:"识别文本 / 判断", delay:"延迟 / 超时", notes:"备注" };
+
+    function loadValues() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
+        return saved && typeof saved === "object" ? saved : {};
+      } catch (_) { return {}; }
+    }
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>\"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+    }
+    function render() {
+      flowBody.innerHTML = rows.map(([id, stage, current]) => {
+        const data = { ...emptyFields(), ...(values[id] || {}) };
+        const fields = fieldNames.map(name => `<label>${fieldLabels[name]}<textarea data-id="${id}" data-field="${name}" placeholder="填写…">${esc(data[name])}</textarea></label>`).join("");
+        return `<tr><td>${id}</td><td class="stage">${esc(stage)}</td><td class="current">${esc(current)}</td><td class="new-cell"><div class="fields">${fields}</div></td></tr>`;
+      }).join("");
+      flowBody.querySelectorAll("textarea").forEach(input => input.addEventListener("input", onInput));
+    }
+    function onInput(event) {
+      const { id, field } = event.target.dataset;
+      values[id] = { ...emptyFields(), ...(values[id] || {}), [field]: event.target.value };
+      localStorage.setItem(storageKey, JSON.stringify(values));
+      setState("已自动保存：" + new Date().toLocaleString());
+    }
+    function save() {
+      localStorage.setItem(storageKey, JSON.stringify(values));
+      setState("已保存：" + new Date().toLocaleString());
+    }
+    function setState(text) { document.getElementById("saveState").textContent = text; }
+    function exportJson() {
+      const payload = { title:"老板执行流程改版填写表", exportedAt:new Date().toISOString(), rows:rows.map(([id, stage, current]) => ({ id, stage, current, newPlan:{ ...emptyFields(), ...(values[id] || {}) } })) };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob); const a = document.createElement("a");
+      a.href = url; a.download = "boss-flow-plan.json"; a.click(); URL.revokeObjectURL(url);
+    }
+    function importJson(file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = JSON.parse(reader.result); const imported = data.rows || data;
+          values = {};
+          (Array.isArray(imported) ? imported : []).forEach(item => { if (item && item.id != null) values[item.id] = { ...emptyFields(), ...(item.newPlan || item.values || {}) }; });
+          render(); save();
+        } catch (_) { alert("JSON 文件格式无法识别"); }
+      };
+      reader.readAsText(file, "utf-8");
+    }
+    document.getElementById("saveBtn").addEventListener("click", save);
+    document.getElementById("exportBtn").addEventListener("click", exportJson);
+    document.getElementById("importBtn").addEventListener("click", () => document.getElementById("fileInput").click());
+    document.getElementById("fileInput").addEventListener("change", event => { if (event.target.files[0]) importJson(event.target.files[0]); event.target.value = ""; });
+    document.getElementById("printBtn").addEventListener("click", () => window.print());
+    document.getElementById("clearBtn").addEventListener("click", () => { if (confirm("确定清空所有新方案填写内容吗？")) { values = {}; localStorage.removeItem(storageKey); render(); setState("已清空"); } });
+    render();
+  </script>
+</body>
+</html>

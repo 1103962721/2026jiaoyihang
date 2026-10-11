@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="820" viewBox="0 0 1200 820">
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="7" flood-color="#74839a" flood-opacity="0.16"/>
+    </filter>
+    <style>
+      .ui { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; fill: #172033; }
+      .muted { fill: #6b778d; }
+      .small { font-size: 13px; }
+      .body { font-size: 15px; }
+      .title { font-size: 25px; font-weight: 700; }
+      .section { font-size: 18px; font-weight: 700; }
+      .th { font-size: 13px; font-weight: 700; fill: #58667b; }
+      .cell { font-size: 14px; fill: #25324a; }
+      .line { stroke: #e4e9f1; stroke-width: 1; }
+    </style>
+  </defs>
+  <rect width="1200" height="820" fill="#f4f6fa"/>
+  <rect x="0" y="0" width="1200" height="82" fill="#ffffff"/>
+  <line x1="0" y1="82" x2="1200" y2="82" class="line"/>
+  <text x="25" y="31" class="ui body" font-weight="700">DF 倒子弹服务端</text>
+  <text x="25" y="60" class="ui title">服务端调度中心</text>
+  <text x="250" y="60" class="ui small muted">客户端分组 · 倒计时 · 精确延迟 · 批量触发</text>
+  <rect x="1020" y="24" width="76" height="34" rx="8" fill="#f1faf6"/>
+  <text x="1058" y="46" text-anchor="middle" class="ui small" fill="#16865f">● 监听中</text>
+  <rect x="1107" y="24" width="72" height="34" rx="8" fill="#f7f9fc"/>
+  <text x="1143" y="46" text-anchor="middle" class="ui small">8 客户端</text>
+
+  <rect x="0" y="82" width="214" height="738" fill="#ffffff"/>
+  <line x1="214" y1="82" x2="214" y2="820" class="line"/>
+  <text x="28" y="120" class="ui small muted">工作区</text>
+  <rect x="16" y="137" width="182" height="44" rx="8" fill="#e9efff"/>
+  <rect x="16" y="137" width="4" height="44" rx="2" fill="#3b73e8"/>
+  <text x="30" y="165" class="ui body" fill="#1e5bc4" font-weight="700">客户端列表</text>
+  <text x="30" y="211" class="ui body">总览与执行</text>
+  <text x="30" y="257" class="ui body">配装与上架</text>
+  <text x="30" y="303" class="ui body">账号管理</text>
+  <text x="30" y="349" class="ui body">日志与状态</text>
+  <text x="28" y="415" class="ui small muted">客户端行右键菜单保留角色、备注、单独上架、上号、换号、保存配装、领取邮件、重新绑定、停止动作和断开功能。</text>
+
+  <text x="240" y="126" class="ui title">客户端列表</text>
+  <text x="240" y="153" class="ui small muted">完整展示客户端状态，数据与总览页同步；右键客户端行执行操作</text>
+  <rect x="1007" y="108" width="94" height="36" rx="7" fill="#ffffff" stroke="#d8e0eb"/>
+  <text x="1054" y="131" text-anchor="middle" class="ui small">刷新列表</text>
+  <rect x="1110" y="108" width="64" height="36" rx="7" fill="#2ca87a"/>
+  <text x="1142" y="131" text-anchor="middle" class="ui small" fill="#ffffff">执行</text>
+
+  <rect x="240" y="180" width="934" height="570" rx="10" fill="#ffffff" filter="url(#shadow)"/>
+  <rect x="258" y="198" width="898" height="48" rx="6" fill="#f1f4f9"/>
+  <text x="275" y="228" class="ui th">客户端 IP</text>
+  <text x="395" y="228" class="ui th">角色 / 备注</text>
+  <text x="550" y="228" class="ui th">连接</text>
+  <text x="626" y="228" class="ui th">上号状态</text>
+  <text x="764" y="228" class="ui th">上架 / 准备状态</text>
+  <text x="938" y="228" class="ui th">当前金额</text>
+  <text x="1034" y="228" class="ui th">累计收益</text>
+  <text x="1120" y="228" class="ui th">动作</text>
+  <line x1="258" y1="246" x2="1156" y2="246" class="line"/>
+
+  <rect x="258" y="247" width="898" height="67" fill="#fbfcfe"/>
+  <text x="275" y="276" class="ui cell">16.17.3.234</text>
+  <text x="395" y="276" class="ui cell" font-weight="700">老板</text>
+  <text x="395" y="298" class="ui small muted">主控 / 交易行</text>
+  <text x="550" y="285" class="ui small" fill="#15966a">● 已连接</text>
+  <text x="626" y="276" class="ui cell">登录成功</text>
+  <text x="764" y="276" class="ui cell">行前备战</text>
+  <text x="938" y="276" class="ui cell">261,636</text>
+  <text x="1034" y="276" class="ui cell">12,420</text>
+  <text x="1120" y="285" class="ui small muted">右键</text>
+  <line x1="258" y1="314" x2="1156" y2="314" class="line"/>
+
+  <rect x="258" y="315" width="898" height="67" fill="#ffffff"/>
+  <text x="275" y="344" class="ui cell">16.17.3.235</text>
+  <text x="395" y="344" class="ui cell" font-weight="700">币号 / 0034</text>
+  <text x="395" y="366" class="ui small muted">备注：C001</text>
+  <text x="550" y="353" class="ui small" fill="#15966a">● 已连接</text>
+  <text x="626" y="344" class="ui cell">已上号</text>
+  <text x="764" y="344" class="ui cell" fill="#2b73dd">上架成功</text>
+  <text x="938" y="344" class="ui cell">180,520</text>
+  <text x="1034" y="344" class="ui cell">8,240</text>
+  <text x="1120" y="353" class="ui small muted">右键</text>
+  <line x1="258" y1="382" x2="1156" y2="382" class="line"/>
+
+  <rect x="258" y="383" width="898" height="67" fill="#fffaf5"/>
+  <text x="275" y="412" class="ui cell">16.17.3.236</text>
+  <text x="395" y="412" class="ui cell" font-weight="700">币号 / 0035</text>
+  <text x="395" y="434" class="ui small muted">备注：待换号</text>
+  <text x="550" y="421" class="ui small" fill="#15966a">● 已连接</text>
+  <text x="626" y="412" class="ui cell" fill="#c46b15">等待新账号</text>
+  <text x="764" y="412" class="ui cell" fill="#c46b15">执行中</text>
+  <text x="938" y="412" class="ui cell">72,310</text>
+  <text x="1034" y="412" class="ui cell">2,180</text>
+  <text x="1120" y="421" class="ui small muted">右键</text>
+  <line x1="258" y1="450" x2="1156" y2="450" class="line"/>
+
+  <rect x="258" y="451" width="898" height="67" fill="#fff7f7"/>
+  <text x="275" y="480" class="ui cell">16.17.3.237</text>
+  <text x="395" y="480" class="ui cell" font-weight="700">币号 / 0036</text>
+  <text x="395" y="502" class="ui small muted">备注：网络异常</text>
+  <text x="550" y="489" class="ui small" fill="#d24b55">● 连接异常</text>
+  <text x="626" y="480" class="ui cell" fill="#c6384a">封禁检测</text>
+  <text x="764" y="480" class="ui cell" fill="#c6384a">失败</text>
+  <text x="938" y="480" class="ui cell">-</text>
+  <text x="1034" y="480" class="ui cell">5,960</text>
+  <text x="1120" y="489" class="ui small muted">右键</text>
+  <line x1="258" y1="518" x2="1156" y2="518" class="line"/>
+
+  <rect x="258" y="548" width="898" height="104" rx="7" fill="#f7f9fc"/>
+  <text x="278" y="579" class="ui section">客户端列表页的作用</text>
+  <text x="278" y="608" class="ui body muted">总览页继续快速查看和执行；这里提供更宽的列、更完整的备注、连接、上号、上架、金额和收益状态。</text>
+  <text x="278" y="634" class="ui body muted">两处使用同一份客户端数据，任何状态变化会同步刷新；右键菜单保持现有全部操作。</text>
+  <rect x="258" y="684" width="898" height="48" rx="6" fill="#eaf8f1"/>
+  <text x="278" y="714" class="ui body" fill="#16865f">当前队列：6 / 8　已连接：8　执行中：2　失败：1</text>
+</svg>

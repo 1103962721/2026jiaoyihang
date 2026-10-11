@@ -1,0 +1,9 @@
+TEMPLATE = app
+TARGET = AdbSelectionTests
+QT += widgets
+CONFIG += c++17 console
+CONFIG -= app_bundle
+SOURCES += SelectionTests.cpp
+HEADERS += WindowClientCapture.h
+DEFINES += NOMINMAX WIN32_LEAN_AND_MEAN
+LIBS += -luser32 -lgdi32

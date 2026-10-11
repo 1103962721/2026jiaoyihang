@@ -61,6 +61,54 @@ QString NormalizeLoginOcrText(QString value)
     return value.toCaseFolded();
 }
 
+// Only the ADB price panel uses this parser. Its OCR may omit the denominator.
+bool TryParseAdbPanelCurrentValue(QString text, int& current)
+{
+    text = text.normalized(QString::NormalizationForm_KC);
+    const QRegularExpression fraction(QStringLiteral(R"((\d+)\s*/\s*(\d+))"));
+    const QRegularExpression labeled(QStringLiteral(R"(^\s*使用\s*[售槽]\s*位\s*:?\s*(\d+)\s*$)"));
+    auto match = fraction.match(text);
+    if (!match.hasMatch()) match = labeled.match(text);
+    if (!match.hasMatch()) return false;
+    bool ok = false;
+    const int value = match.captured(1).toInt(&ok);
+    if (!ok) return false;
+    current = value;
+    return true;
+}
+
+// Restrict the glyph correction to an entire numerator in the ADB listing count.
+// Never replace Chinese text globally or treat missing OCR as zero.
+bool TryParseAdbListingQuantity(QString text, int& current, int& total)
+{
+    text = text.normalized(QString::NormalizationForm_KC);
+    text.remove(QRegularExpression(QStringLiteral("\\s")));
+    const QRegularExpression pattern(QStringLiteral(R"(^(?:上架数量:?)?([0-9]+|日)/([0-9]+)\+?$)"));
+    const auto match = pattern.match(text);
+    if (!match.hasMatch()) return false;
+    bool currentOk = false, totalOk = false;
+    int parsedCurrent = 0;
+    if (match.captured(1) == QStringLiteral("日"))
+        currentOk = true;
+    else
+        parsedCurrent = match.captured(1).toInt(&currentOk);
+    const int parsedTotal = match.captured(2).toInt(&totalOk);
+    if (!currentOk || !totalOk || parsedTotal <= 0 || parsedCurrent > parsedTotal) return false;
+    current = parsedCurrent;
+    total = parsedTotal;
+    return true;
+}
+
+bool MatchesAdbTapText(QString text, const QString& keyword, const QString& prefix)
+{
+    if (text.contains(keyword, Qt::CaseInsensitive)) return true;
+    if (prefix != QStringLiteral("adb_quick_loadout") || keyword != QStringLiteral("一键配装"))
+        return false;
+    // The leading horizontal stroke is sometimes missed beside the back arrow.
+    text.remove(QRegularExpression(QStringLiteral("\\s")));
+    return text.contains(QStringLiteral("键配装"));
+}
+
 QString CaptureDesktopOcrRegion(HWND hwnd, const OcrRegionConfig& region, const QString& filePrefix, QString& errorText)
 {
     errorText.clear();
@@ -369,6 +417,8 @@ ClientController::~ClientController()
 {
     automationCancelRequested_.store(true);
     if (adbWorker_) { adbWorker_->wait(); delete adbWorker_; }
+    adbWindowSizeTimer_.stop();
+    adbWindowSizeLock_.release();
 }
 
 bool ClientController::hasAdbWorker() const
@@ -382,9 +432,24 @@ void ClientController::startAdbWorker(bool prepare, int requestId)
     adbClickDelayMs_ = clickQueueDelayMs_;
     auto* worker = QThread::create([this, prepare, requestId, price]() {
         QString error;
-        const bool ok = prepare ? executeAdbBossPrepareCheck(requestId, error)
-            : (adbTap(1142, 654, error) && waitForAutomation(1000, error)
-                && executeAdbBossListingSequence(price, error));
+        AdbWindowOcr::Geometry geometry;
+        bool windowReady = false;
+        QElapsedTimer bindingTimer;
+        bindingTimer.start();
+        // A server request can arrive before the asynchronous binding resize finishes.
+        // Wait only for that transition, on the worker, before sending any ADB input.
+        while (!automationCancelRequested_.load())
+        {
+            if (!AdbWindowOcr::geometry(boundHwnd_, geometry, error)
+                || !IsWindowVisible(boundHwnd_) || IsIconic(GetAncestor(boundHwnd_, GA_ROOT))) break;
+            windowReady = geometry.size == AdbWindowOcr::referenceSize();
+            if (windowReady || bindingTimer.elapsed() >= 1000) break;
+            QThread::msleep(20);
+        }
+        if (!windowReady && error.isEmpty()) error = QStringLiteral("请先绑定可见的 737×440 云手机客户区");
+        const bool ok = windowReady && (prepare ? executeAdbBossPrepareCheck(requestId, error)
+            : (adbTap(1142, 654, error)
+                && executeAdbBossListingSequence(price, error)));
         QMetaObject::invokeMethod(this, [this, prepare, requestId, ok, error]() {
             if (adbShuttingDown_) return;
             if (!automationCancelRequested_.load()) {
@@ -444,6 +509,8 @@ void ClientController::shutdownForExit()
         delete worker;
         finishAutomationAction();
     }
+    adbWindowSizeTimer_.stop();
+    adbWindowSizeLock_.release();
 }
 
 QString ClientController::lastServerIp() const
@@ -529,9 +596,9 @@ bool ClientController::initialize(HWND mainWindowHandle)
     return bound;
 }
 
-QString ClientController::loadAdbPath() const
+QString ClientController::loadAdbPath(QString* errorText) const
 {
-    return config_.loadAdbPath();
+    return config_.loadAdbPath(errorText);
 }
 
 bool ClientController::initializeExternalBossSession(HWND mainWindowHandle)
@@ -541,6 +608,16 @@ bool ClientController::initializeExternalBossSession(HWND mainWindowHandle)
     mainWindowHandle_ = mainWindowHandle;
     externalBossSession_ = true;
     reloadSharedClickQueueDelay();
+    adbWindowSizeTimer_.setInterval(200);
+    connect(&adbWindowSizeTimer_, &QTimer::timeout, this, [this]() {
+        if (!adbWindowSizeLock_.enforce())
+        {
+            adbWindowSizeTimer_.stop();
+            adbWindowSizeLock_.release();
+            automationCancelRequested_.store(true);
+            setStatus(QStringLiteral("云手机窗口失效或尺寸固定失败，请重新绑定"));
+        }
+    });
     return true;
 }
 
@@ -569,7 +646,8 @@ bool ClientController::runAdbCommand(const QStringList& arguments, QByteArray& s
     }
 
     const QString serial = QStringLiteral("127.0.0.1:%1").arg(sessionAdbPort_);
-    const QString executable = config_.loadAdbPath();
+    const QString executable = config_.loadAdbPath(&errorText);
+    if (executable.isEmpty()) return false;
     struct Result { QByteArray output; QString error; bool ok = false; };
     const auto result = [this, executable, serial, arguments]() {
         Result result;
@@ -615,14 +693,25 @@ bool ClientController::runAdbCommand(const QStringList& arguments, QByteArray& s
 
 bool ClientController::adbTap(int x, int y, QString& errorText) const
 {
+    QElapsedTimer tapTimer;
+    tapTimer.start();
     QByteArray output;
-    if (!runAdbCommand({ QStringLiteral("shell"), QStringLiteral("input"), QStringLiteral("tap"),
-        QString::number(x), QString::number(y) }, output, errorText))
+    const bool ok = runAdbCommand({ QStringLiteral("shell"), QStringLiteral("input"), QStringLiteral("tap"),
+        QString::number(x), QString::number(y) }, output, errorText);
+    const qint64 commandElapsedMs = tapTimer.elapsed();
+    if (!ok)
     {
+        emit const_cast<ClientController*>(this)->connectionLogAppended(
+            QStringLiteral("ADB 点击 (%1,%2)：命令 %3ms，结果=失败")
+                .arg(x).arg(y).arg(commandElapsedMs));
         return false;
     }
     if (adbClickDelayMs_ > 0)
         QThread::msleep(static_cast<unsigned long>(adbClickDelayMs_));
+    emit const_cast<ClientController*>(this)->connectionLogAppended(
+        QStringLiteral("ADB 点击 (%1,%2)：命令 %3ms，点击后等待 %4ms，总计 %5ms")
+            .arg(x).arg(y).arg(commandElapsedMs)
+            .arg(tapTimer.elapsed() - commandElapsedMs).arg(tapTimer.elapsed()));
     return true;
 }
 
@@ -649,30 +738,28 @@ bool ClientController::adbReadText(int x, int y, int width, int height, const QS
     QString& text, QString& errorText, int scaleFactor)
 {
     text.clear();
-    QByteArray screenshot;
-    if (!runAdbCommand({ QStringLiteral("exec-out"), QStringLiteral("screencap"),
-        QStringLiteral("-p") }, screenshot, errorText))
+    QElapsedTimer readTimer;
+    readTimer.start();
+    if (automationCancelRequested_.load())
+    {
+        errorText = QStringLiteral("用户或服务端已强制停止当前动作");
         return false;
+    }
+    errorText.clear();
+    AdbWindowOcr::Geometry geometry;
+    QRect clientRegion;
+    const QImage clientImage = AdbWindowOcr::capture(boundHwnd_, QRect(x, y, width, height),
+        geometry, clientRegion, errorText);
+    const qint64 captureElapsedMs = readTimer.elapsed();
+    adbCaptureElapsedMs_ += captureElapsedMs;
+    if (clientImage.isNull())
+    {
+        emit connectionLogAppended(QStringLiteral("ADB 本机 OCR[%1]：截图失败，%2，耗时 %3ms")
+            .arg(prefix, errorText).arg(captureElapsedMs));
+        return false;
+    }
     QElapsedTimer stageTimer;
     stageTimer.start();
-    const QImage deviceImage = QImage::fromData(screenshot, "PNG");
-    const qint64 captureElapsedMs = stageTimer.elapsed();
-    adbCaptureElapsedMs_ += captureElapsedMs;
-    if (deviceImage.isNull())
-    {
-        errorText = QStringLiteral("ADB 设备截图不是有效的 PNG 图像");
-        emit connectionLogAppended(QStringLiteral("ADB OCR[%1]：设备截图解码失败，截图耗时 %2ms")
-            .arg(prefix).arg(captureElapsedMs));
-        return false;
-    }
-    // 零区域表示整张设备截图；局部区域直接使用设备像素，不做窗口坐标换算。
-    const QRect deviceRegion = (x == 0 && y == 0 && width == 0 && height == 0)
-        ? deviceImage.rect() : QRect(x, y, width, height);
-    if (!IsRectInsideClient(deviceRegion, deviceImage.size()))
-    {
-        errorText = QStringLiteral("ADB OCR 区域超出设备截图范围");
-        return false;
-    }
     QTemporaryFile imageFile(QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
         .filePath(QStringLiteral("df_playclick_adb_%1_XXXXXX.png").arg(sessionAdbPort_)));
     if (!imageFile.open())
@@ -682,7 +769,7 @@ bool ClientController::adbReadText(int x, int y, int width, int height, const QS
     }
     const QString imagePath = imageFile.fileName();
     imageFile.close();
-    if (!deviceImage.copy(deviceRegion).save(imagePath, "PNG"))
+    if (!clientImage.save(imagePath, "PNG"))
     {
         errorText = QStringLiteral("保存 ADB OCR 裁剪截图失败");
         return false;
@@ -707,13 +794,15 @@ bool ClientController::adbReadText(int x, int y, int width, int height, const QS
             return false;
         }
     }
+    const qint64 imageProcessingElapsedMs = stageTimer.elapsed();
+    adbCaptureElapsedMs_ += imageProcessingElapsedMs;
     QString ocrError;
     const QString ocrExecutable = config_.loadUmiOcrPath();
     const int ocrPort = config_.loadUmiOcrPort();
     stageTimer.restart();
     const auto recognized = [this, ocrImagePath, ocrExecutable, ocrPort]() {
         QString error;
-        // ADB OCR is full-device recognition. Two worker threads avoid starving the UI.
+        // Limit OCR CPU threads so recognition does not starve the UI.
         const QString value = UmiOcrRunner().recognizeImage(ocrImagePath, ocrExecutable, ocrPort, error, 2,
             [this]() { return automationCancelRequested_.load(); });
         return std::make_pair(value, error);
@@ -727,13 +816,15 @@ bool ClientController::adbReadText(int x, int y, int width, int height, const QS
     const QString scaleText = scaleFactor > 1 ? QStringLiteral("，放大 %1 倍").arg(scaleFactor) : QString();
     const QString errorTextForLog = displayedError.isEmpty()
         ? QString() : QStringLiteral("，错误“%1”").arg(displayedError);
-    emit connectionLogAppended(QStringLiteral("ADB OCR[%1]：设备 %2×%3，区域 (%4,%5,%6,%7)%8，截图 %9ms，OCR %10ms，文本“%11”%12")
-        .arg(prefix).arg(deviceImage.width()).arg(deviceImage.height())
-        .arg(deviceRegion.x()).arg(deviceRegion.y()).arg(deviceRegion.width()).arg(deviceRegion.height())
-        .arg(scaleText).arg(captureElapsedMs).arg(ocrElapsedMs).arg(displayedText).arg(errorTextForLog));
     QFile::remove(ocrImagePath);
     if (ocrImagePath != imagePath)
         QFile::remove(imagePath);
+    emit connectionLogAppended(QStringLiteral("ADB 本机 OCR[%1]：HWND 0x%2，客户区 %3×%4，屏幕原点 (%5,%6)，区域 (%7,%8,%9,%10)%11，桌面截图 %12ms，保存/放大 %13ms，OCR %14ms，本次总计 %15ms，文本“%16”%17")
+        .arg(prefix).arg(reinterpret_cast<quintptr>(boundHwnd_), 0, 16)
+        .arg(geometry.size.width()).arg(geometry.size.height()).arg(geometry.origin.x()).arg(geometry.origin.y())
+        .arg(clientRegion.x()).arg(clientRegion.y()).arg(clientRegion.width()).arg(clientRegion.height())
+        .arg(scaleText).arg(captureElapsedMs).arg(imageProcessingElapsedMs)
+        .arg(ocrElapsedMs).arg(readTimer.elapsed()).arg(displayedText).arg(errorTextForLog));
     if (automationCancelRequested_.load())
     {
         errorText = QStringLiteral("用户或服务端已强制停止当前动作");
@@ -751,6 +842,9 @@ bool ClientController::adbReadText(int x, int y, int width, int height, const QS
 bool ClientController::adbFindAndTap(const QString& keyword, int x, int y, int timeoutMs, int pollMs,
     QString& errorText, const QString& prefix, int regionX, int regionY, int regionWidth, int regionHeight)
 {
+    // Enlarge the small warehouse label in both the first lookup and its retry.
+    const int scaleFactor = keyword == QStringLiteral("仓库")
+        && (prefix == QStringLiteral("adb_warehouse") || prefix == QStringLiteral("adb_warehouse_retry")) ? 3 : 1;
     QElapsedTimer timer;
     timer.start();
     int attempt = 0;
@@ -765,10 +859,15 @@ bool ClientController::adbFindAndTap(const QString& keyword, int x, int y, int t
         QString ocrError;
         if (adbReadText(regionX, regionY, regionWidth, regionHeight,
             QStringLiteral("%1_%2").arg(prefix.isEmpty() ? keyword : prefix).arg(++attempt),
-            recognized, ocrError))
+            recognized, ocrError, scaleFactor))
         {
-            if (recognized.contains(keyword, Qt::CaseInsensitive))
+            if (MatchesAdbTapText(recognized, keyword, prefix))
+            {
+                if (prefix == QStringLiteral("adb_quick_loadout"))
+                    emit connectionLogAppended(QStringLiteral("ADB 一键配装：已匹配 OCR“%1”，继续点击 (%2,%3)")
+                        .arg(recognized).arg(x).arg(y));
                 return adbTap(x, y, errorText);
+            }
         }
         else if (!ocrError.isEmpty()
             && !ocrError.contains(QStringLiteral("No text found in image"), Qt::CaseInsensitive))
@@ -820,6 +919,11 @@ bool ClientController::adbWaitForText(const QString& keyword, int timeoutMs, int
 
 bool ClientController::bindExternalWindow(HWND hwnd, const QString& displayName)
 {
+    if (!externalBossSession_ || adbWorker_ || adbShuttingDown_)
+    {
+        setStatus(QStringLiteral("请先停止当前云手机流程，再重新绑定"));
+        return false;
+    }
     if (!binder_.isValid(hwnd))
     {
         setStatus(QStringLiteral("云手机窗口已失效，请刷新窗口列表"));
@@ -834,14 +938,21 @@ bool ClientController::bindExternalWindow(HWND hwnd, const QString& displayName)
         return false;
     }
 
+    QString lockError;
+    if (!adbWindowSizeLock_.bind(hwnd, lockError))
+    {
+        setStatus(lockError);
+        return false;
+    }
+    adbWindowSizeTimer_.start();
     boundHwnd_ = hwnd;
     boundWindowIndex_ = -1;
     selectedTaskIndex_ = -1;
-    emit boundWindowChanged(QStringLiteral("已绑定云手机：%1 · %2×%3")
-        .arg(displayName.isEmpty() ? QStringLiteral("VM 窗口") : displayName)
-        .arg(clientWidth)
-        .arg(clientHeight));
-    setStatus(QStringLiteral("已绑定云手机老板窗口"));
+    emit boundWindowChanged(QStringLiteral("已绑定云手机：%1 · 目标客户区 737×440")
+        .arg(displayName.isEmpty() ? QStringLiteral("VM 窗口") : displayName));
+    emit connectionLogAppended(QStringLiteral("本机 OCR 已绑定 HWND 0x%1；客户区固定 737×440，禁止手动缩放；ADB 输入仍按手机坐标")
+        .arg(reinterpret_cast<quintptr>(hwnd), 0, 16));
+    setStatus(QStringLiteral("已绑定云手机老板窗口，客户区固定 737×440"));
     return true;
 }
 
@@ -2084,10 +2195,10 @@ bool ClientController::executeAdbBossPrepareCheck(int requestId, QString& errorT
     const QRegularExpression amountPattern(QStringLiteral(R"((\d[\d,.]*\d|\d)[\s]*([KkMm])?)"));
     const auto readStableAmount = [this, &errorText, &amountPattern](const QString& prefix,
         bool reportToServer) {
+        QString previous;
+        int stable = 0;
         for (int attempt = 0; attempt < 3; ++attempt)
         {
-            QString previous;
-            int stable = 0;
             if (!adbTap(1097 + attempt * 3, 34, errorText)
                 || !waitForAutomation(1000, errorText))
                 return false;
@@ -2097,7 +2208,7 @@ bool ClientController::executeAdbBossPrepareCheck(int requestId, QString& errorT
             {
                 QString text;
                 QString ocrError;
-                if (adbReadText(966, 42, 224, 103,
+                if (adbReadText(536, 62, 110, 58,
                     QStringLiteral("%1_%2").arg(prefix).arg(attempt), text, ocrError))
                 {
                     auto matches = amountPattern.globalMatch(NormalizeAmountOcrText(text));
@@ -2119,6 +2230,8 @@ bool ClientController::executeAdbBossPrepareCheck(int requestId, QString& errorT
                     {
                         stable = sample == previous ? stable + 1 : 1;
                         previous = sample;
+                        emit connectionLogAppended(QStringLiteral("ADB 老板金额：提取金额 %1，连续稳定 %2/3（偏移 +%3px）")
+                            .arg(sample).arg(stable).arg(attempt * 3));
                         if (stable >= 3)
                         {
                             if (!reportToServer || reportAdbAmount(sample.toLongLong()))
@@ -2138,7 +2251,7 @@ bool ClientController::executeAdbBossPrepareCheck(int requestId, QString& errorT
                     return false;
             }
         }
-        emit connectionLogAppended(QStringLiteral("ADB 老板金额诊断：设备 OCR 区域 (966,42,224,103) 三个偏移位置均未形成稳定金额"));
+        emit connectionLogAppended(QStringLiteral("ADB 老板金额诊断：本机客户区 OCR 区域 (536,62,110,58) 三个偏移位置均未形成稳定金额"));
         errorText = QStringLiteral("ADB 5 秒内未识别到稳定老板金额");
         return false;
     };
@@ -2157,7 +2270,7 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
     adbOcrElapsedMs_ = 0;
     adbWaitElapsedMs_ = 0;
     auto logFlowTiming = [this, &flowTimer](const QString& result) {
-        emit connectionLogAppended(QStringLiteral("ADB 老板流程耗时：总计 %1ms，ADB命令 %2ms，设备截图处理 %3ms，OCR %4ms，固定等待 %5ms，其他 %6ms，结果=%7")
+        emit connectionLogAppended(QStringLiteral("ADB 老板流程耗时：总计 %1ms，ADB命令 %2ms，本机截图处理 %3ms，OCR %4ms，固定等待 %5ms，其他 %6ms，结果=%7")
             .arg(flowTimer.elapsed()).arg(adbCommandElapsedMs_).arg(adbCaptureElapsedMs_)
             .arg(adbOcrElapsedMs_).arg(adbWaitElapsedMs_)
             .arg(qMax<qint64>(0, flowTimer.elapsed() - adbCommandElapsedMs_ - adbCaptureElapsedMs_ - adbOcrElapsedMs_ - adbWaitElapsedMs_)).arg(result));
@@ -2169,6 +2282,7 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
         return false;
     }
     constexpr int TimeoutMs = 5000;
+    constexpr int PromptTimeoutMs = 3000;
     constexpr int PollMs = 150;
     const auto findAndTap = [this, &errorText](const QString& keyword, int x, int y,
         const QString& prefix, int timeoutMs, int pollMs) {
@@ -2189,11 +2303,11 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
             errorText = ocrError;
         return false;
     };
-    const auto waitPromptClear = [this, &errorText, &readText, TimeoutMs](bool& foundAny) {
+    const auto waitPromptClear = [this, &errorText, &readText, PromptTimeoutMs](bool& foundAny) {
         QElapsedTimer timer;
         timer.start();
         foundAny = false;
-        while (timer.elapsed() < TimeoutMs)
+        while (timer.elapsed() < PromptTimeoutMs)
         {
             QString text;
             const bool readOk = readText(0, 0, 0, 0,
@@ -2209,8 +2323,6 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
         return !foundAny;
     };
 
-    if (!waitForAutomation(1000, errorText))
-        return false;
     bool promptFound = false;
     if (!waitPromptClear(promptFound))
         return false;
@@ -2231,7 +2343,7 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
             while (timer.elapsed() < 5000)
             {
                 QString amountText;
-                if (readText(966, 42, 224, 103,
+                if (readText(536, 62, 110, 58,
                     QStringLiteral("adb_prompt_amount"), amountText))
                 {
                     auto matches = promptAmountPattern.globalMatch(NormalizeAmountOcrText(amountText));
@@ -2268,22 +2380,24 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
     }
 
     if (!findAndTapRegion(QStringLiteral("仓库"), 896, 666, QStringLiteral("adb_warehouse"), TimeoutMs, PollMs,
-        607, 622, 356, 75))
+        336, 387, 192, 34))
     {
         bool retryPromptFound = false;
         if (!waitPromptClear(retryPromptFound)
             || !findAndTapRegion(QStringLiteral("仓库"), 896, 666,
-                QStringLiteral("adb_warehouse_retry"), TimeoutMs, PollMs, 607, 622, 356, 75))
+                QStringLiteral("adb_warehouse_retry"), TimeoutMs, PollMs, 336, 387, 192, 34))
             return false;
     }
     if (!findAndTapRegion(QStringLiteral("转移全部"), 457, 664, QStringLiteral("adb_transfer_all"), TimeoutMs, PollMs,
-        75, 634, 460, 58)
-        || !findAndTap(QStringLiteral("携带物资"), 26, 31, QStringLiteral("adb_carry"), TimeoutMs, PollMs)
-        || !findAndTap(QStringLiteral("装备配置"), 26, 31, QStringLiteral("adb_loadout"), TimeoutMs, PollMs)
+        206, 390, 101, 34)
+        || !findAndTapRegion(QStringLiteral("携带物资"), 26, 31, QStringLiteral("adb_carry"), TimeoutMs, PollMs,
+            9, 41, 126, 36)
+        || !findAndTapRegion(QStringLiteral("装备配置"), 26, 31, QStringLiteral("adb_loadout"), TimeoutMs, PollMs,
+            9, 41, 126, 36)
         || !findAndTapRegion(QStringLiteral("交易行"), 329, 667, QStringLiteral("adb_market"), TimeoutMs, PollMs,
-            23, 627, 747, 67)
+            12, 387, 431, 41)
         || !findAndTapRegion(QStringLiteral("出售"), 58, 189, QStringLiteral("adb_sell"), TimeoutMs, PollMs,
-            2, 57, 117, 259))
+            12, 72, 57, 142))
         return false;
 
     const auto findListingItem = [this, &errorText, &readText, TimeoutMs, PollMs](int clickX, int clickY,
@@ -2297,7 +2411,7 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
                 && (!adbTap(clickX, clickY, errorText) || !waitForAutomation(300, errorText)))
                 return false;
             QString text;
-            if (readText(3, 0, 325, 109,
+            if (readText(10, 42, 166, 64,
                 QStringLiteral("%1_%2").arg(prefix).arg(++attempt), text)
                 && text.contains(QStringLiteral("上架物品"), Qt::CaseInsensitive))
                 return true;
@@ -2312,8 +2426,7 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
         return false;
 
     QString currentPrice = listingPrice.trimmed();
-    std::function<bool()> enterPrice;
-    enterPrice = [&]() {
+    const auto enterPrice = [&](bool requirePanelQuantity) {
         bool expectedOk = false;
         const double expected = currentPrice.toDouble(&expectedOk);
         if (!expectedOk)
@@ -2325,13 +2438,24 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
         {
             if (!adbTap(1132, 399, errorText) || !waitForAutomation(300, errorText))
                 return false;
-            QString panelText;
-            if (readText(1065, 312, 161, 67, QStringLiteral("adb_panel_quantity"), panelText, 3))
+            if (!requirePanelQuantity)
             {
-                const auto match = QRegularExpression(QStringLiteral(R"((\d+)\s*/\s*(\d+))"))
-                    .match(panelText);
-                if (match.hasMatch() && match.captured(1).toInt() != 1)
-                    break;
+                emit connectionLogAppended(QStringLiteral("ADB 减价重上架：价格面板已打开，跳过 X!=1 检查"));
+                break;
+            }
+            QString panelText;
+            if (readText(577, 216, 97, 30, QStringLiteral("adb_panel_quantity"), panelText, 3))
+            {
+                int current = 0;
+                if (TryParseAdbPanelCurrentValue(panelText, current))
+                {
+                    emit connectionLogAppended(QStringLiteral("ADB 价格面板：当前值 X=%1，%2")
+                        .arg(current).arg(current != 1 ? QStringLiteral("满足 X!=1，继续输入价格")
+                            : QStringLiteral("X=1，重新点击价格面板")));
+                    if (current != 1) break;
+                }
+                else
+                    emit connectionLogAppended(QStringLiteral("ADB 价格面板：未解析到 X/N 或使用售位数字，重新点击"));
             }
         }
         if (!adbTap(1109, 477, errorText) || !waitForAutomation(500, errorText))
@@ -2398,11 +2522,11 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
                 emit connectionLogAppended(QStringLiteral("ADB 价格输入：已发送 input text %1（不使用 Windows 剪贴板）")
                     .arg(currentPrice));
             }
-            if (!waitForAutomation(1500, errorText))
+            if (!waitForAutomation(100, errorText))
                 return false;
 
             QString priceText;
-            if (!readText(854, 451, 299, 43, QStringLiteral("adb_price_verify"), priceText))
+            if (!readText(459, 288, 169, 28, QStringLiteral("adb_price_verify"), priceText))
                 return false;
             QString normalized = priceText;
             normalized.remove(QRegularExpression(QStringLiteral("[^0-9.]")));
@@ -2429,7 +2553,7 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
         while (timer.elapsed() < 1000)
         {
             QString text;
-            if (readText(839, 548, 307, 62, QStringLiteral("adb_listing_confirm"), text)
+            if (readText(441, 338, 215, 47, QStringLiteral("adb_listing_confirm"), text)
                 && text.contains(QStringLiteral("上架"), Qt::CaseInsensitive))
                 return adbTap(999, 582, errorText);
             if (!waitForAutomation(PollMs, errorText))
@@ -2439,9 +2563,10 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
     };
 
     bool performedDismount = false;
+    bool relisting = false;
     for (;;)
     {
-        if (!enterPrice()
+        if (!enterPrice(!relisting)
             || !adbTap(986, 588, errorText)
             || !waitForAutomation(1000, errorText)
             || !adbTap(986, 588, errorText)
@@ -2449,24 +2574,26 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
             || !optionalListingConfirm())
             return false;
 
-        auto readQuantity = [&](QString& text) {
-            return readText(120, 52, 146, 45, QStringLiteral("adb_quantity"), text, 3);
+        auto readQuantity = [&](int& current) {
+            QString text;
+            if (!readText(70, 70, 103, 29, QStringLiteral("adb_quantity"), text, 3)) return false;
+            int total = 0;
+            if (!TryParseAdbListingQuantity(text, current, total)) return false;
+            emit connectionLogAppended(QStringLiteral("ADB 上架数量：原文“%1”，解析 %2/%3，%4")
+                .arg(text).arg(current).arg(total).arg(current == 0
+                    ? QStringLiteral("数量已归零") : QStringLiteral("等待数量归零")));
+            return true;
         };
         QElapsedTimer quantityTimer;
         quantityTimer.start();
         bool quantityReady = false;
         while (quantityTimer.elapsed() < 15000)
         {
-            QString text;
-            if (readQuantity(text))
+            int current = -1;
+            if (readQuantity(current) && current == 0)
             {
-                const auto match = QRegularExpression(QStringLiteral(R"((\d+)\s*/\s*(\d+))"))
-                    .match(text);
-                if (match.hasMatch() && match.captured(1).toInt() == 0)
-                {
-                    quantityReady = true;
-                    break;
-                }
+                quantityReady = true;
+                break;
             }
             if (!waitForAutomation(PollMs, errorText))
                 return false;
@@ -2474,35 +2601,33 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
         if (quantityReady)
             break;
 
-        QString quantityText;
-        if (readQuantity(quantityText))
-        {
-            const auto match = QRegularExpression(QStringLiteral(R"((\d+)\s*/\s*(\d+))"))
-                .match(quantityText);
-            if (match.hasMatch() && match.captured(1).toInt() == 0)
-                break;
-        }
-        if (!findAndTapRegion(QStringLiteral("下架"), 445, 204, QStringLiteral("adb_dismount_first"), TimeoutMs, PollMs,
-            134, 96, 410, 145)
-            || !waitForAutomation(1500, errorText)
-            || !findAndTapRegion(QStringLiteral("下架"), 785, 529, QStringLiteral("adb_dismount_second"), TimeoutMs, PollMs,
-                654, 463, 306, 64)
-            || !waitForAutomation(1500, errorText))
-            return false;
-        performedDismount = true;
+        int current = -1;
+        if (readQuantity(current) && current == 0)
+            break;
         for (;;)
         {
-            if (!waitForAutomation(300, errorText))
+            if (!findAndTapRegion(QStringLiteral("下架"), 445, 204, QStringLiteral("adb_dismount_first"), TimeoutMs, PollMs,
+                78, 100, 232, 76)
+                || !waitForAutomation(1500, errorText)
+                || !findAndTapRegion(QStringLiteral("下架"), 785, 529, QStringLiteral("adb_dismount_second"), TimeoutMs, PollMs,
+                    372, 314, 187, 41)
+                || !waitForAutomation(1500, errorText))
                 return false;
-            if (!readQuantity(quantityText))
-                continue;
-            const auto match = QRegularExpression(QStringLiteral(R"((\d+)\s*/\s*(\d+))"))
-                .match(quantityText);
-            if (!match.hasMatch())
-                continue;
-            if (match.captured(1).toInt() == 0)
+            performedDismount = true;
+            // Do not relist until all remaining listings have been removed.
+            // OCR failures retry the count; a positive count starts another dismount.
+            for (;;)
+            {
+                if (!waitForAutomation(300, errorText)) return false;
+                if (readQuantity(current)) break;
+            }
+            if (current == 0)
+            {
+                emit connectionLogAppended(QStringLiteral("ADB 下架完成：数量已归零，允许减价重上架"));
                 break;
-            break;
+            }
+            emit connectionLogAppended(QStringLiteral("ADB 下架后仍有 %1 件：继续查找并执行下架，暂不重新上架")
+                .arg(current));
         }
         if (performedDismount)
         {
@@ -2518,6 +2643,7 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
                 return false;
             if (!findListingItem(600, 137, false, QStringLiteral("adb_relist_item")))
                 break;
+            relisting = true;
             performedDismount = false;
         }
     }
@@ -2525,22 +2651,22 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
     if (!adbTap(516, 79, errorText) || !waitForAutomation(2000, errorText))
         return false;
     if (!adbWaitForText(QStringLiteral("领取完成"), TimeoutMs, PollMs,
-        errorText, QStringLiteral("adb_claim_complete"), 331, 31, 597, 181))
+        errorText, QStringLiteral("adb_claim_complete"), 169, 53, 361, 108))
         return false;
     if (!waitForAutomation(1500, errorText))
         return false;
     if (!adbTap(626, 593, errorText) || !waitForAutomation(1500, errorText))
         return false;
-    if (!adbTap(29, 34, errorText) || !waitForAutomation(1500, errorText))
+    if (!adbTap(29, 34, errorText) || !waitForAutomation(500, errorText))
         return false;
     if (!findAndTapRegion(QStringLiteral("出发"), 900, 674, QStringLiteral("adb_depart"), TimeoutMs, PollMs,
-        948, 599, 316, 98)
+        509, 368, 190, 66)
         || !waitForAutomation(1000, errorText)
         || !findAndTapRegion(QStringLiteral("方案"), 790, 665, QStringLiteral("adb_plan"), TimeoutMs, PollMs,
-            607, 622, 356, 75)
+            324, 377, 211, 53)
         || !waitForAutomation(1000, errorText)
         || !findAndTapRegion(QStringLiteral("一键配装"), 116, 315, QStringLiteral("adb_quick_loadout"), TimeoutMs, PollMs,
-            0, 0, 206, 67)
+            7, 40, 126, 40)
         || !waitForAutomation(1000, errorText))
         return false;
 
@@ -2557,7 +2683,7 @@ bool ClientController::executeAdbBossListingSequence(const QString& listingPrice
         while (timer.elapsed() < 5000)
         {
             QString text;
-            if (adbReadText(966, 42, 224, 103, QStringLiteral("adb_final_amount"), text, errorText))
+            if (adbReadText(536, 62, 110, 58, QStringLiteral("adb_final_amount"), text, errorText))
             {
                 auto matches = amountPattern.globalMatch(NormalizeAmountOcrText(text));
                 QString sample;

@@ -705,7 +705,8 @@ void MainWindow::applyClientBindingMode(int modeIndex)
 
 MainWindow::AdbPortCheckResult MainWindow::checkAdbPort(int adbPort, QString& detail) const
 {
-    const QString adbPath = controller_.loadAdbPath();
+    const QString adbPath = controller_.loadAdbPath(&detail);
+    if (adbPath.isEmpty()) return AdbPortCheckResult::ConnectFailed;
     const QString expectedSerial = QStringLiteral("127.0.0.1:%1").arg(adbPort);
 
     QProcess connectProcess;

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DF 倒子弹服务端</title>
+<style>
+  :root{--ink:#172033;--muted:#66748a;--line:#dfe5ed;--panel:#fff;--page:#f5f7fb;--blue:#e9efff;--blueText:#155ac4;--green:#239c73;--purple:#7654cc;--navy:#172233}
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100%;min-width:960px;height:100%;background:var(--page);font-family:"Microsoft YaHei UI","Microsoft YaHei","Segoe UI",sans-serif;color:var(--ink);font-size:13px}
+  body{overflow:hidden}
+  button,input{font:inherit}
+  .window{height:100vh;min-height:760px;background:var(--page);display:flex;flex-direction:column}
+  .titlebar{height:38px;flex:none;background:#fff;border-bottom:1px solid #e6ebf2;display:flex;align-items:center;padding:0 14px;font-size:12px;font-weight:700}
+  .window-actions{margin-left:auto;display:flex;align-items:center;gap:28px;color:#183054;font-size:14px;font-weight:400}
+  .window-actions span{width:12px;text-align:center}
+  .appbar{height:70px;flex:none;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 20px}
+  .brand h1{font-size:22px;line-height:25px;margin:0;font-weight:800;letter-spacing:.1px}
+  .brand p{font-size:12px;color:#64728a;margin:3px 0 0}
+  .app-state{margin-left:auto;display:flex;gap:10px;align-items:center;font-weight:700;color:#17233a}
+  .state-pill{height:42px;padding:0 15px;border-radius:12px;background:#f7f9fc;display:flex;align-items:center}
+  .state-pill.ok{color:#172b3d}
+  .layout{flex:1;min-height:0;display:flex}
+  .sidebar{width:190px;flex:none;background:#fbfcfe;border-right:1px solid var(--line);padding:13px 10px}
+  .side-label{padding:0 14px 8px;color:#68768b;font-size:12px}
+  .nav{display:block;width:100%;height:36px;border:0;background:transparent;border-radius:7px;text-align:left;padding:0 12px;color:#1f2e47;cursor:pointer;margin-bottom:3px}
+  .nav:hover{background:#f0f4fb}.nav.active{background:var(--blue);color:var(--blueText);font-weight:700}
+  .side-note{margin:32px 0 0;padding:0 2px;color:#66748a;line-height:17px;font-size:11px}
+  .main{min-width:0;flex:1;padding:17px 20px 16px;overflow:hidden}
+  .page{height:100%;display:none;min-width:0}.page.active{display:block}
+  .page-title{display:flex;align-items:center;height:30px;margin-bottom:10px}.page-title h2{font-size:17px;margin:0;font-weight:800}.page-title span{font-size:12px;color:#68768b;margin-left:10px}
+  .toolbar{margin-left:auto;display:flex;gap:8px}.btn{height:32px;padding:0 13px;border:1px solid #cfd8e5;background:#fff;border-radius:7px;color:#1d2b40;cursor:pointer}.btn:hover{background:#f4f7fb}.btn.green{background:var(--green);border-color:var(--green);color:#fff;font-weight:700}.btn.purple{background:var(--purple);border-color:var(--purple);color:#fff;font-weight:700}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:0 1px 2px rgba(28,46,76,.02)}
+  .params{height:192px;padding:12px 13px;margin-bottom:10px}.params h3{font-size:14px;margin:0 0 10px;font-weight:800}.param-grid{display:grid;grid-template-columns:repeat(3,1fr);column-gap:10px;row-gap:8px}.field label{display:block;color:#66748a;font-size:11px;margin-bottom:4px}.field input{width:100%;height:31px;border:1px solid #cbd6e5;border-radius:6px;padding:0 10px;color:#1d2c43;background:#fff}.param-actions{display:flex;align-items:center;gap:9px;margin-top:9px}.checkbox{display:flex;align-items:center;gap:6px;font-weight:700}.checkbox input{width:16px;height:16px;margin:0}.mini{height:31px;width:92px;border:1px solid #cbd6e5;border-radius:6px;padding:0 8px}.param-actions .btn{height:31px;padding:0 12px}
+  .overview-list{height:292px;padding:12px 13px}.overview-list h3{font-size:14px;margin:0 0 10px;font-weight:800}
+  .client-card{height:calc(100% - 40px);padding:12px 13px}.client-card table{height:100%}
+  table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff;border:1px solid var(--line)}th,td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:0 9px;height:38px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}th:last-child,td:last-child{border-right:0}tr:last-child td{border-bottom:0}th{height:35px;background:#f2f5f9;color:#56657b;font-size:11px;font-weight:800}td{font-size:12px;color:#26354c}.role{font-weight:700}.sub{display:block;color:#748197;font-size:10px;margin-top:2px}.status{color:#2e9b74}.warn{color:#be741e}.bad{color:#c33e4d}.good{color:#276fd1}.overview-table th:nth-child(1){width:14%}.overview-table th:nth-child(2){width:17%}.overview-table th:nth-child(3){width:17%}.overview-table th:nth-child(4),.overview-table th:nth-child(5),.overview-table th:nth-child(6),.overview-table th:nth-child(7){width:13%}
+  .list-card{height:calc(100% - 40px);padding:12px 13px}.list-table th:nth-child(1){width:13%}.list-table th:nth-child(2){width:17%}.list-table th:nth-child(3){width:10%}.list-table th:nth-child(4){width:14%}.list-table th:nth-child(5){width:16%}.list-table th:nth-child(6){width:11%}.list-table th:nth-child(7){width:10%}.list-table th:nth-child(8){width:9%}.list-table td{height:50px}
+  .bottom{height:38px;margin-top:9px;display:flex;align-items:center;gap:14px}.queue{height:30px;display:flex;align-items:center;padding:0 13px;border-radius:7px;background:#dcf8e9;color:#198357;font-weight:700;flex:1}.time{color:#67758a;white-space:nowrap}
+  .context{position:fixed;display:none;width:174px;padding:5px;background:#fff;border:1px solid #cfd8e5;border-radius:7px;box-shadow:0 8px 24px rgba(35,50,75,.16);z-index:20}.context.show{display:block}.context button{display:block;width:100%;height:30px;border:0;background:#fff;text-align:left;padding:0 10px;color:#1d2c43;border-radius:4px;cursor:pointer}.context button:hover{background:#edf2fc;color:#155ac4}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar"><span>DF 倒子弹服务端</span><div class="window-actions"><span>−</span><span>□</span><span>×</span></div></div>
+  <div class="appbar"><div class="brand"><h1>服务端调度中心</h1><p>客户端分组 · 倒计时 · 精确延迟 · 批量触发</p></div><div class="app-state"><div class="state-pill ok">监听中</div><div class="state-pill">1 客户端</div></div></div>
+  <div class="layout">
+    <aside class="sidebar"><div class="side-label">工作区</div><button class="nav active" data-page="overview">总览与执行</button><button class="nav" data-page="clients">客户端列表</button><button class="nav" data-page="loadout">配装与上架</button><button class="nav" data-page="accounts">账号管理</button><button class="nav" data-page="logs">日志与状态</button><p class="side-note">客户端行右键菜单保留角色、备注、单独上架、上号、换号、保存配装、领取邮件、重新绑定、停止动作和断开功能。</p></aside>
+    <main class="main">
+      <section class="page active" id="overview">
+        <div class="page-title"><h2>总览与执行</h2><span>常用调度入口</span><div class="toolbar"><button class="btn green">执行</button><button class="btn purple">上架</button><button class="btn">停止所有动作</button><button class="btn">设置</button></div></div>
+        <div class="card params"><h3>执行参数</h3><div class="param-grid"><div class="field"><label>倒计时 / 秒</label><input value="1"></div><div class="field"><label>分组延迟 / ms</label><input value="100"></div><div class="field"><label>提前准备 / ms</label><input value="1500"></div><div class="field"><label>老板上架价格</label><input placeholder="执行时下发给老板客户端的价格"></div><div class="field"><label>换号金额</label><input placeholder="空 / 0 关闭"></div><div class="field"><label>连续高价停止次数</label><input value="3"></div></div><div class="param-actions"><label class="checkbox"><input type="checkbox">全自动执行</label><span>自动执行老板数</span><input class="mini" value="1"><span>自动执行币号数</span><input class="mini" value="1"><button class="btn">全部重新绑定</button><button class="btn">全部领取邮件</button></div></div>
+        <div class="card overview-list"><h3>客户端状态</h3><table class="overview-table"><thead><tr><th>客户端 IP</th><th>角色 / 备注</th><th>上架 / 准备状态</th><th>期望金额</th><th>当前金额</th><th>累计收益</th><th>低价/高价</th></tr></thead><tbody><tr><td>127.0.0.1</td><td class="role">币号 / <span class="sub">（无备注）</span></td><td class="warn">等待执行</td><td>-</td><td>-</td><td>-</td><td>-</td></tr><tr><td>16.17.3.234</td><td class="role">老板 / <span class="sub">主控</span></td><td class="good">行前备战</td><td>330,000</td><td>261,636</td><td>12,420</td><td>0 / 1</td></tr></tbody></table></div><div class="bottom"><div class="queue">正在监听端口 50505</div><div class="time">服务器时间：2026-10-07 00:46:10.371</div></div>
+      </section>
+      <section class="page" id="clients">
+        <div class="page-title"><h2>客户端列表</h2><span>客户端状态</span><div class="toolbar"><button class="btn">刷新</button><button class="btn green">一键上号</button></div></div>
+        <div class="card list-card"><table class="list-table"><thead><tr><th>客户端 IP</th><th>角色 / 备注</th><th>连接</th><th>上号状态</th><th>上架 / 准备状态</th><th>当前金额</th><th>累计收益</th><th>低价 / 高价</th></tr></thead><tbody>
+          <tr data-client="16.17.3.234"><td>16.17.3.234</td><td class="role">老板<span class="sub">主控</span></td><td class="status">已连接</td><td class="good">登录成功</td><td class="good">行前备战</td><td>261,636</td><td>12,420</td><td>0 / 1</td></tr>
+          <tr data-client="16.17.3.235"><td>16.17.3.235</td><td class="role">币号 / 0034<span class="sub">备注：C001</span></td><td class="status">已连接</td><td class="good">已上号</td><td class="good">上架成功</td><td>180,520</td><td>8,240</td><td>1 / 0</td></tr>
+          <tr data-client="16.17.3.236"><td>16.17.3.236</td><td class="role">币号 / 0035<span class="sub">备注：待换号</span></td><td class="status">已连接</td><td class="warn">等待新账号</td><td class="warn">执行中</td><td>72,310</td><td>2,180</td><td>0 / 1</td></tr>
+          <tr data-client="16.17.3.237"><td>16.17.3.237</td><td class="role">币号 / 0036<span class="sub">备注：网络异常</span></td><td class="bad">连接异常</td><td class="bad">封禁检测</td><td class="bad">失败</td><td>-</td><td>5,960</td><td>- / -</td></tr>
+          <tr data-client="16.17.3.238"><td>16.17.3.238</td><td class="role">币号 / 0037<span class="sub">（无备注）</span></td><td class="status">已连接</td><td>已上号</td><td>待执行</td><td>94,820</td><td>3,160</td><td>0 / 0</td></tr>
+        </tbody></table></div><div class="bottom"><div class="queue">客户端：5　已连接：4　执行中：1　失败：1</div><div class="time">服务器时间：2026-10-07 00:46:10.371</div></div>
+      </section>
+      <section class="page" id="loadout"><div class="page-title"><h2>配装与上架</h2><span>参数配置</span></div></section><section class="page" id="accounts"><div class="page-title"><h2>账号管理</h2><span>账号队列</span></div></section><section class="page" id="logs"><div class="page-title"><h2>日志与状态</h2><span>运行日志</span></div></section>
+    </main>
+  </div>
+</div>
+<div class="context" id="context"><button>设置为币号</button><button>设置为老板</button><button>编辑备注</button><button>单独上架</button><button>上号</button><button>换号</button><button>保存配装</button><button>停止当前动作</button><button>断开客户端</button></div>
+<script>
+  const pages=[...document.querySelectorAll('.page')], navs=[...document.querySelectorAll('.nav')], context=document.getElementById('context');
+  navs.forEach(n=>n.addEventListener('click',()=>{navs.forEach(x=>x.classList.toggle('active',x===n));pages.forEach(p=>p.classList.toggle('active',p.id===n.dataset.page));context.classList.remove('show')}));
+  document.querySelectorAll('[data-client]').forEach(row=>row.addEventListener('contextmenu',e=>{e.preventDefault();context.style.left=Math.min(e.clientX,innerWidth-190)+'px';context.style.top=Math.min(e.clientY,innerHeight-330)+'px';context.classList.add('show')}));
+  document.addEventListener('click',e=>{if(!context.contains(e.target))context.classList.remove('show')});
+</script>
+</body>
+</html>

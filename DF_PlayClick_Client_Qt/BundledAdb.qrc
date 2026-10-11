@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="/bundled-adb">
+        <file alias="adb.exe">Resources/adb/adb.exe</file>
+        <file alias="AdbWinApi.dll">Resources/adb/AdbWinApi.dll</file>
+        <file alias="AdbWinUsbApi.dll">Resources/adb/AdbWinUsbApi.dll</file>
+        <file alias="NOTICE.txt">Resources/adb/NOTICE.txt</file>
+    </qresource>
+</RCC>
