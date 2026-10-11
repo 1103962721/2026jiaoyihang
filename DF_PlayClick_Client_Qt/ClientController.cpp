@@ -221,6 +221,7 @@ ClientController::ClientController(QObject* parent)
     });
     connect(&bulletOcrNextRoundTimer_, &QTimer::timeout, this, &ClientController::runBulletOcrRound);
     connect(&connection_, &ClientConnection::connectedChanged, this, [this](bool connected) {
+        if (!connected && isPcAuctionBoss()) auctionAutomation_.cancel();
         if (connected)
         {
             // 等待服务端完成首次校时，避免把本机时间误显示为服务器时间。
@@ -260,7 +261,10 @@ ClientController::ClientController(QObject* parent)
         updateServerTimeDisplay();
     });
     connect(&connection_, &ClientConnection::roleReceived, this, [this](ClientRole role) {
+        if (role != currentRole_) auctionAutomation_.cancel();
         currentRole_ = role;
+        if (isPcAuctionBoss()) bindAuctionWindow();
+        else if (!externalBossSession_) syncBoundWindowFromSelectedTask();
         emit clientRoleChanged(currentRole_);
         setStatus(QStringLiteral("服务端已下发角色：%1")
             .arg(QString::fromStdWString(ClientRoleUtil::ToDisplayText(currentRole_))));
@@ -410,12 +414,34 @@ ClientController::ClientController(QObject* parent)
     });
     connect(&hotkey_, &HotkeyManager::hotkeyPressed, this, &ClientController::finishHotkeyPick);
     connect(&hotkey_, &HotkeyManager::f3Pressed, this, &ClientController::toggleBulletOcrLoop);
+    connect(&auctionAutomation_, &AuctionControlAutomation::logAppended,
+        this, &ClientController::connectionLogAppended, Qt::QueuedConnection);
+    connect(&auctionAutomation_, &AuctionControlAutomation::completed, this,
+        [this](int mode, int requestId, bool success, bool ready, bool canceled, const QString& text) {
+            const bool stopped = canceled || automationCancelRequested_.load() || adbShuttingDown_;
+            finishAutomationAction();
+            if (!isPcAuctionBoss() || adbShuttingDown_) return;
+            if (connection_.isConnected())
+            {
+                if (mode == AuctionControlAutomation::Prepare)
+                    connection_.sendPrepareResponse(requestId, success && !stopped ? QStringLiteral("OK") : QStringLiteral("ERROR"), text);
+                if (mode == AuctionControlAutomation::Round)
+                    connection_.sendExecutionResponse(success && !stopped, text);
+                // PREPARE_RESPONSE already updates readiness. A trailing TEAM_READY
+                // could clear the server action lock after it dispatches TRIGGER.
+                if (mode != AuctionControlAutomation::Prepare)
+                    connection_.sendTeamReady(ready && !stopped ? 1 : 0, ready && !stopped ? 1 : 0, 1);
+            }
+            emit connectionLogAppended(QStringLiteral("PC 老板：%1").arg(text));
+            setStatus(text);
+        });
     qApp->installNativeEventFilter(this);
 }
 
 ClientController::~ClientController()
 {
     automationCancelRequested_.store(true);
+    auctionAutomation_.shutdown();
     if (adbWorker_) { adbWorker_->wait(); delete adbWorker_; }
     adbWindowSizeTimer_.stop();
     adbWindowSizeLock_.release();
@@ -493,6 +519,7 @@ void ClientController::shutdownForExit()
 {
     adbShuttingDown_ = true;
     stopAllActionsImmediately(false);
+    auctionAutomation_.shutdown();
     connection_.disconnectFromServer();
     if (qApp)
     {
@@ -555,7 +582,7 @@ bool ClientController::isReady() const
 
 HWND ClientController::boundHwnd() const
 {
-    return boundHwnd_;
+    return isPcAuctionBoss() ? auctionHwnd_ : boundHwnd_;
 }
 
 int ClientController::clickQueueDelayMs() const
@@ -976,8 +1003,72 @@ void ClientController::refreshWindows()
     emit windowsChanged();
 }
 
+bool ClientController::isPcAuctionBoss() const
+{
+    return !externalBossSession_ && currentRole_ == ClientRole::Boss;
+}
+
+bool ClientController::bindAuctionWindow(bool showMessage)
+{
+    if (!AuctionControlAutomation::isTargetWindow(auctionHwnd_))
+    {
+        auctionHwnd_ = nullptr;
+        const auto candidates = binder_.enumerateWindows(mainWindowHandle_);
+        int count = 0;
+        for (const auto& item : candidates)
+        {
+            if (item.processName.compare(QStringLiteral("AuctionQtControl.exe"), Qt::CaseInsensitive) == 0)
+            { auctionHwnd_ = item.hwnd; ++count; }
+        }
+        if (count != 1) auctionHwnd_ = nullptr;
+        if (auctionHwnd_)
+            emit connectionLogAppended(QStringLiteral("PC 老板已自动绑定 AuctionQtControl.exe · HWND 0x%1")
+                .arg(reinterpret_cast<quintptr>(auctionHwnd_), 0, 16));
+    }
+    if (!auctionHwnd_)
+    {
+        const QString text = QStringLiteral("未找到唯一的 AuctionQtControl 窗口，请运行程序；多个窗口时请手动绑定目标");
+        setStatus(text);
+        emit boundWindowChanged(text);
+        if (showMessage) emit messageRequested(QStringLiteral("提示"), text, false);
+        return false;
+    }
+    emit boundWindowChanged(QStringLiteral("PC 老板已绑定 AuctionQtControl · HWND 0x%1 · 购买/上架按钮监控")
+        .arg(reinterpret_cast<quintptr>(auctionHwnd_), 0, 16));
+    return true;
+}
+
+void ClientController::startAuctionAction(AuctionControlAutomation::Mode mode, int requestId)
+{
+    QString error;
+    if (!beginAutomationAction(QStringLiteral("PC 老板按钮监控")))
+        error = QStringLiteral("已有自动化流程正在执行");
+    else if (!bindAuctionWindow())
+    {
+        error = QStringLiteral("未绑定唯一的 AuctionQtControl 窗口");
+        finishAutomationAction();
+    }
+    else if (auctionAutomation_.start(auctionHwnd_, mode, requestId, &automationCancelRequested_))
+        return;
+    else
+    {
+        error = QStringLiteral("购买/上架按钮监控已在执行");
+        finishAutomationAction();
+    }
+    if (mode == AuctionControlAutomation::Prepare)
+        connection_.sendPrepareResponse(requestId, QStringLiteral("ERROR"), error);
+    else if (mode == AuctionControlAutomation::Round)
+    {
+        connection_.sendExecutionResponse(false, error);
+        if (!auctionAutomation_.busy()) connection_.sendTeamReady(0, 0, 1);
+    }
+    else if (!auctionAutomation_.busy()) connection_.sendTeamReady(0, 0, 1);
+    setStatus(error);
+}
+
 bool ClientController::autoBindGameWindow(bool showMessage)
 {
+    if (isPcAuctionBoss()) return bindAuctionWindow(showMessage);
     refreshWindows();
     const int index = binder_.findGameBodyIndex(windows_);
     if (index < 0)
@@ -996,6 +1087,13 @@ bool ClientController::autoBindGameWindow(bool showMessage)
 
 void ClientController::rebindGameWindow()
 {
+    if (isPcAuctionBoss())
+    {
+        if (auctionAutomation_.busy()) { setStatus(QStringLiteral("请先停止当前老板流程再重新绑定")); return; }
+        auctionHwnd_ = nullptr;
+        bindAuctionWindow(true);
+        return;
+    }
     refreshWindows();
     const int index = binder_.findGameBodyIndex(windows_);
     if (index < 0)
@@ -1020,6 +1118,7 @@ void ClientController::forceStopCurrentAction()
     }
     const bool actionWasRunning = automationActionRunning_;
     automationCancelRequested_ = true;
+    auctionAutomation_.cancel();
     accountLoginAutomation_.cancel();
     countdownTimer_.stop();
     scheduledTriggerTimer_.stop();
@@ -1045,6 +1144,7 @@ void ClientController::forceStopCurrentAction()
 
 void ClientController::stopAllActionsImmediately(bool stopLoginProcesses)
 {
+    auctionAutomation_.cancel();
     accountLoginStopExcluded_.store(false);
     accountLoginRunning_ = false;
     accountBanMonitoringEnabled_ = false;
@@ -1090,6 +1190,15 @@ void ClientController::bindWindow(int index, bool bringToFront)
     }
 
     const TargetWindowInfo& item = windows_[index];
+    if (isPcAuctionBoss())
+    {
+        if (auctionAutomation_.busy()) { setStatus(QStringLiteral("请先停止当前老板流程再绑定窗口")); return; }
+        if (!AuctionControlAutomation::isTargetWindow(item.hwnd))
+        { setStatus(QStringLiteral("PC 老板只能绑定 AuctionQtControl 窗口")); return; }
+        auctionHwnd_ = item.hwnd;
+        bindAuctionWindow();
+        return;
+    }
     if (!binder_.isValid(item.hwnd))
     {
         emit messageRequested(QStringLiteral("提示"), QStringLiteral("窗口已失效，请刷新列表"), false);
@@ -1348,6 +1457,7 @@ void ClientController::setClickQueueDelayMs(int delayMs)
 
 bool ClientController::hasEnabledTasks() const
 {
+    if (isPcAuctionBoss()) return AuctionControlAutomation::isTargetWindow(auctionHwnd_);
     for (const ClickTask& task : tasks_)
     {
         if (task.enabled)
@@ -1587,7 +1697,7 @@ void ClientController::startCountdown(int seconds, const QString& bossPrice)
 {
     // 服务端同一轮可能因自动状态切换重复投递 TRIGGER；客户端已有动作或倒计时
     // 时直接丢弃重复指令，不能重置倒计时并重新进入整套流程。
-    if (automationActionRunning_ || adbWorker_ || adbShuttingDown_
+    if (automationActionRunning_ || adbWorker_ || adbShuttingDown_ || auctionAutomation_.busy()
         || countdownTimer_.isActive() || scheduledTriggerTimer_.isActive())
     {
         emit connectionLogAppended(QStringLiteral("忽略重复 TRIGGER：当前已有自动化流程或倒计时正在执行"));
@@ -1612,7 +1722,7 @@ void ClientController::startCountdown(int seconds, const QString& bossPrice)
 
 void ClientController::startScheduledTrigger(int seconds, qint64 targetClientMs, const QString& bossPrice)
 {
-    if (automationActionRunning_ || adbWorker_ || adbShuttingDown_
+    if (automationActionRunning_ || adbWorker_ || adbShuttingDown_ || auctionAutomation_.busy()
         || countdownTimer_.isActive() || scheduledTriggerTimer_.isActive())
     {
         emit connectionLogAppended(QStringLiteral("忽略重复定时 TRIGGER：当前已有自动化流程或倒计时正在执行"));
@@ -1683,6 +1793,11 @@ void ClientController::tickCountdown()
 
 void ClientController::clickEnabledTasks()
 {
+    if (isPcAuctionBoss())
+    {
+        startAuctionAction(AuctionControlAutomation::Round);
+        return;
+    }
     if (!boundHwnd_ || !binder_.isValid(boundHwnd_))
     {
         const QString errorText = QStringLiteral("绑定游戏窗口已失效，请重启客户端后重试");
@@ -1951,6 +2066,11 @@ void ClientController::finishHotkeyPick()
 
 void ClientController::syncBoundWindowFromSelectedTask()
 {
+    if (isPcAuctionBoss())
+    {
+        bindAuctionWindow();
+        return;
+    }
     boundWindowIndex_ = -1;
     if (selectedTaskIndex_ < 0 || selectedTaskIndex_ >= tasks_.size())
     {
@@ -2043,7 +2163,7 @@ bool ClientController::beginAutomationAction(const QString& actionName)
         setStatus(QStringLiteral("云手机会话仅允许老板角色执行"));
         return false;
     }
-    if (automationActionRunning_ || adbWorker_ || adbShuttingDown_)
+    if (automationActionRunning_ || adbWorker_ || adbShuttingDown_ || auctionAutomation_.busy())
     {
         return false;
     }
@@ -2072,6 +2192,13 @@ void ClientController::sendTeamCodeResult(const QString& payload, const QString&
 
 void ClientController::handleTeamReadyRequest()
 {
+    if (isPcAuctionBoss())
+    {
+        // Do not send a readiness response mid-round: it clears the server's action lock.
+        if (auctionAutomation_.busy()) return;
+        startAuctionAction(AuctionControlAutomation::CheckReady);
+        return;
+    }
     if (!beginAutomationAction(QStringLiteral("识别队伍状态")))
     {
         sendTeamReadyResult(TeamReadyResult{});
@@ -2158,6 +2285,11 @@ void ClientController::handleTeamReadyRequest()
 
 void ClientController::handlePrepareRequest(int requestId)
 {
+    if (isPcAuctionBoss())
+    {
+        startAuctionAction(AuctionControlAutomation::Prepare, requestId);
+        return;
+    }
     if (currentRole_ != ClientRole::Boss)
     {
         connection_.sendPrepareResponse(requestId, QStringLiteral("ERROR"), QStringLiteral("执行前准备请求仅适用于老板客户端"));

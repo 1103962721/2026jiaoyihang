@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 $script:projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = $script:projectRoot
@@ -8,6 +8,9 @@ $vsDevCmd = 'E:\VisualStudio\VisualStudioIDE\Common7\Tools\VsDevCmd.bat'
 $buildRoot = Join-Path $projectRoot 'build\qt-release'
 $outputRoot = Join-Path $projectRoot 'Relase'
 $outputRootPhysical = $outputRoot
+$branchName = (& git -C $projectRoot branch --show-current).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Unable to determine the Git branch for release packaging' }
+$outputSuffix = if ($branchName -eq 'PCsoftf') { 'PCsoftf' } else { 'Andirons' }
 $projectDrive = 'P:'
 $qtDrive = 'Q:'
 
@@ -51,9 +54,8 @@ function Invoke-NmakeTarget([string]$projectFile, [string]$targetName) {
     )
     $exe = $exeCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if (-not $exe) { throw "Build output not found under: $physicalTargetBuild" }
-    # Andirons 分支的成品保留独立文件名，不覆盖稳定版成品。
-    $releaseDir = Join-Path -Path (Get-Location).Path -ChildPath 'Relase'
-    $outputExe = "$releaseDir\$targetName`_Andirons.exe"
+    # 新分支使用独立成品名，避免覆盖 Andirons 成品。
+    $outputExe = Join-Path $outputRootPhysical "$targetName`_$outputSuffix.exe"
     Copy-Item -LiteralPath $exe -Destination $outputExe -Force
     if (-not (Test-Path -LiteralPath $outputExe)) { throw "Release output not found: $outputExe" }
 }
@@ -71,5 +73,5 @@ Invoke-NmakeTarget (Join-Path $mappedProjectRoot 'DF_PlayClick_Client_Qt\DF_Play
 Invoke-NmakeTarget (Join-Path $mappedProjectRoot 'DF_PlayClick_Server_Qt\DF_PlayClick_Server_Qt.pro') 'DF_PlayClick_Server_Qt'
 
 Write-Host "Built outputs:" -ForegroundColor Green
-Write-Host ([System.IO.Path]::Combine($script:projectRoot, 'Relase', 'DF_PlayClick_Client_Qt_Andirons.exe'))
-Write-Host ([System.IO.Path]::Combine($script:projectRoot, 'Relase', 'DF_PlayClick_Server_Qt_Andirons.exe'))
+Write-Host ([System.IO.Path]::Combine($script:projectRoot, 'Relase', "DF_PlayClick_Client_Qt_$outputSuffix.exe"))
+Write-Host ([System.IO.Path]::Combine($script:projectRoot, 'Relase', "DF_PlayClick_Server_Qt_$outputSuffix.exe"))

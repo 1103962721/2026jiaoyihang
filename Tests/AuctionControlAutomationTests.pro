@@ -1,0 +1,9 @@
+TEMPLATE = app
+TARGET = AuctionQtControl
+QT += widgets
+CONFIG += console c++17
+CONFIG -= app_bundle
+DEFINES += UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
+LIBS += -luiautomationcore -lole32 -loleaut32
+SOURCES += AuctionControlAutomationTests.cpp ../DF_PlayClick_Client_Qt/AuctionControlAutomation.cpp
+HEADERS += ../DF_PlayClick_Client_Qt/AuctionControlAutomation.h ../DF_PlayClick_Client_Qt/AuctionRoundState.h

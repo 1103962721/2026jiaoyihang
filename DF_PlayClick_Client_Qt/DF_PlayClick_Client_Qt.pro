@@ -16,6 +16,7 @@ SOURCES += \
     MainWindow.cpp \
     ClientController.cpp \
     ClientConnection.cpp \
+    AuctionControlAutomation.cpp \
     AccountLoginAutomation.cpp \
     AccountBanMonitor.cpp \
     AccountLoginSuccessMonitor.cpp \
@@ -36,6 +37,8 @@ HEADERS += \
     ClientController.h \
     AdbWindowOcr.h \
     ClientConnection.h \
+    AuctionControlAutomation.h \
+    AuctionRoundState.h \
     AccountLoginAutomation.h \
     AccountBanMonitor.h \
     AccountLoginSuccessMonitor.h \

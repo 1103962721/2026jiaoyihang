@@ -170,7 +170,7 @@ void MainWindow::buildUi()
     auto* modeLabel = new QLabel(QStringLiteral("绑定模式"), this);
     modeLabel->setObjectName(QStringLiteral("fieldLabel"));
     bindingModeCombo_ = new QComboBox(this);
-    bindingModeCombo_->addItem(QStringLiteral("PC：Delta Force 窗口"));
+    bindingModeCombo_->addItem(QStringLiteral("PC：游戏 / AuctionQtControl"));
     bindingModeCombo_->addItem(QStringLiteral("手机：红手指 ADB"));
     bindingModeCombo_->setMaximumWidth(220);
     modeLayout->addWidget(modeLabel);
@@ -311,7 +311,7 @@ void MainWindow::buildUi()
     executionStatusLabel_ = new QLabel(QStringLiteral("最近指令：等待服务端指令"), this);
     executionStatusLabel_->setObjectName(QStringLiteral("executionStatus"));
     executionLayout->addWidget(executionStatusLabel_);
-    auto* executionHint = new QLabel(QStringLiteral("客户端不提供手动取点；接收服务端角色指令后执行对应固定坐标。"), this);
+    auto* executionHint = new QLabel(QStringLiteral("币号执行游戏固定坐标；PC 老板自动绑定 AuctionQtControl 的购买/上架按钮。"), this);
     executionHint->setObjectName(QStringLiteral("hintText"));
     executionHint->setWordWrap(true);
     executionLayout->addWidget(executionHint);
@@ -422,7 +422,9 @@ void MainWindow::connectSignals()
     connect(&controller_, &ClientController::clientRoleChanged, this, [this](ClientRole role) {
         const QString roleText = QString::fromStdWString(ClientRoleUtil::ToDisplayText(role));
         clientRoleLabel_->setText(QStringLiteral("由服务端下发：%1").arg(roleText));
-        clickStrategyLabel_->setText(QStringLiteral("%1固定坐标 · 已适配").arg(roleText));
+        clickStrategyLabel_->setText(role == ClientRole::Boss
+            ? QStringLiteral("AuctionQtControl · 购买/上架按钮监控")
+            : QStringLiteral("%1固定坐标 · 已适配").arg(roleText));
     });
     connect(&controller_, &ClientController::connectionLogAppended, this, &MainWindow::appendConnectionLog);
     connect(&controller_, &ClientController::serverTimeChanged, this, [this](const QString& text) {

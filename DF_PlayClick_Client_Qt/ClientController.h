@@ -23,6 +23,7 @@
 #include "AccountLoginAutomation.h"
 #include "AccountBanMonitor.h"
 #include "AccountLoginSuccessMonitor.h"
+#include "AuctionControlAutomation.h"
 
 struct ClickTask
 {
@@ -111,6 +112,9 @@ signals:
     void messageRequested(const QString& title, const QString& text, bool error);
 
 private:
+    bool isPcAuctionBoss() const;
+    bool bindAuctionWindow(bool showMessage = false);
+    void startAuctionAction(AuctionControlAutomation::Mode mode, int requestId = 0);
     bool hasEnabledTasks() const;
     void setReady(bool ready);
     void clearLocalReadyState();
@@ -187,6 +191,8 @@ private:
 
     ClientConfig config_;
     ClientConnection connection_;
+    AuctionControlAutomation auctionAutomation_;
+    HWND auctionHwnd_ = nullptr;
     AccountLoginAutomation accountLoginAutomation_;
     AccountBanMonitor accountBanMonitor_;
     AccountLoginSuccessMonitor accountLoginSuccessMonitor_;
