@@ -175,9 +175,9 @@ private:
         int regionX = 0, int regionY = 0, int regionWidth = 0, int regionHeight = 0);
     bool adbWaitForText(const QString& keyword, int timeoutMs, int pollMs,
         QString& errorText, const QString& prefix = QString(),
-        int regionX = 0, int regionY = 0, int regionWidth = 0, int regionHeight = 0);
+        int regionX = 0, int regionY = 0, int regionWidth = 0, int regionHeight = 0, bool* timedOut = nullptr);
     bool adbReadText(int x, int y, int width, int height, const QString& prefix,
-        QString& text, QString& errorText, int scaleFactor = 1);
+        QString& text, QString& errorText, double scaleFactor = 1);
     bool waitForAutomation(int milliseconds, QString& errorText);
     bool beginAutomationAction(const QString& actionName);
     void finishAutomationAction();
@@ -241,6 +241,7 @@ private:
     bool automationActionRunning_ = false;
     bool externalBossSession_ = false;
     QTimer adbWindowSizeTimer_;
+    bool adbWindowSizeWarning_ = false;
     AdbWindowOcr::SizeLock adbWindowSizeLock_;
     int sessionAdbPort_ = 0;
     QThread* adbWorker_ = nullptr;

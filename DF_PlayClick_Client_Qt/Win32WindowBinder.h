@@ -22,7 +22,7 @@ struct TargetWindowInfo
 class Win32WindowBinder
 {
 public:
-    QVector<TargetWindowInfo> enumerateWindows(HWND excludeHwnd) const;
+    QVector<TargetWindowInfo> enumerateWindows(HWND excludeHwnd, bool includeUntitled = false) const;
     int findGameBodyIndex(const QVector<TargetWindowInfo>& windows) const;
     bool isValid(HWND hwnd) const;
     bool prepareForBinding(HWND hwnd, int& width, int& height) const;

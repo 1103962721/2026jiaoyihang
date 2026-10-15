@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $qtRoot = Join-Path $projectRoot '.qt\6.6.3\msvc2019_64_static'
 $vsDevCmd = 'E:\VisualStudio\VisualStudioIDE\Common7\Tools\VsDevCmd.bat'
-$buildRoot = 'C:\Users\Administrator\AppData\Local\Temp\andirons-adb-build'
+$buildRoot = Join-Path $projectRoot 'build\AndironsAdbDemo'
 $output = Join-Path $PSScriptRoot 'AndironsAdbDemo.exe'
 
 cmd.exe /c "subst P: /d" 2>$null
@@ -16,9 +16,8 @@ cmd.exe /c "`"$vsDevCmd`" -arch=x64 -host_arch=x64 && set" | ForEach-Object {
     }
 }
 
-Remove-Item -LiteralPath $buildRoot -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
-Push-Location $buildRoot
+Push-Location 'P:\build\AndironsAdbDemo'
 try {
     & 'Q:\bin\qmake.exe' 'P:\AndironsAdbDemo\AndironsAdbDemo.pro' 'CONFIG+=release' 'CONFIG-=debug' '-spec' 'win32-msvc'
     if ($LASTEXITCODE -ne 0) { throw 'qmake failed' }

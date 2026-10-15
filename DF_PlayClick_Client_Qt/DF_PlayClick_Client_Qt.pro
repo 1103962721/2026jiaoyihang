@@ -14,6 +14,7 @@ SOURCES += \
     ../Shared/FramelessTitleBar.cpp \
     main.cpp \
     MainWindow.cpp \
+    CloudWindowPicker.cpp \
     ClientController.cpp \
     ClientConnection.cpp \
     AccountLoginAutomation.cpp \
@@ -33,6 +34,8 @@ SOURCES += \
 HEADERS += \
     ../Shared/FramelessTitleBar.h \
     MainWindow.h \
+    CloudWindowPicker.h \
+    CloudWindowTarget.h \
     ClientController.h \
     AdbWindowOcr.h \
     ClientConnection.h \

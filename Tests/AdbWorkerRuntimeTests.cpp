@@ -6,8 +6,10 @@
 #include <mutex>
 #define private public
 #include "../DF_PlayClick_Client_Qt/ClientController.h"
+#include "../DF_PlayClick_Client_Qt/MainWindow.h"
 #undef private
 #include "../DF_PlayClick_Client_Qt/ClientController.cpp"
+#include "../DF_PlayClick_Client_Qt/MainWindow.cpp"
 #include <cstdio>
 
 // Isolated mock test: this executable also acts as adb, never using a real device.
@@ -23,6 +25,14 @@ int main(int argc, char** argv)
             if (!trace.open(QIODevice::WriteOnly | QIODevice::Append)) return 98;
             trace.write((app.arguments().mid(3).join(' ') + '\n').toUtf8());
         }
+        const QString timingPath = qEnvironmentVariable("MOCK_ADB_TIMING");
+        if (!timingPath.isEmpty())
+        {
+            QFile timing(timingPath);
+            if (!timing.open(QIODevice::WriteOnly | QIODevice::Append)) return 97;
+            timing.write((QString::number(QDateTime::currentMSecsSinceEpoch()) + ' '
+                + app.arguments().mid(3).join(' ') + '\n').toUtf8());
+        }
         const int delay = qEnvironmentVariableIntValue("MOCK_ADB_DELAY");
         QThread::msleep(delay > 0 ? delay : 350);
         if (app.arguments().contains("screencap"))
@@ -32,6 +42,44 @@ int main(int argc, char** argv)
         return 0;
     }
     QApplication app(argc, argv);
+    if (NormalizeAmountNumericToken(NormalizeAmountOcrText(QStringLiteral("哈夫币 35.247.070 可在交易行！")))
+        != QStringLiteral("35247070")
+        || NormalizeAmountNumericToken(NormalizeAmountOcrText(QStringLiteral("哈夫币 35.247.07 可在交易行！")))
+        != QStringLiteral("3524707"))
+    { fprintf(stderr,"FAIL amount normalization changed trailing zero\n"); return 1; }
+    printf("PASS amount normalization preserves supplied trailing zero; never invents missing digits\n");
+    {
+        MainWindow ui;
+        ui.bindingModeCombo_->setCurrentIndex(1);
+        QWidget target; target.setWindowTitle("ordinary binding test"); target.resize(800, 500); target.show();
+        const HWND hwnd = reinterpret_cast<HWND>(target.winId());
+        const LONG_PTR originalStyle = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        const QString originalPort = ui.cloudAdbPortEdit_->text();
+        int dialogs = 0;
+        QTimer dismiss; dismiss.setInterval(10);
+        QObject::connect(&dismiss, &QTimer::timeout, [&] {
+            if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+            { ++dialogs; box->done(QMessageBox::No); }
+        });
+        dismiss.start();
+        ui.bindDraggedCloudWindow(reinterpret_cast<quintptr>(hwnd));
+        dismiss.stop(); dismiss.disconnect();
+        if (dialogs != 1 || !ui.cloudSessions_.isEmpty()) return 81;
+        QObject::connect(&dismiss, &QTimer::timeout, [&] {
+            if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+            { ++dialogs; box->done(QMessageBox::Yes); }
+            else if (auto* input = qobject_cast<QInputDialog*>(QApplication::activeModalWidget()))
+            { ++dialogs; input->reject(); }
+        });
+        dismiss.start();
+        ui.bindDraggedCloudWindow(reinterpret_cast<quintptr>(hwnd));
+        dismiss.stop();
+        if (dialogs != 3 || !ui.cloudSessions_.isEmpty()
+            || originalPort != ui.cloudAdbPortEdit_->text()
+            || originalStyle != GetWindowLongPtrW(hwnd, GWL_STYLE)
+            || target.size() != QSize(800, 500)) return 82;
+        printf("PASS drag confirmation No and Yes/input cancel: no session, port mutation or size lock\n");
+    }
     {
         const QString keyword = QStringLiteral("一键配装");
         const QString prefix = QStringLiteral("adb_quick_loadout");
@@ -50,6 +98,9 @@ int main(int argc, char** argv)
     {
         const std::pair<QString, int> cases[] = {
             {QStringLiteral("上架数量日/7"), 0}, {QStringLiteral("日/7"), 0},
+            {QStringLiteral("+ 上架数量日/15"), 0}, {QStringLiteral("＋ 上架数量：０／１５"), 0},
+            {QStringLiteral("+日/15+"), 0}, {QStringLiteral("+ 上架数量0/15"), 0},
+            {QStringLiteral("+ 上架数量11/15"), 11},
             {QStringLiteral("上架数量 0/7 +"), 0}, {QStringLiteral("上架数量：０／７"), 0},
             {QStringLiteral("上架数量1/7"), 1}, {QStringLiteral("2/7"), 2},
             {QStringLiteral("上架数量7/7"), 7}, {QStringLiteral("上架数量10/17"), 10}
@@ -58,11 +109,13 @@ int main(int argc, char** argv)
         {
             int current = -1, total = -1;
             if (!TryParseAdbListingQuantity(sample.first,current,total) || current != sample.second
-                || total != (sample.second == 10 ? 17 : 7))
+                || total != (sample.second == 10 ? 17
+                    : sample.first.startsWith('+') || sample.first.startsWith(QChar(0xFF0B)) ? 15 : 7))
             { fprintf(stderr,"FAIL ADB listing quantity parser\n"); return 1; }
         }
         for (const QString& sample : {QString(),QStringLiteral("上架数量日"),QStringLiteral("上架数量/7"),
             QStringLiteral("上架数量1日/7"),QStringLiteral("日期日/7"),QStringLiteral("上架数量B/7"),
+            QStringLiteral("+上架数量/15"),QStringLiteral("+上架数量日/0"),QStringLiteral("+上架数量1日/15"),
             QStringLiteral("8/7"),QStringLiteral("0/0"),QStringLiteral("日/日"),
             QStringLiteral("0/99999999999999999"),QStringLiteral("-1/7")})
         {
@@ -77,7 +130,9 @@ int main(int argc, char** argv)
             {QStringLiteral("2/7"), 2}, {QStringLiteral("使用售位：2"), 2},
             {QStringLiteral("使用槽位: 2"), 2}, {QStringLiteral("使用 售 位 ： ２"), 2},
             {QStringLiteral("1/7"), 1}, {QStringLiteral("使用售位：1"), 1},
-            {QStringLiteral("0/7"), 0}, {QStringLiteral("使用售位：0"), 0}
+            {QStringLiteral("0/7"), 0}, {QStringLiteral("使用售位：0"), 0},
+            {QStringLiteral("使用售位：6/"), 6}, {QStringLiteral("6/"), 6},
+            {QStringLiteral("使用槽位：１／"), 1}, {QStringLiteral("1/"), 1}
         };
         for (const auto& sample : cases)
         {
@@ -86,7 +141,9 @@ int main(int argc, char** argv)
             { fprintf(stderr,"FAIL panel parser: %s\n",sample.first.toUtf8().constData()); return 1; }
         }
         for (const QString& sample : {QString(), QStringLiteral("使用售位"), QStringLiteral("价格：12345"),
-            QStringLiteral("2"), QStringLiteral("使用售位：999999999999999999")})
+            QStringLiteral("2"), QStringLiteral("使用售位：999999999999999999"),
+            QStringLiteral("使用售位：/7"), QStringLiteral("/"), QStringLiteral("价格：6/"),
+            QStringLiteral("999999999999999999/")})
         {
             int current = -1;
             if (TryParseAdbPanelCurrentValue(sample,current))
@@ -119,6 +176,34 @@ int main(int argc, char** argv)
         loop.exec();
     };
     // Real child HWND: resize the owning frame to obtain the selected child's client size.
+    {
+        QWidget first, second; first.resize(850,520); second.resize(910,560);
+        first.show(); second.show(); settle();
+        const HWND a = reinterpret_cast<HWND>(first.winId()), b = reinterpret_cast<HWND>(second.winId());
+        ClientController one, two;
+        one.initializeExternalBossSession(GetDesktopWindow());
+        two.initializeExternalBossSession(GetDesktopWindow());
+        if (!one.bindExternalWindow(a) || !two.bindExternalWindow(b))
+        { fprintf(stderr,"FAIL bind two independent ADB controllers\n"); return 1; }
+        for (int i=0;i<20;++i)
+        {
+            first.resize(850+i,520); second.resize(910+i,560);
+            QMetaObject::invokeMethod(&one.adbWindowSizeTimer_, "timeout", Qt::DirectConnection);
+            QMetaObject::invokeMethod(&two.adbWindowSizeTimer_, "timeout", Qt::DirectConnection);
+            QCoreApplication::processEvents();
+        }
+        settle();
+        AdbWindowOcr::Geometry ga,gb; QString error;
+        if (!one.adbWindowSizeTimer_.isActive() || !two.adbWindowSizeTimer_.isActive()
+            || !AdbWindowOcr::geometry(a,ga,error) || !AdbWindowOcr::geometry(b,gb,error)
+            || ga.size != QSize(737,440) || gb.size != QSize(737,440))
+        { fprintf(stderr,"FAIL second ADB binding disables size enforcement\n"); return 1; }
+        two.shutdownForExit(); first.resize(900,550); settle();
+        if (!one.adbWindowSizeTimer_.isActive() || !AdbWindowOcr::geometry(a,ga,error) || ga.size != QSize(737,440))
+        { fprintf(stderr,"FAIL removing second ADB binding unlocks first\n"); return 1; }
+        one.shutdownForExit();
+        printf("PASS dual ADB controller timers, repeated resize and independent shutdown\n");
+    }
     {
         QWidget frame;
         frame.resize(940,560); frame.move(20,20);
@@ -158,13 +243,34 @@ int main(int argc, char** argv)
     target.raise(); target.activateWindow();
     SetWindowPos(targetHwnd, HWND_TOPMOST, 0,0,0,0,SWP_NOMOVE | SWP_NOSIZE);
     SetForegroundWindow(targetHwnd); target.repaint(); settle();
-    if (qEnvironmentVariableIsSet("MOCK_DISMOUNT_FLOW"))
+    if (qEnvironmentVariableIsSet("MOCK_DISMOUNT_FLOW") || qEnvironmentVariableIsSet("MOCK_PROMPT_FLOW"))
     {
         bool ok = false;
         QString flowError;
+        SOCKET listener = socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+        sockaddr_in address{}; address.sin_family=AF_INET;
+        address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+        if (bind(listener,reinterpret_cast<sockaddr*>(&address),sizeof(address)) || listen(listener,1)) return 83;
+        int addressSize=sizeof(address);
+        getsockname(listener,reinterpret_cast<sockaddr*>(&address),&addressSize);
+        c->connection_.socket_=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+        if (::connect(c->connection_.socket_,reinterpret_cast<sockaddr*>(&address),sizeof(address))) return 84;
+        SOCKET receiver=accept(listener,nullptr,nullptr); closesocket(listener);
+        const DWORD receiveTimeout=1000;
+        setsockopt(receiver,SOL_SOCKET,SO_RCVTIMEO,reinterpret_cast<const char*>(&receiveTimeout),sizeof(receiveTimeout));
         QObject::connect(c, &ClientController::connectionLogAppended, &app, [](const QString& log) {
             fprintf(stderr,"%s\n",log.toUtf8().constData());
         });
+        if (qEnvironmentVariableIsSet("MOCK_CLAIM_CANCEL"))
+            QObject::connect(c,&ClientController::connectionLogAppended,&app,[c](const QString& log) {
+                if (log.contains(QStringLiteral("将重新点击领取")))
+                    QTimer::singleShot(100,c,[c]() { c->automationCancelRequested_.store(true); });
+            });
+        if (qEnvironmentVariableIsSet("MOCK_RETURN_CANCEL"))
+            QObject::connect(c,&ClientController::connectionLogAppended,&app,[c](const QString& log) {
+                if (log.contains(QStringLiteral("检查交易行")))
+                    c->automationCancelRequested_.store(true);
+            });
         QTimer visibility;
         QObject::connect(&visibility, &QTimer::timeout, &target, [&]() {
             if (IsIconic(targetHwnd))
@@ -172,25 +278,55 @@ int main(int argc, char** argv)
                 fprintf(stderr,"TEST restoring minimized synthetic OCR target\n");
                 target.showNormal();
             }
+            AdbWindowOcr::Geometry geometry;
+            QString geometryError;
+            const QRect desktop(GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN),
+                GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN));
+            if (AdbWindowOcr::geometry(targetHwnd, geometry, geometryError)
+                && !desktop.contains(QRect(geometry.origin, geometry.size)))
+                target.move(desktop.topLeft() + QPoint(30, 30));
         });
         visibility.start(50);
-        QTimer::singleShot(75000,&app,[c]() { if(c) c->automationCancelRequested_.store(true); });
+        QTimer::singleShot(110000,&app,[c]() { if(c) c->automationCancelRequested_.store(true); });
         QThread* worker = QThread::create([&]() {
             ok = c->executeAdbBossListingSequence(QStringLiteral("100"),flowError);
             QMetaObject::invokeMethod(&app,&QCoreApplication::quit,Qt::QueuedConnection);
         });
         worker->start();
         app.exec(); worker->wait(); delete worker;
+        QCoreApplication::processEvents();
+        QByteArray reports;
+        char buffer[512];
+        for (int count; (count=recv(receiver,buffer,sizeof(buffer),0))>0;) reports.append(buffer,count);
+        closesocket(receiver);
         c->shutdownForExit();
+        if (qEnvironmentVariableIsSet("MOCK_CLAIM_CANCEL") || qEnvironmentVariableIsSet("MOCK_RETURN_CANCEL"))
+        {
+            if (ok || !flowError.contains(QStringLiteral("强制停止"))) return 85;
+            printf("PASS claim retry cancellation stops before another tap\n");
+            return 0;
+        }
+        if (qEnvironmentVariableIsSet("MOCK_PROMPT_FAILURE"))
+        {
+            if (ok || !reports.isEmpty() || !flowError.contains(qEnvironmentVariable("MOCK_PROMPT_FAILURE")))
+                return 87;
+            printf("PASS failed prompt navigation stops without funds/ready reports\n");
+            return 0;
+        }
         if (!ok) { fprintf(stderr,"FAIL dismount flow: %s\n",flowError.toUtf8().constData()); return 1; }
+        const QByteArray expectedAmount=qEnvironmentVariableIsSet("MOCK_PROMPT_FLOW") ? "35247070" : "10543903";
+        if (!reports.contains("AMOUNT_REPORT " + expectedAmount + "\n")
+            || !reports.contains("TEAM_READY 1 1 1\n"))
+        { fprintf(stderr,"FAIL amount/ready protocol reports: %s\n",reports.constData()); return 86; }
         printf("PASS actual ADB boss dismount/relist sequence completed\n");
         return 0;
     }
     QString captureError;
     AdbWindowOcr::Geometry g;
     QRect actual;
-    const auto initial = AdbWindowOcr::capture(targetHwnd, QRect(536,62,110,58), g, actual, captureError);
-    if (g.size != QSize(737,440) || initial.size() != QSize(110,58)
+    const auto initial = AdbWindowOcr::capture(targetHwnd, QRect(495,64,192,72), g, actual, captureError);
+    if (g.size != QSize(737,440) || initial.size() != QSize(192,72)
+        || actual != QRect(495,64,192,72)
         || initial.pixelColor(55,29) != QColor(20,80,160)
         || (GetWindowLongPtrW(targetHwnd, GWL_STYLE) & (WS_THICKFRAME | WS_MAXIMIZEBOX)))
     { initial.save(QStringLiteral("capture-failure.png")); fprintf(stderr,"FAIL fixed client capture: %s (%dx%d) pixel=%08x style=%llx\n", captureError.toUtf8().constData(),g.size.width(),g.size.height(),initial.isNull()?0:initial.pixel(55,29),GetWindowLongPtrW(targetHwnd,GWL_STYLE)); return 1; }

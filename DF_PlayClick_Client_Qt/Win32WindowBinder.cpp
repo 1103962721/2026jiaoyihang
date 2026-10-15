@@ -12,6 +12,7 @@ struct EnumContext
 {
     HWND excludeHwnd = nullptr;
     QVector<TargetWindowInfo>* windows = nullptr;
+    bool includeUntitled = false;
 };
 
 void appendWindowInfo(EnumContext* context, HWND hwnd, bool cloudSurface);
@@ -64,7 +65,7 @@ void appendWindowInfo(EnumContext* context, HWND hwnd, bool cloudSurface)
     GetWindowTextW(hwnd, title, 256);
     wchar_t className[128]{};
     GetClassNameW(hwnd, className, 128);
-    if (title[0] == L'\0' && !(cloudSurface && lstrcmpiW(className, L"PlayUI") == 0))
+    if (!context->includeUntitled && title[0] == L'\0' && !(cloudSurface && lstrcmpiW(className, L"PlayUI") == 0))
     {
         return;
     }
@@ -106,10 +107,10 @@ BOOL CALLBACK enumWindowsProc(HWND hwnd, LPARAM lParam)
 }
 }
 
-QVector<TargetWindowInfo> Win32WindowBinder::enumerateWindows(HWND excludeHwnd) const
+QVector<TargetWindowInfo> Win32WindowBinder::enumerateWindows(HWND excludeHwnd, bool includeUntitled) const
 {
     QVector<TargetWindowInfo> windows;
-    EnumContext context{ excludeHwnd, &windows };
+    EnumContext context{ excludeHwnd, &windows, includeUntitled };
     EnumWindows(enumWindowsProc, reinterpret_cast<LPARAM>(&context));
     return windows;
 }

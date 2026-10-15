@@ -1,6 +1,8 @@
 ﻿#include "MainWindow.h"
 
 #include <algorithm>
+#include "CloudWindowPicker.h"
+#include "CloudWindowTarget.h"
 #include <QAbstractItemView>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -9,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QMessageBox>
 #include <QIntValidator>
+#include <QInputDialog>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QScrollArea>
@@ -334,6 +337,8 @@ void MainWindow::buildUi()
     cloudRow->addWidget(cloudLabel);
     cloudRow->addWidget(cloudAdbPortEdit_);
     cloudRow->addWidget(cloudRefreshButton_);
+    cloudWindowPicker_ = new CloudWindowPicker(this);
+    cloudRow->addWidget(cloudWindowPicker_);
     cloudRow->addWidget(cloudAddButton_);
     cloudRow->addStretch();
     cloudLayout->addLayout(cloudRow);
@@ -343,14 +348,14 @@ void MainWindow::buildUi()
     cloudWindowList_->setMinimumHeight(58);
     cloudWindowList_->setMaximumHeight(112);
     cloudWindowList_->setAlternatingRowColors(true);
-    cloudWindowList_->setToolTip(QStringLiteral("选择要绑定的红手指云手机画面窗口"));
+    cloudWindowList_->setToolTip(QStringLiteral("可选择任意应用窗口，请自行确认是否对应目标 ADB 设备"));
     cloudLayout->addWidget(cloudWindowList_);
     cloudSessionList_ = new QListWidget(this);
     cloudSessionList_->setObjectName(QStringLiteral("cloudSessionList"));
     cloudSessionList_->setMinimumHeight(52);
     cloudSessionList_->setAlternatingRowColors(true);
     cloudLayout->addWidget(cloudSessionList_);
-    auto* cloudHint = new QLabel(QStringLiteral("每个 ADB 端口对应一个独立老板客户端；截图和 OCR 直接使用设备 1280×720 分辨率。"), this);
+    auto* cloudHint = new QLabel(QStringLiteral("拖动取窗按钮到目标窗口，蓝框提示选中范围；松开确认后填写 ADB 端口。也可在列表选择任意应用窗口后添加，请自行确认目标。OCR 客户区固定 737×440；ADB 点击仍按手机 1280×720。"), this);
     cloudHint->setObjectName(QStringLiteral("hintText"));
     cloudHint->setWordWrap(true);
     cloudLayout->addWidget(cloudHint);
@@ -396,6 +401,10 @@ void MainWindow::connectSignals()
     connect(bulletTotalEdit_, &QLineEdit::editingFinished, this, &MainWindow::saveOcrParameters);
     connect(cloudAddButton_, &QPushButton::clicked, this, &MainWindow::addCloudBossSession);
     connect(cloudRefreshButton_, &QPushButton::clicked, this, &MainWindow::refreshCloudWindowOptions);
+    connect(cloudWindowPicker_, &CloudWindowPicker::windowPicked, this, &MainWindow::bindDraggedCloudWindow);
+    connect(cloudWindowPicker_, &CloudWindowPicker::pickFailed, this, [this](const QString& text) {
+        showControllerMessage(QStringLiteral("取窗失败"), text, false);
+    });
     connect(bindingModeCombo_, qOverload<int>(&QComboBox::currentIndexChanged),
         this, &MainWindow::applyClientBindingMode);
 
@@ -520,6 +529,23 @@ void MainWindow::addCloudBossSession()
         showControllerMessage(QStringLiteral("端口错误"), QStringLiteral("请输入有效的 ADB 端口"), true);
         return;
     }
+    const auto* targetItem = cloudWindowList_->currentItem();
+    const HWND targetHwnd = targetItem ? reinterpret_cast<HWND>(targetItem->data(Qt::UserRole).value<quintptr>()) : nullptr;
+    const QString targetName = targetItem ? targetItem->text() : QString();
+    if (!IsWindow(targetHwnd))
+    {
+        showControllerMessage(QStringLiteral("请选择窗口"), QStringLiteral("请拖动取窗按钮到云手机画面，或从列表选择窗口"), false);
+        return;
+    }
+    for (const auto& session : cloudSessions_)
+    {
+        if (session.adbPort != adbPort && session.controller
+            && GetAncestor(session.controller->boundHwnd(), GA_ROOT) == GetAncestor(targetHwnd, GA_ROOT))
+        {
+            showControllerMessage(QStringLiteral("窗口已绑定"), QStringLiteral("此窗口已绑定 ADB:%1，请选择另一台云手机画面").arg(session.adbPort), false);
+            return;
+        }
+    }
     QString adbDetail;
     const AdbPortCheckResult adbResult = checkAdbPort(adbPort, adbDetail);
     if (adbResult != AdbPortCheckResult::Online)
@@ -568,7 +594,7 @@ void MainWindow::addCloudBossSession()
     controller->initializeExternalBossSession(reinterpret_cast<HWND>(winId()));
     controller->setSessionDeviceId(QStringLiteral("ADB-%1").arg(adbPort));
     controller->setSessionAdbPort(adbPort);
-    auto* item = new QListWidgetItem(QStringLiteral("ADB:%1 · 正在绑定 VM 窗口 · 未连接").arg(adbPort), cloudSessionList_);
+    auto* item = new QListWidgetItem(QStringLiteral("ADB:%1 · 正在绑定窗口 · 未连接").arg(adbPort), cloudSessionList_);
     cloudSessions_.append({ controller, adbPort, item, false, false, false });
     const QString serverIp = ipEdit_->text().trimmed();
     connect(controller, &ClientController::statusChanged, this,
@@ -629,24 +655,15 @@ void MainWindow::addCloudBossSession()
         if (item)
             item->setText(QStringLiteral("ADB:%1 · %2").arg(adbPort).arg(connected ? QStringLiteral("已连接") : QStringLiteral("未连接")));
     });
-    bool bound = false;
-    const QListWidgetItem* selectedWindow = cloudWindowList_->currentItem();
-    if (!selectedWindow)
-    {
-        item->setText(QStringLiteral("ADB:%1 · 未找到 VM 窗口").arg(adbPort));
-    }
-    else
-    {
-        const quintptr hwndValue = selectedWindow->data(Qt::UserRole).value<quintptr>();
-        const QString windowName = selectedWindow->text();
-        bound = controller->bindExternalWindow(reinterpret_cast<HWND>(hwndValue), windowName);
-        if (!bound)
-            item->setText(QStringLiteral("ADB:%1 · VM 窗口绑定失败").arg(adbPort));
-    }
+    const bool bound = controller->bindExternalWindow(targetHwnd, targetName);
     if (bound)
         controller->connectOrDisconnect(ipEdit_->text().trimmed(), serverPort);
     else
-        item->setText(QStringLiteral("ADB:%1 · 等待选择有效 VM 窗口").arg(adbPort));
+    {
+        showControllerMessage(QStringLiteral("绑定失败"), QStringLiteral("无法绑定该云手机窗口，请检查窗口是否有效、是否已被其他会话绑定，以及两程序权限是否一致"), true);
+        removeCloudBossSession(cloudSessions_.size() - 1);
+        return;
+    }
     cloudAdbPortEdit_->setText(QString::number(adbPort + 1));
 }
 
@@ -789,39 +806,67 @@ MainWindow::AdbPortCheckResult MainWindow::checkAdbPort(int adbPort, QString& de
 
 void MainWindow::refreshCloudWindowOptions()
 {
+    const auto* previous = cloudWindowList_->currentItem();
+    const quintptr previousHwnd = previous ? previous->data(Qt::UserRole).value<quintptr>() : 0;
     cloudWindowList_->clear();
     controller_.refreshWindows();
-    const QVector<TargetWindowInfo> candidates = controller_.windows();
-    bool hasSurface = false;
+    const auto candidates = CloudWindowTarget::surfaces(Win32WindowBinder().enumerateWindows(reinterpret_cast<HWND>(winId()), true));
     for (const TargetWindowInfo& window : candidates)
     {
-        if (window.isCloudPhoneSurface && window.hwnd)
-        {
-            hasSurface = true;
-            break;
-        }
-    }
-    for (const TargetWindowInfo& window : candidates)
-    {
-        if (!window.isCloudPhone || !window.hwnd || (hasSurface && !window.isCloudPhoneSurface))
-            continue;
         const QString text = QStringLiteral("%1 · %2×%3 · HWND %4")
-            .arg(window.title.isEmpty() ? QStringLiteral("红手指窗口") : window.title)
+            .arg(window.title.isEmpty() ? QStringLiteral("无标题窗口 [%1]").arg(window.className) : window.title)
             .arg(window.clientWidth)
             .arg(window.clientHeight)
             .arg(window.hwndText);
         auto* item = new QListWidgetItem(text, cloudWindowList_);
         item->setData(Qt::UserRole, QVariant::fromValue<quintptr>(reinterpret_cast<quintptr>(window.hwnd)));
+        if (reinterpret_cast<quintptr>(window.hwnd) == previousHwnd) cloudWindowList_->setCurrentItem(item);
     }
     if (cloudWindowList_->count() == 0)
     {
-        auto* item = new QListWidgetItem(QStringLiteral("未检测到 VM 云手机画面窗口，请确认红手指已打开"), cloudWindowList_);
+        auto* item = new QListWidgetItem(QStringLiteral("未检测到可绑定的应用窗口，请打开目标窗口后刷新"), cloudWindowList_);
         item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
     }
-    else
+    else if (!cloudWindowList_->currentItem())
     {
         cloudWindowList_->setCurrentRow(0);
     }
+}
+
+void MainWindow::bindDraggedCloudWindow(quintptr hwndValue)
+{
+    if (bindingModeCombo_->currentIndex() != 1) return;
+    const HWND target = reinterpret_cast<HWND>(hwndValue);
+    if (!IsWindow(target)) return;
+    wchar_t title[256]{};
+    GetWindowTextW(target, title, 256);
+    const QString name = title[0] ? QString::fromWCharArray(title) : QStringLiteral("无标题");
+    QMessageBox confirmation(QMessageBox::Question, QStringLiteral("确认绑定窗口"),
+        QStringLiteral("是否确定绑定“%1”窗口？\nHWND 0x%2\n绑定后客户区将固定为 737×440。")
+            .arg(name).arg(hwndValue, 0, 16), QMessageBox::Yes | QMessageBox::No, this);
+    confirmation.setTextFormat(Qt::PlainText);
+    confirmation.setButtonText(QMessageBox::Yes, QStringLiteral("是"));
+    confirmation.setButtonText(QMessageBox::No, QStringLiteral("否"));
+    confirmation.setDefaultButton(QMessageBox::No);
+    if (confirmation.exec() != QMessageBox::Yes) return;
+    bool accepted = false;
+    const int port = QInputDialog::getInt(this, QStringLiteral("输入 ADB 端口"),
+        QStringLiteral("请输入目标设备的 ADB 端口："),
+        qBound(1, cloudAdbPortEdit_->text().toInt(), 65535), 1, 65535, 1, &accepted);
+    if (!accepted || bindingModeCombo_->currentIndex() != 1) return;
+    refreshCloudWindowOptions();
+    QListWidgetItem* selected = nullptr;
+    for (int row = 0; row < cloudWindowList_->count(); ++row)
+        if (cloudWindowList_->item(row)->data(Qt::UserRole).value<quintptr>() == hwndValue)
+        { selected = cloudWindowList_->item(row); break; }
+    if (!selected)
+    {
+        showControllerMessage(QStringLiteral("绑定失败"), QStringLiteral("目标窗口已变化，请重新拖动取窗"), false);
+        return;
+    }
+    cloudWindowList_->setCurrentItem(selected);
+    cloudAdbPortEdit_->setText(QString::number(port));
+    addCloudBossSession();
 }
 
 void MainWindow::saveOcrParameters()

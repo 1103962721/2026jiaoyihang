@@ -51,8 +51,12 @@ function Invoke-NmakeTarget([string]$projectFile, [string]$targetName) {
     )
     $exe = $exeCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if (-not $exe) { throw "Build output not found under: $physicalTargetBuild" }
-    # Andirons 分支的成品保留独立文件名，不覆盖稳定版成品。
-    $releaseDir = Join-Path -Path (Get-Location).Path -ChildPath 'Relase'
+    if ($targetName -eq 'DF_PlayClick_Client_Qt') {
+        & (Join-Path $script:projectRoot 'publish_andirons_client.ps1') -SourceExe $exe -ReleaseDirectory $outputRootPhysical
+        return
+    }
+    # Server packaging keeps its existing name.
+    $releaseDir = $outputRootPhysical
     $outputExe = "$releaseDir\$targetName`_Andirons.exe"
     Copy-Item -LiteralPath $exe -Destination $outputExe -Force
     if (-not (Test-Path -LiteralPath $outputExe)) { throw "Release output not found: $outputExe" }
@@ -71,5 +75,5 @@ Invoke-NmakeTarget (Join-Path $mappedProjectRoot 'DF_PlayClick_Client_Qt\DF_Play
 Invoke-NmakeTarget (Join-Path $mappedProjectRoot 'DF_PlayClick_Server_Qt\DF_PlayClick_Server_Qt.pro') 'DF_PlayClick_Server_Qt'
 
 Write-Host "Built outputs:" -ForegroundColor Green
-Write-Host ([System.IO.Path]::Combine($script:projectRoot, 'Relase', 'DF_PlayClick_Client_Qt_Andirons.exe'))
+Write-Host 'Client: Relase\DF_PlayClick_Client_Qt_Andirons_1.x.exe (version printed above)'
 Write-Host ([System.IO.Path]::Combine($script:projectRoot, 'Relase', 'DF_PlayClick_Server_Qt_Andirons.exe'))

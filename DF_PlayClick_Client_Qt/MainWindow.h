@@ -16,6 +16,7 @@
 
 class QLayout;
 class QShowEvent;
+class CloudWindowPicker;
 
 class MainWindow : public QMainWindow
 {
@@ -49,6 +50,7 @@ private:
     void removeCloudBossSession(int index);
     void clearCloudBossSessions();
     void refreshCloudWindowOptions();
+    void bindDraggedCloudWindow(quintptr hwnd);
     enum class AdbPortCheckResult
     {
         Online,
@@ -96,6 +98,7 @@ private:
     QLineEdit* cloudAdbPortEdit_ = nullptr;
     QListWidget* cloudWindowList_ = nullptr;
     QPushButton* cloudRefreshButton_ = nullptr;
+    CloudWindowPicker* cloudWindowPicker_ = nullptr;
     QPushButton* cloudAddButton_ = nullptr;
     QListWidget* cloudSessionList_ = nullptr;
     QVector<CloudBossSession> cloudSessions_;

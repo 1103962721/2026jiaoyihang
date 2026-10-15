@@ -171,10 +171,9 @@ public:
         }
         if (!framePending_ && g.size == referenceSize())
         {
-            resizeAttempts_ = 0;
             return true;
         }
-        if (++resizeAttempts_ > 15) return false;
+        // Slow/custom layouts must not exhaust a retry budget and unlock resizing.
         framePending_ = false;
         // Fractional DPI layouts may round a child to 738 instead of 737 physical
         // pixels. Correct that final pixel on the child without shifting its origin.
@@ -203,7 +202,6 @@ public:
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_ASYNCWINDOWPOS);
         }
         root_ = target_ = nullptr;
-        resizeAttempts_ = 0;
     }
 private:
     bool valid() const
@@ -218,6 +216,5 @@ private:
     DWORD pid_ = 0;
     LONG_PTR originalBits_ = 0;
     bool framePending_ = false;
-    int resizeAttempts_ = 0;
 };
 }

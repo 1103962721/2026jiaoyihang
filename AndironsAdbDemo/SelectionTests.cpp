@@ -5,6 +5,13 @@
 #include <cstdlib>
 #include <QMimeData>
 #include <QThread>
+#include <QBuffer>
+#include <QTemporaryDir>
+#include <QProcessEnvironment>
+#include <QFile>
+#include <QStandardPaths>
+#include <fcntl.h>
+#include <io.h>
 
 static void check(bool ok, const char* message)
 {
@@ -14,6 +21,42 @@ static void check(bool ok, const char* message)
 int main(int argc, char** argv)
 {
     QApplication app(argc, argv);
+    if (argc > 1)
+    {
+        const auto args = app.arguments();
+        if (args.contains("--probe-bundled"))
+        {
+            QStandardPaths::setTestModeEnabled(true);
+            QString error; const auto path = BundledAdb::executablePath(error);
+            QProcess process; process.start(path, {"version"});
+            check(!path.isEmpty() && process.waitForFinished(5000) && process.exitCode() == 0
+                && process.readAllStandardOutput().contains("33.0.2"), "portable embedded ADB failed");
+            return 0;
+        }
+        QThread::msleep(250);
+        if (args.contains("devices")) { puts("List of devices attached\nUSB123 device usb:1-2 model:Test\nUSB456 unauthorized\n127.0.0.1:5555 device\nemulator-5554 device"); return 0; }
+        if (args.contains("get-state")) { puts("device"); return 0; }
+        if (args.contains("screencap"))
+        {
+            QImage image(1280,720,QImage::Format_RGB32); image.fill(Qt::green);
+            QByteArray png; QBuffer buffer(&png); buffer.open(QIODevice::WriteOnly); image.save(&buffer,"PNG");
+            _setmode(_fileno(stdout), _O_BINARY); fwrite(png.constData(),1,png.size(),stdout); return 0;
+        }
+        return 0;
+    }
+    const auto waitUntil = [&](const std::function<bool()>& condition, int timeout = 5000) {
+        QElapsedTimer timer; timer.start();
+        while (!condition() && timer.elapsed() < timeout) { app.processEvents(); QThread::msleep(5); }
+        return condition();
+    };
+    QTemporaryDir portable; check(portable.isValid(), "portable directory failed");
+    const auto copied = portable.filePath("PortableDemoTest.exe");
+    check(QFile::copy(app.applicationFilePath(),copied), "copy only test exe failed");
+    QProcess probe; auto environment = QProcessEnvironment::systemEnvironment(); environment.insert("PATH", "");
+    probe.setProcessEnvironment(environment); probe.setWorkingDirectory(portable.path());
+    probe.start(copied, {"--probe-bundled"});
+    check(probe.waitForFinished(15000) && probe.exitCode()==0, "embedded ADB failed without installed ADB or DLLs");
+    puts("PASS portable embedded ADB with empty PATH");
     ScreenshotLabel label;
     label.resize(642, 482);
     label.show();
@@ -53,6 +96,8 @@ int main(int argc, char** argv)
     label.resize(642,482);
     app.processEvents();
     check(selected == QRect(100,50,100,50), "resize changed device region");
+    label.setImage(image, true);
+    check(selected == QRect(100,50,100,50), "live frame cleared selected region");
     label.setImage(image);
     check(selected.isEmpty(), "new screenshot retained stale region");
     label.setSelectionMode(false);
@@ -83,6 +128,7 @@ int main(int argc, char** argv)
     target.show();
     target.raise();
     target.activateWindow();
+    SetWindowPos(reinterpret_cast<HWND>(target.winId()), HWND_TOPMOST, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
     app.processEvents();
     QEventLoop painted;
     QTimer::singleShot(250, &painted, &QEventLoop::quit);
@@ -100,6 +146,7 @@ int main(int argc, char** argv)
     WindowClientCapture::Geometry invalid;
     check(!WindowClientCapture::geometry(nullptr, invalid, error) && !error.isEmpty(),
         "invalid handle did not report failure");
+    SetWindowPos(hwnd, HWND_NOTOPMOST, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
     AdbDemo demo;
     demo.show();
     app.processEvents();
@@ -141,6 +188,35 @@ int main(int argc, char** argv)
     demo.findChild<QPushButton*>("bindWindowHandle")->click();
     demo.findChild<QPushButton*>("takeScreenshot")->click();
     check(preview->pixmap().isNull(), "invalid handle retained or captured stale image");
+    const auto parsed = parseDemoDevices("List of devices attached\nUSB123 device usb:1-2\nUSB456 unauthorized\n127.0.0.1:5555 device\nemulator-5554 device\n");
+    check(parsed.size()==4 && parsed[0].usb && parsed[1].usb && !parsed[2].usb && !parsed[3].usb, "USB list parsing failed");
+    source->setCurrentIndex(0);
+    demo.findChild<QLineEdit*>("adbPath")->setText(app.applicationFilePath());
+    demo.findChild<QComboBox*>("adbTransport")->setCurrentIndex(1);
+    auto* devices = demo.findChild<QComboBox*>("usbDevices");
+    check(waitUntil([&] { return devices->count()==2; }), "async USB enumeration failed");
+    auto* live = demo.findChild<QCheckBox*>("livePreview");
+    int ticks=0; QTimer heartbeat; heartbeat.setInterval(10);
+    QObject::connect(&heartbeat,&QTimer::timeout,[&] { ++ticks; }); heartbeat.start();
+    live->setChecked(true);
+    check(waitUntil([&] { return !preview->pixmap().isNull(); }), "USB live preview failed");
+    check(ticks > 5, "ADB blocked UI event loop");
+    preview->clicked({1279,719});
+    check(demo.findChild<QSpinBox*>("adbX")->value()==1279, "USB point mapping failed");
+    live->setChecked(false);
+    devices->setCurrentIndex(1); live->setChecked(true);
+    check(!live->isChecked() && preview->pixmap().isNull(), "unauthorized USB allowed capture");
+    devices->setCurrentIndex(0); live->setChecked(true);
+    source->setCurrentIndex(2);
+    QElapsedTimer cancelWait; cancelWait.start();
+    waitUntil([&] { return cancelWait.elapsed() > 500; });
+    check(preview->pixmap().isNull() && !live->isChecked(), "old ADB frame appeared after source switch");
+    demo.findChild<QPushButton*>("takeScreenshot")->click();
+    check(waitUntil([&] { return demo.isVisible() && !preview->pixmap().isNull(); }), "desktop capture failed");
+    { WindowClientCapture::DpiScope dpi; preview->clicked({0,0});
+      demo.findChild<QPushButton*>("copySnapshotDetails")->click();
+      check(QApplication::clipboard()->text().contains(QStringLiteral("坐标：(%1,%2)").arg(GetSystemMetrics(SM_XVIRTUALSCREEN)).arg(GetSystemMetrics(SM_YVIRTUALSCREEN))), "desktop origin conversion failed"); }
+    puts("PASS USB authorization, asynchronous live preview, source-switch cancellation and desktop coordinates");
     std::puts("Selection checks passed");
     return 0;
 }

@@ -61,17 +61,19 @@ inline bool geometry(HWND hwnd, Geometry& result, QString& error)
 }
 
 // Capture visible desktop pixels at the client rectangle. Handles GPU-rendered VM windows.
-inline QImage capture(HWND hwnd, Geometry& result, QString& error)
+inline QImage capture(HWND hwnd, Geometry& result, QString& error, bool fullDesktop = false)
 {
     DpiScope dpi;
-    if (!geometry(hwnd, result, error)) return {};
-    if (!IsWindowVisible(hwnd) || IsIconic(GetAncestor(hwnd, GA_ROOT)))
+    error.clear();
+    if (!fullDesktop && !geometry(hwnd, result, error)) return {};
+    if (!fullDesktop && (!IsWindowVisible(hwnd) || IsIconic(GetAncestor(hwnd, GA_ROOT))))
     {
         error = QStringLiteral("请先显示目标窗口并取消最小化");
         return {};
     }
     const QRect desktop(GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN),
         GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN));
+    if (fullDesktop) result = {desktop.size(), desktop.topLeft()};
     if (!desktop.contains(QRect(result.screenOrigin, result.size)))
     {
         error = QStringLiteral("客户区部分位于屏幕外，请将目标窗口移入屏幕");

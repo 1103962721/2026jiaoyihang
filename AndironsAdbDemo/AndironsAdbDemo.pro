@@ -1,9 +1,10 @@
 TEMPLATE = app
 TARGET = AndironsAdbDemo
-QT += widgets
+QT += widgets concurrent
 CONFIG += c++17 windows
 
-SOURCES += main.cpp
-HEADERS += WindowClientCapture.h
+SOURCES += main.cpp ../DF_PlayClick_Client_Qt/BundledAdb.cpp
+HEADERS += WindowClientCapture.h AsyncAdb.h
+RESOURCES += ../DF_PlayClick_Client_Qt/BundledAdb.qrc
 DEFINES += NOMINMAX WIN32_LEAN_AND_MEAN
 LIBS += -luser32 -lgdi32
