@@ -24,6 +24,7 @@
 #include "AccountBanMonitor.h"
 #include "AccountLoginSuccessMonitor.h"
 #include "AuctionControlAutomation.h"
+#include "AuctionPurchaseAutomation.h"
 
 struct ClickTask
 {
@@ -115,6 +116,8 @@ private:
     bool isPcAuctionBoss() const;
     bool bindAuctionWindow(bool showMessage = false);
     void startAuctionAction(AuctionControlAutomation::Mode mode, int requestId = 0);
+    void processAuctionPurchaseSync();
+    void handleAuctionPurchaseConfig(int revision, const QString& payload);
     bool hasEnabledTasks() const;
     void setReady(bool ready);
     void clearLocalReadyState();
@@ -192,6 +195,16 @@ private:
     ClientConfig config_;
     ClientConnection connection_;
     AuctionControlAutomation auctionAutomation_;
+    AuctionPurchaseAutomation auctionPurchaseAutomation_;
+    QTimer auctionPurchaseTimer_;
+    AuctionPurchase::Config pendingAuctionPurchase_;
+    int pendingAuctionPurchaseRevision_ = 0;
+    bool auctionCatalogPending_ = false;
+    QString auctionCatalogCache_;
+    HWND auctionCatalogHwnd_ = nullptr;
+    quint64 auctionPurchaseGeneration_ = 0;
+    quint64 auctionPurchaseWorkerGeneration_ = 0;
+    QVector<QPair<AuctionControlAutomation::Mode, int>> deferredAuctionActions_;
     HWND auctionHwnd_ = nullptr;
     AccountLoginAutomation accountLoginAutomation_;
     AccountBanMonitor accountBanMonitor_;

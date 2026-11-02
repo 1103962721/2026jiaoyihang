@@ -51,7 +51,12 @@ namespace Protocol
         AccountLoginResponse,
         AccountLoginStopRequest,
         ClientKicked,
-        ExecutionResponse
+        ExecutionResponse,
+        AuctionBinding,
+        AuctionCatalogRequest,
+        AuctionCatalog,
+        AuctionConfig,
+        AuctionConfigResult
     };
 
     enum class LoadoutType
@@ -102,6 +107,18 @@ namespace Protocol
     {
         return ready ? "READY 1\n" : "READY 0\n";
     }
+
+    inline std::string BuildAuctionBindingMessage(bool bound)
+    {
+        return bound ? "AUCTION_BINDING 1\n" : "AUCTION_BINDING 0\n";
+    }
+
+    inline std::string BuildAuctionCatalogRequestMessage() { return "AUCTION_CATALOG_REQUEST\n"; }
+    inline std::string BuildAuctionCatalogMessage(const std::string& data) { return "AUCTION_CATALOG " + data + "\n"; }
+    inline std::string BuildAuctionConfigMessage(int revision, const std::string& data)
+    { return "AUCTION_CONFIG " + std::to_string(revision) + " " + data + "\n"; }
+    inline std::string BuildAuctionConfigResultMessage(int revision, int status, const std::string& data)
+    { return "AUCTION_CONFIG_RESULT " + std::to_string(revision) + " " + std::to_string(status) + " " + data + "\n"; }
 
     inline std::string BuildTriggerMessage(int seconds, const std::string& bossPrice = {})
     {
@@ -302,7 +319,7 @@ namespace Protocol
     {
         return "LISTING_REQUEST " + std::to_string(requestId) + (hasExchange ? " 1 " : " 0 ") + std::to_string(purchaseCount)
             + (loadoutMode ? " 1 " : " 0 ")
-            + NormalizeLinePayload(price) + " " + NormalizeLinePayload(listingText) + "\n";
+            + (NormalizeLinePayload(price).empty() ? "-" : NormalizeLinePayload(price)) + " " + NormalizeLinePayload(listingText) + "\n";
     }
 
     inline std::string BuildListingResponseMessage(int requestId, bool success, const std::string& payload)
@@ -356,6 +373,16 @@ namespace Protocol
     inline bool ParseLine(const std::string& line, ParsedMessage& message)
     {
         message = ParsedMessage{};
+
+        if (line == "AUCTION_BINDING 0" || line == "AUCTION_BINDING 1")
+        {
+            message.type = MessageType::AuctionBinding;
+            message.value = line.back() - '0';
+            return true;
+        }
+
+        if (line == "AUCTION_CATALOG_REQUEST")
+        { message.type = MessageType::AuctionCatalogRequest; return true; }
 
         if (line == "PING")
         {
@@ -411,6 +438,20 @@ namespace Protocol
         if (stream.fail())
         {
             return false;
+        }
+
+        if (command == "AUCTION_CATALOG" || command == "AUCTION_CONFIG" || command == "AUCTION_CONFIG_RESULT")
+        {
+            if (command != "AUCTION_CATALOG" && (!(stream >> message.requestId) || message.requestId <= 0)) return false;
+            if (command == "AUCTION_CONFIG_RESULT" && (!(stream >> message.value) || message.value < 0 || message.value > 2)) return false;
+            if (!(stream >> message.payload) || message.payload.size() > 512000) return false;
+            for (char ch : message.payload)
+                if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_')) return false;
+            std::string extra;
+            if (stream >> extra) return false;
+            message.type = command == "AUCTION_CATALOG" ? MessageType::AuctionCatalog
+                : command == "AUCTION_CONFIG" ? MessageType::AuctionConfig : MessageType::AuctionConfigResult;
+            return true;
         }
 
         if (command == "HELLO")
@@ -812,6 +853,7 @@ namespace Protocol
             message.purchaseCount = purchaseCount;
             message.loadoutMode = loadoutMode == 1;
             message.price = price;
+            if (message.price == "-") message.price.clear();
             message.payload = listingText;
             return true;
         }

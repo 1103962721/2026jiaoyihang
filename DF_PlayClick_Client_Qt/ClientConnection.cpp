@@ -7,6 +7,7 @@
 
 #include "../Shared/ConnectionLifecyclePolicy.h"
 #include "../Shared/Protocol.h"
+#include "../Shared/AuctionPurchaseConfig.h"
 
 namespace
 {
@@ -301,6 +302,28 @@ bool ClientConnection::sendReady(bool ready)
 
     desiredReady_ = ready;
     return true;
+}
+
+bool ClientConnection::sendAuctionBinding(bool bound)
+{
+    if (!connected_ || socket_ == INVALID_SOCKET) return false;
+    std::lock_guard<std::mutex> lock(sendMutex_);
+    return SocketUtil::SendLine(socket_, Protocol::BuildAuctionBindingMessage(bound));
+}
+
+bool ClientConnection::sendAuctionCatalog(const QString& catalog)
+{
+    std::lock_guard<std::mutex> lock(sendMutex_);
+    return connected_ && socket_ != INVALID_SOCKET
+        && SocketUtil::SendLine(socket_, Protocol::BuildAuctionCatalogMessage(catalog.toStdString()));
+}
+
+bool ClientConnection::sendAuctionConfigResult(int revision, int status, const QString& text)
+{
+    const auto payload = AuctionPurchase::encode({{QStringLiteral("text"), text}});
+    std::lock_guard<std::mutex> lock(sendMutex_);
+    return connected_ && socket_ != INVALID_SOCKET
+        && SocketUtil::SendLine(socket_, Protocol::BuildAuctionConfigResultMessage(revision, status, payload.toStdString()));
 }
 
 bool ClientConnection::sendTeamCodeResponse(const QString& payload)
@@ -701,6 +724,19 @@ void ClientConnection::receiveLoop(SOCKET socketHandle, quint64 generation)
                         }, Qt::QueuedConnection);
                     }
                 }
+            }
+            else if (message.type == Protocol::MessageType::AuctionCatalogRequest)
+            {
+                QMetaObject::invokeMethod(this, [this, generation]() {
+                    if (connected_ && connectionGeneration_.load() == generation) emit auctionCatalogRequested();
+                }, Qt::QueuedConnection);
+            }
+            else if (message.type == Protocol::MessageType::AuctionConfig)
+            {
+                const auto config = QString::fromStdString(message.payload);
+                QMetaObject::invokeMethod(this, [this, generation, revision = message.requestId, config]() {
+                    if (connected_ && connectionGeneration_.load() == generation) emit auctionConfigReceived(revision, config);
+                }, Qt::QueuedConnection);
             }
             else if (message.type == Protocol::MessageType::Pong)
             {

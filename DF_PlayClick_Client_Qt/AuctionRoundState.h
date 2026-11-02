@@ -35,3 +35,28 @@ private:
     enum class Stage { Buy, BuyStarted, Sell, SellStarted, Complete };
     Stage stage_ = Stage::Buy;
 };
+
+class AuctionCoinState
+{
+public:
+    enum class Mode { Listing, Execution };
+    enum class Action { None, Invoke, Complete, Failed };
+    explicit AuctionCoinState(Mode mode) : mode_(mode) {}
+    Action observe(bool buyEnabled, bool sellEnabled)
+    {
+        if (!invoked_)
+            return (mode_ == Mode::Listing ? buyEnabled : sellEnabled) ? Action::Invoke : Action::Failed;
+        if (mode_ == Mode::Listing)
+        {
+            if (!buyEnabled) sawDisabled_ = true;
+            return sawDisabled_ && buyEnabled && sellEnabled ? Action::Complete : Action::None;
+        }
+        if (!sellEnabled) sawDisabled_ = true;
+        return sawDisabled_ && buyEnabled && !sellEnabled ? Action::Complete : Action::None;
+    }
+    void invoked() { invoked_ = true; }
+private:
+    Mode mode_;
+    bool invoked_ = false;
+    bool sawDisabled_ = false;
+};

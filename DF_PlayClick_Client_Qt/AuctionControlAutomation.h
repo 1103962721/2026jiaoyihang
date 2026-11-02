@@ -9,7 +9,7 @@ class AuctionControlAutomation : public QObject
 {
     Q_OBJECT
 public:
-    enum Mode { CheckReady, Prepare, Round };
+    enum Mode { CheckReady, Prepare, Round, CoinListing, CoinExecution };
     explicit AuctionControlAutomation(QObject* parent = nullptr);
     ~AuctionControlAutomation() override;
     static bool isTargetWindow(HWND hwnd);

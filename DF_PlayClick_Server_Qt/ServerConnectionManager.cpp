@@ -25,6 +25,28 @@ bool ServerConnectionManager::isListening() const
     return listening_.load();
 }
 
+bool ServerConnectionManager::requestAuctionCatalog(quint64 clientId, QString& errorText)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto client = findClientLocked(clientId);
+    if (!client || !client->connected || !client->auctionBound)
+    { errorText = QStringLiteral("客户端未连接或未绑定 Qt"); return false; }
+    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildAuctionCatalogRequestMessage()))
+    { errorText = QStringLiteral("发送 Qt 列表读取请求失败"); return false; }
+    return true;
+}
+
+bool ServerConnectionManager::sendAuctionConfig(quint64 clientId, int revision, const QString& config, QString& errorText)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto client = findClientLocked(clientId);
+    if (!client || !client->connected || !client->auctionBound)
+    { errorText = QStringLiteral("客户端未连接或未绑定 Qt"); return false; }
+    if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildAuctionConfigMessage(revision, config.toStdString())))
+    { errorText = QStringLiteral("发送 Qt 参数同步请求失败"); return false; }
+    return true;
+}
+
 bool ServerConnectionManager::startListening(int port, QString& errorText)
 {
     if (listening_.load())
@@ -166,11 +188,12 @@ int ServerConnectionManager::triggerClientsByIds(int seconds, const QVector<quin
         for (quint64 clientId : clientIds)
         {
             const auto client = findClientLocked(clientId);
-            if (client && client->connected && client->ready)
+            if (client && client->connected && client->ready && !client->actionRunning)
             {
                 // “执行”后币号会自动复用上架流程，先持有动作锁，确保 ListingResponse 不会被过滤。
                 client->actionRunning = true;
                 client->runningAction = QStringLiteral("执行中");
+                client->executionStatus.clear();
                 selectedClients.push_back(client);
             }
         }
@@ -260,6 +283,7 @@ bool ServerConnectionManager::sendScheduledTrigger(quint64 clientId, int seconds
         }
         client->actionRunning = true;
         client->runningAction = QStringLiteral("执行中");
+        client->executionStatus.clear();
     }
     if (!SocketUtil::SendLine(client->socketHandle, Protocol::BuildScheduledTriggerMessage(
         seconds, targetClientMs, bossPrice.toUtf8().toStdString())))
@@ -395,6 +419,7 @@ bool ServerConnectionManager::requestPrepare(quint64 clientId, int requestId, QS
         if (client->actionRunning) { errorText = QStringLiteral("该客户端正在执行：%1").arg(client->runningAction); return false; }
         client->actionRunning = true;
         client->runningAction = QStringLiteral("执行前准备检查");
+        client->pendingPrepareRequestId = requestId;
         client->teamReadyText = QStringLiteral("准备检查中");
         client->teamReadyState = -1;
     }
@@ -460,6 +485,9 @@ bool ServerConnectionManager::requestForceStopAction(quint64 clientId, QString& 
             return false;
         }
         // 先占住服务端动作锁，再发停止消息，避免客户端快速回 ACK 时发生“先解锁后又被写回停止中”。
+        if (client->stopRequested) return true;
+        client->stopRequested = true;
+        client->pendingPrepareRequestId = 0;
         client->actionRunning = true;
         client->runningAction = QStringLiteral("正在停止");
     }
@@ -621,18 +649,6 @@ bool ServerConnectionManager::requestLoadout(quint64 clientId, int requestId, co
 
 bool ServerConnectionManager::requestListing(quint64 clientId, int requestId, const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, bool loadoutMode, QString& errorText)
 {
-    if (!loadoutMode && listingText.trimmed().isEmpty())
-    {
-        errorText = QStringLiteral("上架文本不能为空");
-        return false;
-    }
-    bool priceOk = false;
-    const double priceValue = listingPrice.trimmed().toDouble(&priceOk);
-    if (!priceOk || priceValue <= 0.0)
-    {
-        errorText = QStringLiteral("请输入有效的上架价格");
-        return false;
-    }
     if (purchaseCount <= 0 || purchaseCount > 99)
     {
         errorText = QStringLiteral("购买次数必须在 1 到 99 之间");
@@ -652,6 +668,21 @@ bool ServerConnectionManager::requestListing(quint64 clientId, int requestId, co
         {
             errorText = QStringLiteral("上架功能仅对币号生效");
             return false;
+        }
+        if (!client->auctionBound)
+        {
+            if (!loadoutMode && listingText.trimmed().isEmpty())
+            {
+                errorText = QStringLiteral("上架文本不能为空");
+                return false;
+            }
+            bool priceOk = false;
+            const double priceValue = listingPrice.trimmed().toDouble(&priceOk);
+            if (!priceOk || priceValue <= 0.0)
+            {
+                errorText = QStringLiteral("请输入有效的上架价格");
+                return false;
+            }
         }
         if (client->actionRunning)
         {
@@ -792,6 +823,7 @@ bool ServerConnectionManager::setClientTeamReadyDisplay(quint64 clientId, const 
         }
         client->teamReadyText = text;
         client->teamReadyState = state;
+        client->manualReadyOverride = false;
         client->teamReadyCurrent = 0;
         client->teamReadyTotal = 0;
         client->teamReadyUpdatedAtMs = QDateTime::currentMSecsSinceEpoch();
@@ -806,15 +838,17 @@ bool ServerConnectionManager::resetClientTeamReadyDisplay(quint64 clientId)
     return setClientTeamReadyDisplay(clientId, QStringLiteral("未识别"), -1);
 }
 
-bool ServerConnectionManager::forceResetClientAction(quint64 clientId)
+bool ServerConnectionManager::forceResetClientAction(quint64 clientId, bool stopAckOnly)
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto client = findClientLocked(clientId);
-        if (!client)
+        if (!client || (stopAckOnly && !client->stopRequested))
         {
             return false;
         }
+        client->stopRequested = false;
+        client->pendingPrepareRequestId = 0;
         client->actionRunning = false;
         client->runningAction.clear();
         // 单客户端停止与“停止所有动作”保持相同的业务状态重置范围，
@@ -931,6 +965,7 @@ bool ServerConnectionManager::setClientRole(quint64 clientId, ClientRole role)
             return false;
         }
         client->role = role;
+        client->manualReadyOverride = false;
         client->listingStatus = role == ClientRole::Coin ? QStringLiteral("待执行") : QStringLiteral("不适用");
     }
 
@@ -956,6 +991,30 @@ bool ServerConnectionManager::setClientListingStatus(quint64 clientId, const QSt
             return false;
         }
         client->listingStatus = status;
+    }
+    emit clientsChanged();
+    return true;
+}
+
+bool ServerConnectionManager::setClientManualSuccess(quint64 clientId, QString& errorText)
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto client = findClientLocked(clientId);
+        if (!client || !client->connected)
+        { errorText = QStringLiteral("客户端已断开"); return false; }
+        if (client->actionRunning || client->stopRequested || client->pendingPrepareRequestId > 0)
+        { errorText = QStringLiteral("请先停止当前动作，再手动设置成功"); return false; }
+        if (client->role == ClientRole::Coin)
+            client->listingStatus = QStringLiteral("成功");
+        else
+        {
+            client->manualReadyOverride = true;
+            client->teamReadyState = 1;
+            client->teamReadyText = QStringLiteral("手动准备成功 [1/1]");
+            client->teamReadyCurrent = client->teamReadyTotal = 1;
+            client->teamReadyUpdatedAtMs = QDateTime::currentMSecsSinceEpoch();
+        }
     }
     emit clientsChanged();
     return true;
@@ -1099,14 +1158,17 @@ QVector<ClientListItem> ServerConnectionManager::clients() const
         item.deviceId = client->deviceId;
         item.clientNote = client->clientNote;
         item.ready = client->ready;
+        item.auctionBound = client->auctionBound;
         item.role = client->role;
         item.teamReadyText = client->teamReadyText;
         item.teamReadyState = client->teamReadyState;
+        item.manualReadyOverride = client->manualReadyOverride && client->teamReadyState == 1;
         item.teamReadyCurrent = client->teamReadyCurrent;
         item.teamReadyTotal = client->teamReadyTotal;
         item.teamReadyUpdatedAtMs = client->teamReadyUpdatedAtMs;
         item.teamCode = client->teamCode;
         item.runningAction = client->runningAction;
+        item.executionStatus = client->executionStatus;
     item.listingStatus = client->listingStatus;
     item.listingQuantityX = client->listingQuantityX;
     item.currentAmount = client->currentAmount;
@@ -1243,6 +1305,23 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
                 }
                 emit clientsChanged();
             }
+            else if (message.type == Protocol::MessageType::AuctionBinding)
+            {
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    client->auctionBound = message.value == 1;
+                }
+                emit auctionBindingChanged(client->id, message.value == 1);
+                emit clientsChanged();
+            }
+            else if (message.type == Protocol::MessageType::AuctionCatalog)
+            {
+                emit auctionCatalogReceived(client->id, QString::fromStdString(message.payload));
+            }
+            else if (message.type == Protocol::MessageType::AuctionConfigResult)
+            {
+                emit auctionConfigResultReceived(client->id, message.requestId, message.value, QString::fromStdString(message.payload));
+            }
             else if (message.type == Protocol::MessageType::TimeSyncResponse)
             {
                 qint64 serverSendMs = 0;
@@ -1282,10 +1361,13 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
             {
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
+                    // 停止收尾和旧状态回包不能释放新一轮准备检查的动作锁。
+                    if (client->stopRequested || client->pendingPrepareRequestId > 0) continue;
                     // 队伍准备状态独立显示，不混入 READY 准备状态列。
                     client->actionRunning = false;
                     client->runningAction.clear();
                     client->teamReadyState = message.value;
+                    client->manualReadyOverride = false;
                     client->teamReadyCurrent = message.current;
                     client->teamReadyTotal = message.total;
                     client->teamReadyUpdatedAtMs = QDateTime::currentMSecsSinceEpoch();
@@ -1298,20 +1380,23 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
             else if (message.type == Protocol::MessageType::PrepareResponse)
             {
                 const QString responseText = QString::fromUtf8(message.payload.data(), static_cast<int>(message.payload.size()));
-                if (message.value != 1)
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
-                    client->actionRunning = false;
-                    client->runningAction.clear();
-                    client->teamReadyState = message.success ? 1 : 0;
-                    client->teamReadyText = message.success ? QStringLiteral("准备成功") : QStringLiteral("准备失败");
-                    client->teamReadyUpdatedAtMs = QDateTime::currentMSecsSinceEpoch();
-                }
-                else
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    client->teamReadyText = QStringLiteral("准备失败，ESC 后重试");
-                    client->teamReadyState = 0;
+                    if (client->stopRequested || client->pendingPrepareRequestId != message.requestId) continue;
+                    client->manualReadyOverride = false;
+                    if (message.value != 1)
+                    {
+                        client->pendingPrepareRequestId = 0;
+                        client->actionRunning = false;
+                        client->runningAction.clear();
+                        client->teamReadyState = message.success ? 1 : 0;
+                        client->teamReadyText = message.success ? QStringLiteral("准备成功") : QStringLiteral("准备失败");
+                    }
+                    else
+                    {
+                        client->teamReadyText = QStringLiteral("准备失败，ESC 后重试");
+                        client->teamReadyState = 0;
+                    }
                     client->teamReadyUpdatedAtMs = QDateTime::currentMSecsSinceEpoch();
                 }
                 emit clientsChanged();
@@ -1387,7 +1472,7 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
                     std::lock_guard<std::mutex> lock(mutex_);
                     // 停止动作后服务端已清除 actionRunning；此时到达的旧上架回包
                     // 不能再次把“待执行”覆盖成“失败[0/N]”。
-                    if (client->actionRunning)
+                    if (client->actionRunning && !client->stopRequested)
                     {
                         // 上架回包后释放动作锁，并将 OCR 最终判断直接显示在对应币号行。
                         client->actionRunning = false;
@@ -1452,12 +1537,19 @@ void ServerConnectionManager::receiveLoop(std::shared_ptr<ClientEntry> client)
             else if (message.type == Protocol::MessageType::ExecutionResponse)
             {
                 const QString responseText = QString::fromUtf8(message.payload.data(), static_cast<int>(message.payload.size()));
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (client->stopRequested) continue;
+                    client->executionStatus = (message.success ? QStringLiteral("执行成功") : QStringLiteral("执行失败"))
+                        + (responseText.isEmpty() ? QString() : QStringLiteral("：") + responseText);
+                }
+                emit clientsChanged();
                 emit executionResponseReceived(client->id, message.success, responseText);
             }
             else if (message.type == Protocol::MessageType::ForceStopActionAck)
             {
-                forceResetClientAction(client->id);
-                emit forceStopActionAckReceived(client->id);
+                if (forceResetClientAction(client->id, true))
+                    emit forceStopActionAckReceived(client->id);
             }
             else if (message.type == Protocol::MessageType::AmountReport)
             {

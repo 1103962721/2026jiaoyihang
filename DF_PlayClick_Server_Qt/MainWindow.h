@@ -11,6 +11,7 @@
 #include <QTableWidget>
 #include <QTextEdit>
 #include <QTimer>
+#include <QComboBox>
 
 #include "ServerController.h"
 #include "ServerModels.h"
@@ -26,6 +27,7 @@ public:
 
 protected:
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+    void closeEvent(QCloseEvent* event) override;
 
 private:
     void buildUi();
@@ -42,6 +44,10 @@ private:
     void loadPersistentLoadoutSettings();
     void savePersistentLoadoutSettings() const;
     void appendConnectionLog(const QString& text);
+    void refreshPurchaseControls();
+    void connectPurchaseSignals();
+    void refreshPurchaseClients(const QVector<ClientListItem>& clients);
+    QString resolvedClientNote(const ClientListItem& client, const QVector<ClientListItem>& clients) const;
     quint64 clientIdForRow(int row) const;
     void showClientContextMenu(QTableWidget* table, const QPoint& position);
 
@@ -98,9 +104,20 @@ private:
     QPushButton* clearAccountsButton_ = nullptr;
     QPushButton* exportAccountsButton_ = nullptr;
     QPushButton* accountLoginAllButton_ = nullptr;
+    QPushButton* scriptLoginAllButton_ = nullptr;
     QTableWidget* clientTable_ = nullptr;
     QTableWidget* clientListTable_ = nullptr;
     QHash<QString, QString> clientNotes_;
     QTextEdit* connectionLogEdit_ = nullptr;
     QTimer serverTimeTimer_;
+    QComboBox* purchaseModeCombo_ = nullptr;
+    QComboBox* purchaseSlotCombo_ = nullptr;
+    QComboBox* purchaseAmmoCombo_ = nullptr;
+    QLineEdit* purchaseThresholdEdit_ = nullptr;
+    QLabel* purchaseThresholdLabel_ = nullptr;
+    QLabel* purchaseMemoryLabel_ = nullptr;
+    QLabel* purchaseStatusLabel_ = nullptr;
+    QLabel* purchaseWarningLabel_ = nullptr;
+    AuctionPurchase::Config purchaseDraft_;
+    QTimer purchaseEditTimer_;
 };

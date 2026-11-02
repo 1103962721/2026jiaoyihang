@@ -1,4 +1,4 @@
-#include <cassert>
+﻿#include <cassert>
 #include <string>
 #include "../Shared/Protocol.h"
 #include "../Shared/ClientRole.h"
@@ -9,6 +9,8 @@ int main()
     assert(Protocol::BuildHelloMessage() == "HELLO\n");
     assert(Protocol::BuildReadyMessage(true) == "READY 1\n");
     assert(Protocol::BuildReadyMessage(false) == "READY 0\n");
+    assert(Protocol::BuildAuctionBindingMessage(true) == "AUCTION_BINDING 1\n");
+    assert(Protocol::BuildAuctionBindingMessage(false) == "AUCTION_BINDING 0\n");
     assert(Protocol::BuildTriggerMessage(5) == "TRIGGER 5\n");
     assert(Protocol::BuildTriggerMessage(5, "123.50") == "TRIGGER 5 123.50\n");
     assert(Protocol::BuildScheduledTriggerMessage(2, 123456789, "88") == "SCHEDULED_TRIGGER 2 123456789 88\n");
@@ -32,6 +34,7 @@ int main()
     assert(Protocol::BuildSelfThunderResponseMessage(11, true, "完成") == "SELF_THUNDER_RESPONSE 11 OK 完成\n");
     assert(Protocol::BuildSelfThunderResponseMessage(11, false, "line\nbreak") == "SELF_THUNDER_RESPONSE 11 ERROR line break\n");
     assert(Protocol::BuildListingRequestMessage(21, true, 5, false, "99.50", "测试 上架 文本") == "LISTING_REQUEST 21 1 5 0 99.50 测试 上架 文本\n");
+    assert(Protocol::BuildListingRequestMessage(22, false, 1, true, "", "") == "LISTING_REQUEST 22 0 1 1 - \n");
     assert(Protocol::BuildListingResponseMessage(21, true, "识别到上架") == "LISTING_RESPONSE 21 OK 识别到上架\n");
     assert(Protocol::BuildMailRequestMessage(31) == "MAIL_REQUEST 31\n");
     assert(Protocol::BuildMailResponseMessage(31, true, "领取完成") == "MAIL_RESPONSE 31 OK 领取完成\n");
@@ -47,6 +50,16 @@ int main()
     assert(!Protocol::IsValidTeamReadyValue(3, 2));
 
     Protocol::ParsedMessage parsed{};
+    assert(Protocol::ParseLine("AUCTION_CATALOG_REQUEST", parsed) && parsed.type == Protocol::MessageType::AuctionCatalogRequest);
+    assert(Protocol::ParseLine(Protocol::BuildAuctionCatalogMessage("eyJ0ZXh0IjoiIn0"), parsed) && parsed.type == Protocol::MessageType::AuctionCatalog);
+    assert(Protocol::ParseLine(Protocol::BuildAuctionConfigMessage(3, "eyJ0ZXh0IjoiIn0"), parsed)
+        && parsed.type == Protocol::MessageType::AuctionConfig && parsed.requestId == 3);
+    assert(Protocol::ParseLine(Protocol::BuildAuctionConfigResultMessage(3, 2, "eyJ0ZXh0IjoiIn0"), parsed)
+        && parsed.type == Protocol::MessageType::AuctionConfigResult && parsed.value == 2);
+    assert(!Protocol::ParseLine("AUCTION_CONFIG 0 abc", parsed));
+    assert(!Protocol::ParseLine("AUCTION_CONFIG 2 bad$payload", parsed));
+    assert(!Protocol::ParseLine("AUCTION_CONFIG_RESULT 2 3 abc", parsed));
+    assert(!Protocol::ParseLine("AUCTION_CATALOG abc extra", parsed));
     assert(Protocol::ParseLine("HELLO", parsed));
     assert(parsed.type == Protocol::MessageType::Hello);
 
@@ -196,6 +209,11 @@ int main()
     assert(!parsed.loadoutMode);
     assert(parsed.price == "99.50");
     assert(parsed.payload == "测试 上架 文本");
+
+    assert(Protocol::ParseLine("AUCTION_BINDING 1", parsed));
+    assert(parsed.type == Protocol::MessageType::AuctionBinding && parsed.value == 1);
+    assert(Protocol::ParseLine("LISTING_REQUEST 22 0 1 1 - ", parsed));
+    assert(parsed.type == Protocol::MessageType::ListingRequest && parsed.price.empty() && parsed.payload.empty());
 
     assert(Protocol::ParseLine("LISTING_RESPONSE 21 OK 识别到上架", parsed));
     assert(parsed.type == Protocol::MessageType::ListingResponse);

@@ -105,425 +105,9 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
     return QMainWindow::nativeEvent(eventType, message, result);
 }
 
-void MainWindow::buildUi()
-{
-    setWindowTitle(QStringLiteral("DF 倒子弹服务端"));
-    setWindowFlag(Qt::FramelessWindowHint, true);
-    setAttribute(Qt::WA_StyledBackground, true);
-    // 不再强制固定大窗口；由布局计算初始尺寸，用户仍可自由缩放。
-    resize(1024, 812);
-    setMinimumSize(QSize(0, 0));
-
-    auto* central = new QWidget(this);
-    central->setObjectName(QStringLiteral("windowRoot"));
-    auto* root = new QVBoxLayout(central);
-    root->setContentsMargins(0, 0, 0, 0);
-    root->setSpacing(0);
-    root->addWidget(new FramelessTitleBar(QStringLiteral("DF 倒子弹服务端"), this, central));
-    root->addWidget(createAppHeader());
-
-    auto* body = new QWidget(central);
-    body->setObjectName(QStringLiteral("body"));
-    auto* bodyLayout = new QHBoxLayout(body);
-    bodyLayout->setContentsMargins(0, 0, 0, 0);
-    bodyLayout->setSpacing(0);
-
-    auto* sidebar = new QWidget(body);
-    sidebar->setObjectName(QStringLiteral("sidebar"));
-    sidebar->setFixedWidth(190);
-    auto* sidebarLayout = new QVBoxLayout(sidebar);
-    sidebarLayout->setContentsMargins(11, 10, 10, 10);
-    sidebarLayout->setSpacing(4);
-
-    auto* navCaption = new QLabel(QStringLiteral("工作区"), sidebar);
-    navCaption->setObjectName(QStringLiteral("navCaption"));
-    sidebarLayout->addWidget(navCaption);
-
-    auto* pageStack = new QStackedWidget(body);
-    auto* overviewPage = new QWidget(pageStack);
-    auto* clientsPage = new QWidget(pageStack);
-    auto* loadoutPage = new QWidget(pageStack);
-    auto* accountsPage = new QWidget(pageStack);
-    auto* logsPage = new QWidget(pageStack);
-    pageStack->addWidget(overviewPage);
-    pageStack->addWidget(clientsPage);
-    pageStack->addWidget(loadoutPage);
-    pageStack->addWidget(accountsPage);
-    pageStack->addWidget(logsPage);
-
-    auto* navGroup = new QButtonGroup(sidebar);
-    navGroup->setExclusive(true);
-    const QStringList navNames = {
-        QStringLiteral("总览与执行"), QStringLiteral("客户端列表"),
-        QStringLiteral("配装与上架"), QStringLiteral("账号管理"),
-        QStringLiteral("日志与状态")
-    };
-    for (int index = 0; index < navNames.size(); ++index)
-    {
-        auto* navButton = new QPushButton(navNames.at(index), sidebar);
-        navButton->setObjectName(QStringLiteral("pageNavButton"));
-        navButton->setCheckable(true);
-        navGroup->addButton(navButton, index);
-        sidebarLayout->addWidget(navButton);
-        connect(navButton, &QPushButton::clicked, pageStack, [pageStack, index]() {
-            pageStack->setCurrentIndex(index);
-        });
-        if (index == 0)
-            navButton->setChecked(true);
-    }
-
-    auto* menuHint = new QLabel(QStringLiteral("客户端行右键菜单保留角色、备注、单独上架、上号、换号、保存配装、领取邮件、重新绑定、停止动作和断开功能。"), sidebar);
-    menuHint->setObjectName(QStringLiteral("sidebarHint"));
-    menuHint->setWordWrap(true);
-
-    auto* listenLayout = new QVBoxLayout();
-    listenLayout->setSpacing(8);
-    auto* listenRow = new QHBoxLayout();
-    listenRow->setSpacing(7);
-    portEdit_ = new QLineEdit(controller_.defaultPortText(), this);
-    portEdit_->setMaximumWidth(240);
-    portEdit_->setPlaceholderText(QStringLiteral("监听端口"));
-    portEdit_->setValidator(new QIntValidator(1, 65535, portEdit_));
-    listenButton_ = new QPushButton(QStringLiteral("启动监听"), this);
-    stopButton_ = new QPushButton(QStringLiteral("停止监听"), this);
-    listenButton_->setMinimumWidth(74);
-    stopButton_->setMinimumWidth(74);
-    listenButton_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    stopButton_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    listenRow->addWidget(portEdit_);
-    listenRow->addStretch();
-    listenRow->addWidget(listenButton_);
-    listenRow->addWidget(stopButton_);
-    listenLayout->addLayout(listenRow);
-    auto* listenHint = new QLabel(QStringLiteral("新客户端连接后默认类型为「币号」。"), this);
-    listenHint->setObjectName(QStringLiteral("hintText"));
-    listenLayout->addWidget(listenHint);
-    listingQuantityTotalLabel_ = new QLabel(QStringLiteral("上架总数:0"), this);
-    listingQuantityTotalLabel_->setObjectName(QStringLiteral("listingQuantityTotal"));
-    listingQuantityTotalLabel_->setAlignment(Qt::AlignCenter);
-    listingQuantityTotalLabel_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-    listenLayout->addWidget(listingQuantityTotalLabel_);
-    listingSuccessClientsLabel_ = new QLabel(QStringLiteral("上架客户端:0/0"), this);
-    listingSuccessClientsLabel_->setObjectName(QStringLiteral("listingSuccessClients"));
-    listingSuccessClientsLabel_->setAlignment(Qt::AlignCenter);
-    listingSuccessClientsLabel_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-    auto* listingSuccessRow = new QHBoxLayout();
-    listingSuccessRow->setContentsMargins(0, 0, 0, 0);
-    listingSuccessRow->addStretch();
-    listingSuccessRow->addWidget(listingSuccessClientsLabel_);
-    listenLayout->insertLayout(0, listingSuccessRow);
-    auto* connectionCard = createCard(QStringLiteral("服务器连接"), listenLayout);
-
-    auto* actionRow = new QHBoxLayout();
-    actionRow->setSpacing(7);
-
-    auto* countdownBox = new QVBoxLayout();
-    countdownBox->setSpacing(4);
-    auto* countdownLabel = new QLabel(QStringLiteral("倒计时 / 秒"), this);
-    countdownLabel->setObjectName(QStringLiteral("fieldLabel"));
-    countdownEdit_ = new QLineEdit(QStringLiteral("1"), this);
-    countdownEdit_->setFixedWidth(250);
-    countdownEdit_->setValidator(new QIntValidator(0, 86400, countdownEdit_));
-    countdownBox->addWidget(countdownLabel);
-    countdownBox->addWidget(countdownEdit_);
-
-    auto* delayBox = new QVBoxLayout();
-    delayBox->setSpacing(4);
-    auto* delayLabel = new QLabel(QStringLiteral("分组延迟 / ms"), this);
-    delayLabel->setObjectName(QStringLiteral("fieldLabel"));
-    groupDelayEdit_ = new QLineEdit(QStringLiteral("100"), this);
-    groupDelayEdit_->setFixedWidth(250);
-    groupDelayEdit_->setValidator(new QIntValidator(0, 600000, groupDelayEdit_));
-    delayBox->addWidget(delayLabel);
-    delayBox->addWidget(groupDelayEdit_);
-
-    auto* compensationLeadBox = new QVBoxLayout();
-    compensationLeadBox->setSpacing(4);
-    auto* compensationLeadLabel = new QLabel(QStringLiteral("提前准备 / ms"), this);
-    compensationLeadLabel->setObjectName(QStringLiteral("fieldLabel"));
-    compensationLeadEdit_ = new QLineEdit(QStringLiteral("1500"), this);
-    compensationLeadEdit_->setFixedWidth(250);
-    compensationLeadEdit_->setValidator(new QIntValidator(0, 600000, compensationLeadEdit_));
-    compensationLeadEdit_->setToolTip(QStringLiteral("补偿模式下给客户端预留的同步和网络准备时间"));
-    compensationLeadBox->addWidget(compensationLeadLabel);
-    compensationLeadBox->addWidget(compensationLeadEdit_);
-
-    triggerAllButton_ = new QPushButton(QStringLiteral("执行"), this);
-    triggerAllButton_->setAccessibleName(QStringLiteral("全部出发"));
-    triggerAllButton_->setObjectName(QStringLiteral("executeButton"));
-    listingButton_ = new QPushButton(QStringLiteral("上架"), this);
-    listingButton_->setObjectName(QStringLiteral("listingButton"));
-    saveLoadoutButton_ = new QPushButton(QStringLiteral("保存配装"), this);
-    saveLoadoutButton_->setObjectName(QStringLiteral("saveLoadoutButton"));
-    rebindAllButton_ = new QPushButton(QStringLiteral("全部重新绑定"), this);
-    forceStopAllButton_ = new QPushButton(QStringLiteral("停止所有动作"), this);
-    forceStopAllButton_->setObjectName(QStringLiteral("forceStopAllButton"));
-    mailAllButton_ = new QPushButton(QStringLiteral("全部领取邮件"), this);
-    settingsButton_ = new QPushButton(QStringLiteral("设置"), this);
-    importAccountsButton_ = new QPushButton(QStringLiteral("导入账号"), this);
-    addAccountsButton_ = new QPushButton(QStringLiteral("增加账号"), this);
-    clearAccountsButton_ = new QPushButton(QStringLiteral("清空账号"), this);
-    exportAccountsButton_ = new QPushButton(QStringLiteral("导出账号"), this);
-    accountLoginAllButton_ = new QPushButton(QStringLiteral("一键上号"), this);
-    accountQueueLabel_ = new QLabel(QStringLiteral("账号队列：0/0"), this);
-    settingsButton_->setToolTip(QStringLiteral("设置发送顺序、执行模式、验证码方式和购买方式"));
-    actionRow->addLayout(countdownBox, 1);
-    actionRow->addLayout(delayBox, 1);
-    actionRow->addLayout(compensationLeadBox, 1);
-
-    auto* listingTextLabel = new QLabel(QStringLiteral("上架文本"), this);
-    listingTextLabel->setObjectName(QStringLiteral("fieldLabel"));
-    listingTextEdit_ = new QLineEdit(this);
-    listingTextEdit_->setPlaceholderText(QStringLiteral("请输入要粘贴的上架文本"));
-    listingTextEdit_->setClearButtonEnabled(true);
-    auto* listingTextBox = new QVBoxLayout();
-    listingTextBox->setSpacing(4);
-    listingTextBox->addWidget(listingTextLabel);
-    listingTextBox->addWidget(listingTextEdit_);
-
-    auto* listingOptionRow = new QHBoxLayout();
-    listingOptionRow->setSpacing(8);
-    listingOptionRow->addLayout(listingTextBox, 1);
-    auto* listingPriceLabel = new QLabel(QStringLiteral("上架价格"), this);
-    listingPriceLabel->setObjectName(QStringLiteral("fieldLabel"));
-    listingPriceEdit_ = new QLineEdit(this);
-    listingPriceEdit_->setPlaceholderText(QStringLiteral("请输入价格"));
-    auto* priceValidator = new QDoubleValidator(0.01, 999999999.0, 4, listingPriceEdit_);
-    priceValidator->setNotation(QDoubleValidator::StandardNotation);
-    listingPriceEdit_->setValidator(priceValidator);
-    auto* listingPurchaseCountLabel = new QLabel(QStringLiteral("购买次数"), this);
-    listingPurchaseCountLabel->setObjectName(QStringLiteral("fieldLabel"));
-    listingPurchaseCountSpin_ = new QSpinBox(this);
-    listingPurchaseCountSpin_->setRange(1, 99);
-    listingPurchaseCountSpin_->setValue(5);
-    listingPurchaseCountSpin_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    listingPurchaseCountSpin_->setToolTip(QStringLiteral("兑换类型按钮的重复点击次数"));
-    auto* priceBox = new QVBoxLayout();
-    priceBox->setSpacing(4);
-    priceBox->addWidget(listingPriceLabel);
-    priceBox->addWidget(listingPriceEdit_);
-    auto* purchaseCountBox = new QVBoxLayout();
-    purchaseCountBox->setSpacing(4);
-    purchaseCountBox->addWidget(listingPurchaseCountLabel);
-    purchaseCountBox->addWidget(listingPurchaseCountSpin_);
-    auto* autoExecuteRow = new QHBoxLayout();
-    autoExecuteRow->setSpacing(8);
-    auto* autoBossLabel = new QLabel(QStringLiteral("自动执行老板数"), this);
-    autoBossThresholdSpin_ = new QSpinBox(this);
-    autoBossThresholdSpin_->setRange(1, 99);
-    autoBossThresholdSpin_->setValue(1);
-    autoBossThresholdSpin_->setMaximumWidth(90);
-    autoBossThresholdSpin_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    auto* autoCoinLabel = new QLabel(QStringLiteral("自动执行币号数"), this);
-    autoCoinThresholdSpin_ = new QSpinBox(this);
-    autoCoinThresholdSpin_->setRange(1, 99);
-    autoCoinThresholdSpin_->setValue(1);
-    autoCoinThresholdSpin_->setMaximumWidth(90);
-    autoCoinThresholdSpin_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    auto* highPriceStopLabel = new QLabel(QStringLiteral("连续高价停止次数"), this);
-    highPriceStopThresholdSpin_ = new QSpinBox(this);
-    highPriceStopThresholdSpin_->setRange(1, 99);
-    highPriceStopThresholdSpin_->setValue(3);
-    highPriceStopThresholdSpin_->setFixedWidth(250);
-    highPriceStopThresholdSpin_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    highPriceStopThresholdSpin_->setToolTip(QStringLiteral("老板连续达到该次数高价时停止所有客户端"));
-    autoExecuteCheck_ = new QCheckBox(QStringLiteral("全自动执行"), this);
-    autoExecuteCheck_->setToolTip(QStringLiteral("勾选后，老板准备区域识别到数字且币号达到阈值时自动执行"));
-    autoExecuteRow->addWidget(autoExecuteCheck_);
-    autoExecuteRow->addWidget(autoBossLabel);
-    autoExecuteRow->addWidget(autoBossThresholdSpin_);
-    autoExecuteRow->addWidget(autoCoinLabel);
-    autoExecuteRow->addWidget(autoCoinThresholdSpin_);
-    autoExecuteRow->addWidget(rebindAllButton_);
-    autoExecuteRow->addWidget(mailAllButton_);
-    autoExecuteRow->addStretch();
-    listingOptionRow->addLayout(priceBox, 1);
-    listingOptionRow->addLayout(purchaseCountBox, 1);
-
-    auto* bossPriceRow = new QHBoxLayout();
-    bossPriceRow->setSpacing(8);
-    auto* bossPriceLabel = new QLabel(QStringLiteral("老板上架价格"), this);
-    bossPriceLabel->setObjectName(QStringLiteral("fieldLabel"));
-    bossPriceEdit_ = new QLineEdit(this);
-    bossPriceEdit_->setFixedWidth(250);
-    bossPriceEdit_->setPlaceholderText(QStringLiteral("执行时下发给老板客户端的价格"));
-    auto* bossPriceValidator = new QDoubleValidator(0.01, 999999999.0, 4, bossPriceEdit_);
-    bossPriceValidator->setNotation(QDoubleValidator::StandardNotation);
-    bossPriceEdit_->setValidator(bossPriceValidator);
-    auto* bossPriceBox = new QVBoxLayout();
-    bossPriceBox->setSpacing(4);
-    bossPriceBox->addWidget(bossPriceLabel);
-    bossPriceBox->addWidget(bossPriceEdit_);
-    auto* accountSwitchLabel = new QLabel(QStringLiteral("换号金额"), this);
-    accountSwitchLabel->setObjectName(QStringLiteral("fieldLabel"));
-    accountSwitchAmountEdit_ = new QLineEdit(accountSwitchAmount_, this);
-    accountSwitchAmountEdit_->setFixedWidth(250);
-    accountSwitchAmountEdit_->setPlaceholderText(QStringLiteral("空 / 0 关闭"));
-    auto* accountSwitchBox = new QVBoxLayout();
-    accountSwitchBox->setSpacing(4);
-    accountSwitchBox->addWidget(accountSwitchLabel);
-    accountSwitchBox->addWidget(accountSwitchAmountEdit_);
-    auto* highPriceStopBox = new QVBoxLayout();
-    highPriceStopBox->setSpacing(4);
-    highPriceStopBox->addWidget(highPriceStopLabel);
-    highPriceStopBox->addWidget(highPriceStopThresholdSpin_);
-    bossPriceRow->addLayout(bossPriceBox, 1);
-    bossPriceRow->addLayout(accountSwitchBox, 1);
-    bossPriceRow->addLayout(highPriceStopBox, 1);
-    auto* parameterLayout = new QVBoxLayout();
-    parameterLayout->setSpacing(8);
-    parameterLayout->addLayout(actionRow);
-    parameterLayout->addLayout(bossPriceRow);
-    parameterLayout->addLayout(autoExecuteRow);
-    auto* overviewLayout = new QVBoxLayout(overviewPage);
-    overviewLayout->setContentsMargins(0, 0, 0, 0);
-    overviewLayout->setSpacing(8);
-    auto* overviewActionRow = new QHBoxLayout();
-    auto* overviewHeading = new QLabel(QStringLiteral("总览与执行"), overviewPage);
-    overviewHeading->setObjectName(QStringLiteral("pageHeading"));
-    auto* overviewHint = new QLabel(QStringLiteral("常用调度入口"), overviewPage);
-    overviewHint->setObjectName(QStringLiteral("pageHint"));
-    overviewActionRow->addWidget(overviewHeading);
-    overviewActionRow->addWidget(overviewHint);
-    overviewActionRow->addStretch();
-    overviewActionRow->addWidget(triggerAllButton_);
-    overviewActionRow->addWidget(listingButton_);
-    overviewActionRow->addWidget(forceStopAllButton_);
-    overviewActionRow->addWidget(settingsButton_);
-    overviewLayout->addLayout(overviewActionRow);
-    overviewLayout->addWidget(createCard(QStringLiteral("执行参数"), parameterLayout));
-
-    auto* tableLayout = new QVBoxLayout();
-    tableLayout->setContentsMargins(0, 0, 0, 0);
-    clientTable_ = new QTableWidget(0, 7, this);
-    clientTable_->setHorizontalHeaderLabels({
-        QStringLiteral("客户端 IP / ADB端口"), QStringLiteral("角色 / 备注"),
-        QStringLiteral("上架/准备状态"), QStringLiteral("期望金额"), QStringLiteral("当前金额"),
-        QStringLiteral("累计收益"), QStringLiteral("低价/高价")
-    });
-    // 各列使用接近均衡的固定宽度，避免 IP 列独占大量空间。
-    clientTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    clientTable_->verticalHeader()->setVisible(false);
-    clientTable_->verticalHeader()->setDefaultSectionSize(40);
-    clientTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    clientTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    clientTable_->setSelectionMode(QAbstractItemView::SingleSelection);
-    clientTable_->setContextMenuPolicy(Qt::CustomContextMenu);
-    QFont clientTableFont = clientTable_->font();
-    clientTableFont.setBold(true);
-    clientTable_->setFont(clientTableFont);
-    tableLayout->addWidget(clientTable_);
-    auto* clientPageLayout = new QVBoxLayout(clientsPage);
-    clientPageLayout->setContentsMargins(0, 0, 0, 0);
-    clientPageLayout->setSpacing(8);
-    auto* clientsHeading = new QLabel(QStringLiteral("客户端列表"), clientsPage);
-    clientsHeading->setObjectName(QStringLiteral("pageHeading"));
-    clientPageLayout->addWidget(clientsHeading);
-    clientListTable_ = new QTableWidget(0, 7, clientsPage);
-    clientListTable_->setHorizontalHeaderLabels({
-        QStringLiteral("客户端 IP / ADB端口"), QStringLiteral("角色 / 备注"),
-        QStringLiteral("上架/准备状态"), QStringLiteral("期望金额"), QStringLiteral("当前金额"),
-        QStringLiteral("累计收益"), QStringLiteral("低价/高价")
-    });
-    clientListTable_->horizontalHeader()->setDefaultAlignment(Qt::AlignCenter);
-    clientListTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    clientListTable_->verticalHeader()->setVisible(false);
-    clientListTable_->verticalHeader()->setDefaultSectionSize(40);
-    clientListTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    clientListTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    clientListTable_->setSelectionMode(QAbstractItemView::SingleSelection);
-    clientListTable_->setContextMenuPolicy(Qt::CustomContextMenu);
-    QFont clientListTableFont = clientListTable_->font();
-    clientListTableFont.setBold(true);
-    clientListTable_->setFont(clientListTableFont);
-    clientPageLayout->addWidget(clientListTable_);
-
-    flowPreviewLabel_ = new QLabel(this);
-    flowPreviewLabel_->setObjectName(QStringLiteral("flowPreview"));
-    flowPreviewLabel_->setWordWrap(true);
-    connectionLogEdit_ = new QTextEdit(this);
-    connectionLogEdit_->setObjectName(QStringLiteral("connectionLog"));
-    connectionLogEdit_->setReadOnly(true);
-    connectionLogEdit_->setPlaceholderText(QStringLiteral("监听、连接与调度日志将在这里显示。"));
-    statusLabel_ = new QLabel(QStringLiteral("等待操作"), this);
-    statusLabel_->setObjectName(QStringLiteral("statusLabel"));
-    auto* statusRow = new QHBoxLayout();
-    statusRow->addWidget(statusLabel_, 1);
-    serverTimeLabel_ = new QLabel(QStringLiteral("服务器时间：%1").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))), this);
-    serverTimeLabel_->setObjectName(QStringLiteral("serverTimeLabel"));
-    statusRow->addWidget(serverTimeLabel_);
-    overviewLayout->addWidget(createCard(QStringLiteral("客户端状态"), tableLayout), 3);
-    overviewLayout->addLayout(statusRow);
-    overviewLayout->addWidget(connectionLogEdit_, 1);
-
-    auto* loadoutPageLayout = new QVBoxLayout(loadoutPage);
-    loadoutPageLayout->setContentsMargins(0, 0, 0, 0);
-    loadoutPageLayout->setSpacing(8);
-    auto* loadoutHeaderRow = new QHBoxLayout();
-    loadoutHeaderRow->setContentsMargins(0, 0, 0, 0);
-    loadoutHeaderRow->setSpacing(8);
-    auto* loadoutHeading = new QLabel(QStringLiteral("配装与上架"), loadoutPage);
-    loadoutHeading->setObjectName(QStringLiteral("pageHeading"));
-    loadoutHeaderRow->addWidget(loadoutHeading);
-    loadoutHeaderRow->addStretch();
-    loadoutHeaderRow->addWidget(saveLoadoutButton_);
-    loadoutPageLayout->addLayout(loadoutHeaderRow);
-    auto* listingSettingsLayout = new QVBoxLayout();
-    listingSettingsLayout->setSpacing(10);
-    listingSettingsLayout->addLayout(listingOptionRow);
-    auto* listingSettingsCard = createCard(QStringLiteral("上架参数"), listingSettingsLayout);
-    listingSettingsCard->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    loadoutPageLayout->addWidget(listingSettingsCard);
-    loadoutPageLayout->addStretch(1);
-
-    auto* accountsPageLayout = new QVBoxLayout(accountsPage);
-    accountsPageLayout->setContentsMargins(0, 0, 0, 0);
-    accountsPageLayout->setSpacing(8);
-    auto* accountsHeading = new QLabel(QStringLiteral("账号管理"), accountsPage);
-    accountsHeading->setObjectName(QStringLiteral("pageHeading"));
-    accountsPageLayout->addWidget(accountsHeading);
-    auto* accountActions = new QHBoxLayout();
-    accountActions->addWidget(importAccountsButton_);
-    accountActions->addWidget(addAccountsButton_);
-    accountActions->addWidget(clearAccountsButton_);
-    accountActions->addWidget(exportAccountsButton_);
-    accountActions->addWidget(accountLoginAllButton_);
-    accountActions->addWidget(accountQueueLabel_);
-    accountActions->addStretch();
-    accountsPageLayout->addLayout(accountActions);
-    accountsPageLayout->addWidget(new QLabel(QStringLiteral("低资金换号和批量维护入口已集中到“总览与执行”页。"), accountsPage));
-    accountsPageLayout->addStretch();
-
-    auto* logPageLayout = new QVBoxLayout(logsPage);
-    logPageLayout->setContentsMargins(0, 0, 0, 0);
-    logPageLayout->setSpacing(8);
-    auto* logsHeading = new QLabel(QStringLiteral("日志与状态"), logsPage);
-    logsHeading->setObjectName(QStringLiteral("pageHeading"));
-    logPageLayout->addWidget(logsHeading);
-    auto* logStatusHint = new QLabel(QStringLiteral("状态摘要显示在总览页底部，详细连接日志如下。"), logsPage);
-    logStatusHint->setObjectName(QStringLiteral("pageHint"));
-    logPageLayout->addWidget(logStatusHint);
-    logPageLayout->addWidget(flowPreviewLabel_);
-
-    logPageLayout->addWidget(connectionCard);
-    logPageLayout->addStretch(1);
-
-    sidebarLayout->addWidget(menuHint);
-    sidebarLayout->addStretch(1);
-    bodyLayout->addWidget(sidebar);
-    auto* pageArea = new QWidget(body);
-    auto* pageAreaLayout = new QVBoxLayout(pageArea);
-    pageAreaLayout->setContentsMargins(20, 16, 20, 16);
-    pageAreaLayout->addWidget(pageStack);
-    bodyLayout->addWidget(pageArea, 1);
-
-    root->addWidget(body, 1);
-    setCentralWidget(central);
-    applyStyle();
-}
-
 void MainWindow::connectSignals()
 {
+    connectPurchaseSignals();
     const auto syncListingParameters = [this]() {
         controller_.updateGlobalListingParameters(
             listingTextEdit_->text(), listingPriceEdit_->text(), listingPurchaseCountSpin_->value());
@@ -589,15 +173,20 @@ void MainWindow::connectSignals()
         QAction* noteAction = menu.addAction(QStringLiteral("编辑备注"));
         QAction* clearNoteAction = menu.addAction(QStringLiteral("清空备注"));
         QAction* clearDataAction = menu.addAction(QStringLiteral("清除当前数据"));
+        QAction* manualSuccessAction = menu.addAction(client.role == ClientRole::Coin
+            ? QStringLiteral("手动设置上架成功") : QStringLiteral("手动设置准备成功 [1/1]"));
+        manualSuccessAction->setEnabled(client.connected && !client.actionRunning);
         menu.addSeparator();
         QAction* listingAction = nullptr;
         if (client.role == ClientRole::Coin)
             listingAction = menu.addAction(QStringLiteral("单独上架"));
         QAction* accountLoginAction = nullptr;
+        QAction* scriptLoginAction = nullptr;
         QAction* accountSwitchAction = nullptr;
         if (client.role == ClientRole::Coin)
         {
             accountLoginAction = menu.addAction(QStringLiteral("上号"));
+            scriptLoginAction = menu.addAction(QStringLiteral("脚本上号"));
             accountSwitchAction = menu.addAction(QStringLiteral("换号"));
         }
         QAction* loadoutAction = menu.addAction(QStringLiteral("保存配装"));
@@ -650,6 +239,8 @@ void MainWindow::connectSignals()
         {
             controller_.clearClientData(clientId);
         }
+        else if (chosen == manualSuccessAction)
+            controller_.setClientManualSuccess(clientId);
         else if (chosen == listingAction)
             controller_.startListingForClient(clientId, listingTextEdit_->text(), listingPriceEdit_->text(), false, listingPurchaseCountSpin_->value(), !tradePurchase_);
         else if (chosen == accountLoginAction)
@@ -658,6 +249,8 @@ void MainWindow::connectSignals()
                 listingTextEdit_->text(), listingPriceEdit_->text(), listingPurchaseCountSpin_->value()))
                 controller_.startAccountLogin(clientId);
         }
+        else if (chosen == scriptLoginAction)
+            controller_.startScriptAccountLogin(clientId);
         else if (chosen == accountSwitchAction)
         {
             if (controller_.setAccountLoginConfig(clientId,
@@ -718,6 +311,7 @@ void MainWindow::connectSignals()
         controller_.startAccountLoginForAllCoins();
         appendConnectionLog(QStringLiteral("已提交全体币号一键上号任务。"));
     });
+    connect(scriptLoginAllButton_, &QPushButton::clicked, &controller_, &ServerController::startScriptAccountLoginForAllCoins);
     connect(&controller_, &ServerController::accountQueueChanged, this, [this](int total, int remaining, int) {
         if (accountQueueLabel_)
             accountQueueLabel_->setText(QStringLiteral("账号队列：%1/%2").arg(remaining).arg(total));
@@ -772,7 +366,7 @@ void MainWindow::connectSignals()
     });
     connect(&controller_, &ServerController::incompleteTriggerRequested, this, [this]() {
         const auto answer = QMessageBox::question(this, QStringLiteral("客户端数量不足"),
-            QStringLiteral("当前不满足一整组，是否仍继续下发当前可用客户端？"),
+            QStringLiteral("当前不满足一整组，是否强制下发给空闲且已准备的客户端？\n币号将忽略上架成功状态，Qt 老板将跳过执行前准备检查；正在执行或停止中的客户端仍需等待结束。"),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         if (answer == QMessageBox::Yes)
         {
@@ -1030,10 +624,11 @@ QWidget* MainWindow::createCard(const QString& title, QLayout* contentLayout)
     auto* card = new QWidget(this);
     card->setObjectName(QStringLiteral("card"));
     auto* layout = new QVBoxLayout(card);
-    layout->setContentsMargins(13, 11, 13, 11);
-    layout->setSpacing(8);
+    layout->setContentsMargins(17, 17, 17, 17);
+    layout->setSpacing(15);
     auto* titleLabel = new QLabel(title, card);
     titleLabel->setObjectName(QStringLiteral("cardTitle"));
+    titleLabel->setFixedHeight(21);
     layout->addWidget(titleLabel);
     layout->addLayout(contentLayout);
     return card;
@@ -1107,6 +702,42 @@ void MainWindow::applyStyle()
         #serverTimeLabel { color:#667085; padding:7px; }
         #connectionLog { background:#182230; color:#b7f7c5; border:1px solid #344054; border-radius:6px; padding:8px; font-family:"Consolas","Microsoft YaHei UI"; }
     )"));
+    setStyleSheet(styleSheet() + QStringLiteral(R"(
+        QWidget { font-family:"Microsoft YaHei UI"; font-size:14px; font-weight:400; color:#233047; }
+        QMainWindow, #windowRoot, #body, #overviewContent, QScrollArea, QScrollArea > QWidget > QWidget { background:#f4f6fa; }
+        #windowRoot { border:1px solid #dce3ec; border-radius:10px; }
+        #framelessTitleBar { background:#ffffff; border-bottom:1px solid #dce3ec; }
+        #windowTitleText { font-size:16px; font-weight:400; color:#233047; }
+        #sidebar { background:#ffffff; border-right:1px solid #dce3ec; }
+        #pageNavButton { min-height:43px; max-height:43px; text-align:left; padding:0 12px; color:#66748a; background:transparent; border:0; border-radius:6px; font-weight:400; }
+        #pageNavButton:checked { background:#edf3ff; color:#245ed6; }
+        #pageHeading { font-size:19px; font-weight:400; color:#233047; }
+        #card { background:#ffffff; border:1px solid #dce3ec; border-radius:8px; }
+        #cardTitle { font-size:14px; font-weight:400; color:#233047; }
+        #fieldLabel { color:#233047; font-size:14px; }
+        #sectionHint { color:#66748a; font-size:12px; }
+        #purchaseScope { color:#245ed6; font-size:12px; }
+        #purchaseWarning { color:#925813; font-size:12px; border-top:1px solid #dce3ec; padding-top:12px; margin-top:0px; }
+        QLineEdit, QSpinBox, QComboBox { min-height:38px; max-height:38px; border:1px solid #dce3ec; border-radius:6px; padding:0 10px; color:#233047; background:#ffffff; font-size:14px; font-weight:400; }
+        QLineEdit, QSpinBox { min-height:39px; max-height:39px; }
+        QComboBox::drop-down { border:0; width:24px; }
+        QComboBox::down-arrow { image:url(:/purchase-chevron.png); width:12px; height:12px; }
+        QComboBox QAbstractItemView { background:#ffffff; color:#233047; selection-background-color:#edf3ff; border:1px solid #dce3ec; }
+        QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color:#245ed6; }
+        QPushButton { min-height:35px; max-height:35px; border:1px solid #dce3ec; border-radius:6px; padding:0 15px; background:#ffffff; color:#233047; font-weight:400; }
+        QPushButton:disabled { background:#ffffff; color:#66748a; border-color:#dce3ec; }
+        #inlineButton { min-height:33px; max-height:33px; padding:0 9px; font-size:14px; }
+        #inlineSpin { min-height:33px; max-height:33px; padding:0 8px; font-size:14px; }
+        QCheckBox { font-weight:400; font-size:14px; spacing:6px; min-height:21px; color:#233047; }
+        QCheckBox::indicator { width:14px; height:14px; border:1px solid #98a2b3; border-radius:2px; background:#ffffff; }
+        QTableWidget { background:#ffffff; color:#233047; border:0; selection-background-color:#edf3ff; font-size:12px; font-weight:400; }
+        QTableWidget::item { padding:8px; border-bottom:1px solid #dce3ec; }
+        QTableWidget::item:selected { color:#233047; background:#edf3ff; }
+        QHeaderView::section { background:#ffffff; color:#66748a; border:0; border-bottom:1px solid #dce3ec; padding:0 8px 10px 8px; font-size:12px; font-weight:400; }
+        #statusLabel { padding:0; background:transparent; color:#233047; font-size:12px; }
+        #serverTimeLabel { padding:0; color:#66748a; font-size:12px; }
+        #connectionLog { background:#192433; color:#a6c7ca; border:1px solid #dce3ec; border-radius:6px; padding:12px; font-family:"Microsoft YaHei UI"; font-size:12px; }
+    )"));
 }
 
 void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
@@ -1150,11 +781,11 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
             ? QStringLiteral("border:1px solid #86efac;border-radius:9px;background:#f0fdf4;color:#15803d;padding:6px 10px;font-size:14px;font-weight:800;")
             : QStringLiteral("border:1px solid #fca5a5;border-radius:9px;background:#fef2f2;color:#b91c1c;padding:6px 10px;font-size:14px;font-weight:800;"));
     }
-    clientTable_->setRowCount(0);
+    clientListTable_->setRowCount(0);
     for (const ClientListItem& client : displayClients)
     {
-        const int row = clientTable_->rowCount();
-        clientTable_->insertRow(row);
+        const int row = clientListTable_->rowCount();
+        clientListTable_->insertRow(row);
 
         QString displayAddress = client.ip;
         const QString deviceId = client.deviceId.trimmed();
@@ -1166,18 +797,16 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
         }
         auto* ipItem = new QTableWidgetItem(displayAddress);
         ipItem->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(client.id));
-        clientTable_->setItem(row, 0, ipItem);
+        clientListTable_->setItem(row, 0, ipItem);
 
         const QString roleText = QString::fromStdWString(ClientRoleUtil::ToDisplayText(client.role));
         // 当前连接对象的备注优先于持久化缓存，避免旧设备键或重复 deviceId
         // 在刷新时覆盖另一条连接的独立备注。
-        const QString displayNote = !client.clientNote.isEmpty()
-            ? client.clientNote
-            : clientNotes_.value(clientNoteKey(client, clients));
+        const QString displayNote = resolvedClientNote(client, clients);
         auto* roleNoteItem = new QTableWidgetItem(QStringLiteral("%1 / %2").arg(roleText,
             displayNote.isEmpty() ? QStringLiteral("（无备注）") : displayNote));
         roleNoteItem->setToolTip(displayNote);
-        clientTable_->setItem(row, 1, roleNoteItem);
+        clientListTable_->setItem(row, 1, roleNoteItem);
 
         const QString displayStatus = client.role == ClientRole::Coin
             ? client.listingStatus
@@ -1211,73 +840,37 @@ void MainWindow::refreshClients(const QVector<ClientListItem>& clients)
         {
             listingStatusItem->setForeground(QColor(QStringLiteral("#64748b")));
         }
-        clientTable_->setItem(row, 2, listingStatusItem);
+        clientListTable_->setItem(row, 2, listingStatusItem);
 
         const bool isBoss = client.role == ClientRole::Boss;
         if (isBoss)
         {
-            auto* expectedEdit = new QLineEdit(client.expectedAmount == QStringLiteral("-") ? QString() : client.expectedAmount, clientTable_);
+            auto* expectedEdit = new QLineEdit(client.expectedAmount == QStringLiteral("-") ? QString() : client.expectedAmount, clientListTable_);
             expectedEdit->setObjectName(QStringLiteral("expectedAmountEdit"));
             expectedEdit->setPlaceholderText(QStringLiteral("期望金额"));
             expectedEdit->setValidator(new QIntValidator(0, 2147483647, expectedEdit));
             connect(expectedEdit, &QLineEdit::editingFinished, this, [this, expectedEdit, clientId = client.id]() {
                 controller_.setBossExpectedAmount(clientId, expectedEdit->text());
             });
-            clientTable_->setCellWidget(row, 3, expectedEdit);
+            clientListTable_->setCellWidget(row, 3, expectedEdit);
         }
         else
         {
-            clientTable_->setItem(row, 3, new QTableWidgetItem(QStringLiteral("-")));
+            clientListTable_->setItem(row, 3, new QTableWidgetItem(QStringLiteral("-")));
         }
-        clientTable_->setItem(row, 4, new QTableWidgetItem(
+        clientListTable_->setItem(row, 4, new QTableWidgetItem(
             formatAmountForDisplay(client.currentAmount)));
-        clientTable_->setItem(row, 5, new QTableWidgetItem(
+        clientListTable_->setItem(row, 5, new QTableWidgetItem(
             isBoss && client.hasAmountBaseline ? formatAmountForDisplay(QString::number(client.cumulativeIncome))
                 : QStringLiteral("-")));
-        clientTable_->setItem(row, 6, new QTableWidgetItem(isBoss
+        clientListTable_->setItem(row, 6, new QTableWidgetItem(isBoss
             ? QStringLiteral("低价:%1 / 高价:%2").arg(client.lowPriceCount).arg(client.highPriceCount)
             : QStringLiteral("-")));
 
-        auto* idItem = clientTable_->item(row, 0);
+        auto* idItem = clientListTable_->item(row, 0);
         idItem->setData(Qt::UserRole + 1, client.deviceId);
     }
-    if (clientListTable_)
-    {
-        clientListTable_->setRowCount(0);
-        for (int sourceRow = 0; sourceRow < clientTable_->rowCount(); ++sourceRow)
-        {
-            const ClientListItem& client = displayClients.at(sourceRow);
-            const int row = clientListTable_->rowCount();
-            clientListTable_->insertRow(row);
-            for (int column = 0; column < clientTable_->columnCount(); ++column)
-            {
-                QString text;
-                const QTableWidgetItem* sourceItem = clientTable_->item(sourceRow, column);
-                if (column == 3 && client.role == ClientRole::Boss)
-                {
-                    text = client.expectedAmount == QStringLiteral("-")
-                        ? QStringLiteral("-") : formatAmountForDisplay(client.expectedAmount);
-                }
-                else if (sourceItem)
-                {
-                    text = sourceItem->text();
-                }
-                auto* item = new QTableWidgetItem(text);
-                item->setFont(clientListTable_->font());
-                if (sourceItem)
-                {
-                    item->setForeground(sourceItem->foreground());
-                }
-                item->setTextAlignment(Qt::AlignCenter);
-                if (column == 0)
-                {
-                    item->setData(Qt::UserRole, QVariant::fromValue<qulonglong>(client.id));
-                    item->setData(Qt::UserRole + 1, client.deviceId);
-                }
-                clientListTable_->setItem(row, column, item);
-            }
-        }
-    }
+    refreshPurchaseClients(displayClients);
     clientCountBadge_->setText(QStringLiteral("%1 客户端").arg(clients.size()));
 }
 
@@ -1287,6 +880,11 @@ void MainWindow::updateListeningState(bool listening)
     listenButton_->setEnabled(!listening);
     stopButton_->setEnabled(listening);
     listenBadge_->setText(listening ? QStringLiteral("监听中") : QStringLiteral("未监听"));
+}
+
+QString MainWindow::resolvedClientNote(const ClientListItem& client, const QVector<ClientListItem>& clients) const
+{
+    return client.clientNote.isEmpty() ? clientNotes_.value(clientNoteKey(client, clients)) : client.clientNote;
 }
 
 void MainWindow::updateStatus(const QString& text, ServerStatusTone tone)

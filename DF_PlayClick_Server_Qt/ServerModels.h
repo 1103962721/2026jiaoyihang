@@ -23,14 +23,17 @@ struct ClientListItem
     QString deviceId;
     QString clientNote;
     bool ready = false;
+    bool auctionBound = false;
     ClientRole role = ClientRoleUtil::DefaultRole;
     QString teamReadyText;
     int teamReadyState = -1;
+    bool manualReadyOverride = false;
     int teamReadyCurrent = 0;
     int teamReadyTotal = 0;
     qint64 teamReadyUpdatedAtMs = 0;
     QString teamCode;
     QString runningAction;
+    QString executionStatus;
     QString listingStatus = QStringLiteral("待执行");
     int listingQuantityX = -1;
     QString currentAmount = QStringLiteral("-");

@@ -54,13 +54,14 @@ public:
     bool requestAccountLogin(quint64 clientId, int requestId, const QString& username, const QString& password, QString& errorText);
     bool setClientTeamReadyDisplay(quint64 clientId, const QString& text, int state);
     bool resetClientTeamReadyDisplay(quint64 clientId);
-    bool forceResetClientAction(quint64 clientId);
+    bool forceResetClientAction(quint64 clientId, bool stopAckOnly = false);
     bool clearClientData(quint64 clientId, QString& errorText);
     bool resetConsecutiveHighPriceCount(quint64 clientId);
     bool setClientTeamCode(quint64 clientId, const QString& teamCode, QString& errorText);
     bool setClientNote(quint64 clientId, const QString& note);
     bool setClientRole(quint64 clientId, ClientRole role);
     bool setClientListingStatus(quint64 clientId, const QString& status);
+    bool setClientManualSuccess(quint64 clientId, QString& errorText);
     bool resetClientListingQuantity(quint64 clientId);
     bool updateBossAmount(quint64 clientId, qint64 amount, QString& errorText);
     bool setBossExpectedAmount(quint64 clientId, qint64 amount, QString& errorText);
@@ -68,8 +69,13 @@ public:
     int coinClientCount(bool readyOnly) const;
     bool kickClient(quint64 clientId);
     QVector<ClientListItem> clients() const;
+    bool requestAuctionCatalog(quint64 clientId, QString& errorText);
+    bool sendAuctionConfig(quint64 clientId, int revision, const QString& config, QString& errorText);
 
 signals:
+    void auctionBindingChanged(quint64 clientId, bool bound);
+    void auctionCatalogReceived(quint64 clientId, const QString& catalog);
+    void auctionConfigResultReceived(quint64 clientId, int revision, int status, const QString& payload);
     void clientsChanged();
     void listeningChanged(bool listening);
     void networkError(const QString& text);
@@ -96,13 +102,16 @@ private:
         QString deviceId;
         QString clientNote;
         ClientRole role = ClientRoleUtil::DefaultRole;
+        bool auctionBound = false;
         QString teamReadyText = QStringLiteral("未识别");
         int teamReadyState = -1;
+        bool manualReadyOverride = false;
         int teamReadyCurrent = 0;
         int teamReadyTotal = 0;
         qint64 teamReadyUpdatedAtMs = 0;
         QString teamCode;
         QString runningAction;
+        QString executionStatus;
         QString listingStatus = QStringLiteral("???");
         int listingQuantityX = -1;
         QString currentAmount = QStringLiteral("-");
@@ -113,6 +122,8 @@ private:
         int consecutiveHighPriceCount = 0;
         bool hasAmountBaseline = false;
         bool actionRunning = false;
+        bool stopRequested = false;
+        int pendingPrepareRequestId = 0;
         bool ready = false;
         bool connected = true;
         QHash<int, qint64> timeSyncSendTimesMs;

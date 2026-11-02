@@ -14,8 +14,10 @@ SOURCES += \
     ../Shared/FramelessTitleBar.cpp \
     main.cpp \
     MainWindow.cpp \
+    MainWindowPurchaseUi.cpp \
     ServerController.cpp \
     ServerConnectionManager.cpp \
+    AuctionPurchaseCoordinator.cpp \
     SponsorDialog.cpp
 
 HEADERS += \
@@ -23,5 +25,7 @@ HEADERS += \
     MainWindow.h \
     ServerController.h \
     ServerConnectionManager.h \
+    AuctionPurchaseCoordinator.h \
+    ../Shared/AuctionPurchaseConfig.h \
     ServerModels.h \
     SponsorDialog.h

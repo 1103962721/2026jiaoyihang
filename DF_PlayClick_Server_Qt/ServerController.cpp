@@ -84,12 +84,19 @@ namespace
 }
 
 ServerController::ServerController(QObject* parent)
-    : QObject(parent)
+    : QObject(parent), auctionPurchase_(connectionManager_, this)
 {
+    connect(&auctionPurchase_, &AuctionPurchaseCoordinator::logAppended, this, &ServerController::connectionLogAppended);
     autoStartTimer_.setInterval(100);
     compensationSyncTimer_.setInterval(25);
     autoExecuteTimer_.setInterval(200);
     accountDispatchRetryTimer_.setInterval(500);
+    prepareExecutionTimer_.setSingleShot(true);
+    prepareExecutionTimer_.setInterval(15000);
+    connect(&prepareExecutionTimer_, &QTimer::timeout, this, [this]() {
+        cancelExecutionPreparation();
+        emit statusChanged(QStringLiteral("老板准备检查超时，已取消本次执行；可重新执行或手动强制下发"), ServerStatusTone::Error);
+    });
     connect(&autoStartTimer_, &QTimer::timeout, this, &ServerController::processAutoStartTick);
     connect(&compensationSyncTimer_, &QTimer::timeout, this, &ServerController::processCompensationSync);
     connect(&autoExecuteTimer_, &QTimer::timeout, this, &ServerController::processAutoExecuteTick);
@@ -111,9 +118,13 @@ ServerController::ServerController(QObject* parent)
                         .arg(clientAddress(clientId)).arg(text), ServerStatusTone::Error);
                     return;
                 }
-                if ((!state.loadoutMode && state.listingText.trimmed().isEmpty())
+                const auto clients = connectionManager_.clients();
+                const auto client = std::find_if(clients.cbegin(), clients.cend(),
+                    [clientId](const ClientListItem& item) { return item.id == clientId; });
+                const bool auctionBound = client != clients.cend() && client->auctionBound;
+                if (!auctionBound && ((!state.loadoutMode && state.listingText.trimmed().isEmpty())
                     || state.listingPrice.trimmed().isEmpty()
-                    || state.purchaseCount <= 0 || state.purchaseCount > 99)
+                    || state.purchaseCount <= 0 || state.purchaseCount > 99))
                 {
                     emit statusChanged(QStringLiteral("%1 登录成功，但上架参数不完整")
                         .arg(clientAddress(clientId)), ServerStatusTone::Error);
@@ -126,7 +137,8 @@ ServerController::ServerController(QObject* parent)
                 pendingLoginReadyListings_.insert(listingRequestId, clientId);
                 if (connectionManager_.requestListing(clientId, listingRequestId,
                     state.listingText.trimmed(), state.listingPrice.trimmed(), false,
-                    state.purchaseCount, state.loadoutMode, errorText))
+                    auctionBound ? qBound(1, state.purchaseCount, 99) : state.purchaseCount,
+                    state.loadoutMode, errorText))
                 {
                     emit connectionLogAppended(QStringLiteral("%1 登录成功后的配装已完成，已下发上架")
                         .arg(clientAddress(clientId)));
@@ -318,7 +330,45 @@ ServerController::ServerController(QObject* parent)
     connect(&connectionManager_, &ServerConnectionManager::executionResponseReceived, this,
         [this](quint64 clientId, bool success, const QString& text) {
             if (success)
+            {
+                const auto clients = connectionManager_.clients();
+                const auto client = std::find_if(clients.cbegin(), clients.cend(),
+                    [clientId](const ClientListItem& item) { return item.id == clientId; });
+                if (client != clients.cend() && client->role == ClientRole::Coin && client->auctionBound)
+                {
+                    const bool executing = client->actionRunning
+                        && (client->runningAction == QStringLiteral("执行中") || client->runningAction == QStringLiteral("出发"));
+                    // A delayed duplicate response must not clear a newer listing task.
+                    if (client->actionRunning && !executing) return;
+                    const bool startNextListing = autoExecuteEnabled_ && executing && client->ready;
+                    connectionManager_.forceResetClientAction(clientId);
+                    emit connectionLogAppended(QStringLiteral("%1 Qt 币号执行成功：%2").arg(clientAddress(clientId), text));
+                    emit statusChanged(QStringLiteral("%1 Qt 币号执行成功：%2").arg(clientAddress(clientId), text),
+                        ServerStatusTone::Success);
+                    if (startNextListing)
+                    {
+                        QString error;
+                        const int requestId = nextListingRequestId_++;
+                        // Qt supplies its own purchase parameters; legacy OCR listing
+                        // text and price are unused by the bound Qt client.
+                        if (connectionManager_.requestListing(clientId, requestId, {}, {}, false, 1, false, error))
+                        {
+                            emit connectionLogAppended(QStringLiteral("%1 全自动：已衔接下一轮 Qt 上架，requestId=%2")
+                                .arg(clientAddress(clientId)).arg(requestId));
+                            emit statusChanged(QStringLiteral("%1 执行成功，正在进行下一轮 Qt 上架").arg(clientAddress(clientId)),
+                                ServerStatusTone::Success);
+                        }
+                        else
+                        {
+                            connectionManager_.setClientListingStatus(clientId, QStringLiteral("失败"));
+                            emit connectionLogAppended(QStringLiteral("%1 下一轮 Qt 上架下发失败：%2").arg(clientAddress(clientId), error));
+                            emit statusChanged(QStringLiteral("%1 下一轮 Qt 上架下发失败：%2").arg(clientAddress(clientId), error),
+                                ServerStatusTone::Error);
+                        }
+                    }
+                }
                 return;
+            }
             const auto currentClients = connectionManager_.clients();
             const auto iterator = std::find_if(currentClients.cbegin(), currentClients.cend(),
                 [clientId](const ClientListItem& client) { return client.id == clientId; });
@@ -422,6 +472,8 @@ void ServerController::startListening(const QString& portText)
 
 void ServerController::stopListening()
 {
+    ++executionGeneration_;
+    cancelExecutionPreparation();
     waitingAccountDispatches_.clear();
     waitingAccountDispatchReasons_.clear();
     accountDispatchRetryTimer_.stop();
@@ -432,6 +484,12 @@ void ServerController::stopListening()
 void ServerController::triggerClients(const QString& countdownText, const QString& groupDelayText, bool coinFirst,
     bool compensationEnabled, const QString& compensationLeadText, const QString& bossPriceText, bool allowIncomplete, bool automatic)
 {
+    if (preparingExecution_)
+    {
+        emit statusChanged(QStringLiteral("老板准备检查正在进行，请等待回报或先停止当前动作"), ServerStatusTone::Neutral);
+        return;
+    }
+    const bool forceExecution = allowIncomplete && !automatic;
     const std::wstring countdown = countdownText.toStdWString();
     const int seconds = ParseCountdownSeconds(countdown.c_str());
     if (seconds < 0)
@@ -487,15 +545,25 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
 
     QVector<quint64> availableBosses;
     QVector<quint64> availableCoins;
-    for (const ClientListItem& client : connectionManager_.clients())
+    const auto currentClients = connectionManager_.clients();
+    int stoppingCount = 0;
+    int busyCount = 0;
+    for (const ClientListItem& client : currentClients)
     {
-        if (!client.connected || !client.ready || client.actionRunning)
+        if (!client.connected || !client.ready)
             continue;
+        if (client.actionRunning)
+        {
+            if (client.runningAction == QStringLiteral("正在停止")) ++stoppingCount;
+            else ++busyCount;
+            continue;
+        }
         // 每一轮执行都先由老板客户端完成独立的准备检查；这里仅筛选空闲老板。
         if (client.role == ClientRole::Boss
-            && client.teamReadyText != QStringLiteral("执行中"))
+            && (forceExecution || client.teamReadyText != QStringLiteral("执行中")))
             availableBosses.push_back(client.id);
-        else if (client.role == ClientRole::Coin && client.listingStatus == QStringLiteral("成功"))
+        else if (client.role == ClientRole::Coin
+            && (forceExecution || client.listingStatus == QStringLiteral("成功")))
             availableCoins.push_back(client.id);
     }
     const int completeGroups = qMin(availableBosses.size() / autoExecuteBossThreshold_,
@@ -505,6 +573,12 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
         emit statusChanged(QStringLiteral("当前不满足一整组执行条件"), ServerStatusTone::Error);
         if (!automatic)
             emit incompleteTriggerRequested();
+        return;
+    }
+    if (availableBosses.isEmpty() && availableCoins.isEmpty())
+    {
+        emit statusChanged(QStringLiteral("未下发执行：没有空闲且已准备的客户端（正在停止 %1 个，正在执行 %2 个）")
+            .arg(stoppingCount).arg(busyCount), ServerStatusTone::Error);
         return;
     }
     const int groupsToSend = completeGroups > 0 ? completeGroups : 1;
@@ -523,7 +597,13 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
     lastTriggerCompensationEnabled_ = compensationEnabled;
     lastTriggerCompensationLeadText_ = compensationLeadText;
 
-    if (!dispatchingPreparedExecution_ && !availableBosses.isEmpty())
+    QVector<quint64> bossesToPrepare;
+    for (const auto& client : currentClients)
+        if (availableBosses.contains(client.id) && !client.manualReadyOverride
+            && !(forceExecution && client.auctionBound))
+            bossesToPrepare.push_back(client.id);
+    // 手动确认强制下发时，Qt 老板直接进入按钮执行流程，不再等待准备检查。
+    if (!dispatchingPreparedExecution_ && !bossesToPrepare.isEmpty())
     {
         if (preparingExecution_)
             return;
@@ -537,7 +617,7 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
         pendingAutomatic_ = automatic;
         pendingPrepareRequests_.clear();
         preparingExecution_ = true;
-        for (quint64 bossId : availableBosses)
+        for (quint64 bossId : bossesToPrepare)
         {
             const int requestId = nextOcrRequestId_++;
             QString prepareError;
@@ -552,7 +632,8 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
             emit statusChanged(QStringLiteral("没有成功发送老板准备检查"), ServerStatusTone::Error);
             return;
         }
-        for (quint64 id : availableBosses)
+        prepareExecutionTimer_.start();
+        for (quint64 id : bossesToPrepare)
             connectionManager_.setClientTeamReadyDisplay(id, QStringLiteral("准备检查中"), -1);
         emit statusChanged(QStringLiteral("已发送老板准备检查，等待 %1 个老板回报后下发执行").arg(pendingPrepareRequests_.size()), ServerStatusTone::Neutral);
         return;
@@ -622,7 +703,9 @@ void ServerController::triggerClients(const QString& countdownText, const QStrin
     const QString firstText = QString::fromStdWString(ClientRoleUtil::ToDisplayText(firstRole));
     const QString secondText = QString::fromStdWString(ClientRoleUtil::ToDisplayText(secondRole));
 
-    const auto triggerSecondGroup = [this, seconds, secondRole, secondIds, firstCount, firstText, secondText, groupDelayMs, normalizedBossPrice]() {
+    const quint64 generation = ++executionGeneration_;
+    const auto triggerSecondGroup = [this, generation, seconds, secondRole, secondIds, firstCount, firstText, secondText, groupDelayMs, normalizedBossPrice]() {
+        if (generation != executionGeneration_) return;
         const int secondCount = connectionManager_.triggerClientsByIds(seconds, secondIds, normalizedBossPrice);
         emit statusChanged(QStringLiteral("全部出发：%1 %2 个 -> 延迟 %3 ms -> %4 %5 个")
             .arg(firstText).arg(firstCount).arg(groupDelayMs).arg(secondText).arg(secondCount), ServerStatusTone::Success);
@@ -793,6 +876,8 @@ void ServerController::setBossExpectedAmount(quint64 clientId, const QString& am
 
 void ServerController::requestForceStopAllActions()
 {
+    ++executionGeneration_;
+    prepareExecutionTimer_.stop();
     waitingAccountDispatches_.clear();
     waitingAccountDispatchReasons_.clear();
     accountDispatchRetryTimer_.stop();
@@ -1486,6 +1571,26 @@ void ServerController::setClientNote(quint64 clientId, const QString& note)
         emit statusChanged(QStringLiteral("已更新客户端备注"), ServerStatusTone::Success);
 }
 
+void ServerController::setClientManualSuccess(quint64 clientId)
+{
+    QString error;
+    if (!connectionManager_.setClientManualSuccess(clientId, error))
+    {
+        emit statusChanged(error, ServerStatusTone::Error);
+        return;
+    }
+    const auto currentClients = connectionManager_.clients();
+    for (const auto& client : currentClients)
+    {
+        if (client.id != clientId) continue;
+        const QString text = client.role == ClientRole::Coin
+            ? QStringLiteral("手动设置上架成功") : QStringLiteral("手动设置准备成功 [1/1]");
+        emit connectionLogAppended(QStringLiteral("%1：%2").arg(clientAddress(clientId), text));
+        emit statusChanged(text, ServerStatusTone::Success);
+        break;
+    }
+}
+
 void ServerController::setClientRole(quint64 clientId, ClientRole role)
 {
     if (role != ClientRole::Coin)
@@ -1505,13 +1610,6 @@ void ServerController::startListing(const QString& listingText, const QString& l
 {
     const QString normalizedText = listingText.trimmed();
     const QString normalizedPrice = listingPrice.trimmed();
-    QString validationError;
-    if (!validateListingParameters(normalizedText, normalizedPrice, purchaseCount, loadoutMode, validationError))
-    {
-        emit statusChanged(validationError, ServerStatusTone::Error);
-        return;
-    }
-
     const QVector<ClientListItem> currentClients = connectionManager_.clients();
     // 每轮全体上架开始前清零上一轮各客户端的出售数量 X。
     connectionManager_.resetListingQuantities();
@@ -1530,8 +1628,17 @@ void ServerController::startListing(const QString& listingText, const QString& l
         ++coinCount;
         connectionManager_.setClientListingStatus(client.id, QStringLiteral("待执行"));
         QString errorText;
+        if (!client.auctionBound && !validateListingParameters(normalizedText, normalizedPrice,
+                purchaseCount, loadoutMode, errorText))
+        {
+            ++failedCount;
+            connectionManager_.setClientListingStatus(client.id, QStringLiteral("失败"));
+            emit connectionLogAppended(QStringLiteral("%1 上架参数无效：%2").arg(clientAddress(client.id), errorText));
+            continue;
+        }
         const int requestId = nextListingRequestId_++;
-        if (connectionManager_.requestListing(client.id, requestId, normalizedText, normalizedPrice, hasExchange, purchaseCount, loadoutMode, errorText))
+        if (connectionManager_.requestListing(client.id, requestId, normalizedText, normalizedPrice,
+                hasExchange, client.auctionBound ? qBound(1, purchaseCount, 99) : purchaseCount, loadoutMode, errorText))
         {
             ++sentCount;
         }
@@ -1558,13 +1665,6 @@ void ServerController::startListingForClient(quint64 clientId, const QString& li
 {
     const QString normalizedText = listingText.trimmed();
     const QString normalizedPrice = listingPrice.trimmed();
-    QString validationError;
-    if (!validateListingParameters(normalizedText, normalizedPrice, purchaseCount, loadoutMode, validationError))
-    {
-        emit statusChanged(validationError, ServerStatusTone::Error);
-        return;
-    }
-
     const auto currentClients = connectionManager_.clients();
     const auto target = std::find_if(currentClients.cbegin(), currentClients.cend(),
         [clientId](const ClientListItem& client) { return client.id == clientId; });
@@ -1578,6 +1678,13 @@ void ServerController::startListingForClient(quint64 clientId, const QString& li
         emit statusChanged(QStringLiteral("上架功能仅对币号生效"), ServerStatusTone::Error);
         return;
     }
+    QString validationError;
+    if (!target->auctionBound && !validateListingParameters(normalizedText, normalizedPrice,
+            purchaseCount, loadoutMode, validationError))
+    {
+        emit statusChanged(validationError, ServerStatusTone::Error);
+        return;
+    }
 
     connectionManager_.resetClientListingQuantity(clientId);
     connectionManager_.setClientListingStatus(clientId, QStringLiteral("待执行"));
@@ -1586,7 +1693,7 @@ void ServerController::startListingForClient(quint64 clientId, const QString& li
     QString errorText;
     const int requestId = nextListingRequestId_++;
     if (!connectionManager_.requestListing(clientId, requestId, normalizedText, normalizedPrice,
-        hasExchange, purchaseCount, loadoutMode, errorText))
+        hasExchange, target->auctionBound ? qBound(1, purchaseCount, 99) : purchaseCount, loadoutMode, errorText))
     {
         connectionManager_.setClientListingStatus(clientId, QStringLiteral("失败"));
         emit connectionLogAppended(QStringLiteral("%1 单独上架下发失败：%2")
@@ -1951,11 +2058,16 @@ QString ServerController::clientAddress(quint64 clientId) const
 bool ServerController::setAccountLoginConfig(quint64 clientId, const QString& listingText,
     const QString& listingPrice, int purchaseCount)
 {
+    scriptLoginClients_.remove(clientId);
     updateGlobalListingParameters(listingText, listingPrice, purchaseCount);
     LoginReadyState state;
     QString validationError;
+    const auto clients = connectionManager_.clients();
+    const auto client = std::find_if(clients.cbegin(), clients.cend(),
+        [clientId](const ClientListItem& item) { return item.id == clientId; });
+    const bool auctionBound = client != clients.cend() && client->auctionBound;
     if (!loadoutConfigForRole(ClientRole::Coin, state, validationError)
-        || !validateListingParameters(listingText, listingPrice, purchaseCount, true, validationError))
+        || (!auctionBound && !validateListingParameters(listingText, listingPrice, purchaseCount, true, validationError)))
     {
         loginReadyStates_.remove(clientId);
         emit statusChanged(QStringLiteral("上号参数不完整：%1").arg(validationError), ServerStatusTone::Error);
@@ -1963,7 +2075,7 @@ bool ServerController::setAccountLoginConfig(quint64 clientId, const QString& li
     }
     state.listingText = listingText.trimmed();
     state.listingPrice = listingPrice.trimmed();
-    state.purchaseCount = purchaseCount;
+    state.purchaseCount = auctionBound ? qBound(1, purchaseCount, 99) : purchaseCount;
     state.loadoutMode = true;
     loginReadyStates_.insert(clientId, state);
     return true;
@@ -2009,6 +2121,12 @@ void ServerController::startAccountLogin(quint64 clientId)
         return;
     }
     dispatchAccountLogin(clientId);
+}
+
+void ServerController::startScriptAccountLogin(quint64 clientId)
+{
+    scriptLoginClients_.insert(clientId);
+    startAccountLogin(clientId);
 }
 
 void ServerController::startAccountSwitch(quint64 clientId)
@@ -2059,13 +2177,14 @@ void ServerController::startAccountSwitch(quint64 clientId)
 
 bool ServerController::dispatchAccountLogin(quint64 clientId, bool skipCurrentAccount)
 {
-    if (!loginReadyStates_.contains(clientId))
+    const bool scriptOnly = scriptLoginClients_.contains(clientId);
+    if (!scriptOnly && !loginReadyStates_.contains(clientId))
     {
         emit statusChanged(QStringLiteral("请先填写完整的配装和上架参数，再执行上号"), ServerStatusTone::Error);
         return false;
     }
-    LoginReadyState loginState = loginReadyStates_[clientId];
-    if (!globalListingPrice_.trimmed().isEmpty())
+    LoginReadyState loginState = loginReadyStates_.value(clientId);
+    if (!scriptOnly && !globalListingPrice_.trimmed().isEmpty())
     {
         loginState.listingText = globalListingText_;
         loginState.listingPrice = globalListingPrice_;
@@ -2073,10 +2192,14 @@ bool ServerController::dispatchAccountLogin(quint64 clientId, bool skipCurrentAc
         loginReadyStates_[clientId] = loginState;
     }
     QString validationError;
-    if (!validateLoadoutParameters(loginState.weapon, loginState.backpack, loginState.egg,
+    const auto clients = connectionManager_.clients();
+    const auto client = std::find_if(clients.cbegin(), clients.cend(),
+        [clientId](const ClientListItem& item) { return item.id == clientId; });
+    const bool auctionBound = client != clients.cend() && client->auctionBound;
+    if (!scriptOnly && (!validateLoadoutParameters(loginState.weapon, loginState.backpack, loginState.egg,
             loginState.bulletName, loginState.perClick, loginState.bulletTotal, validationError)
-        || !validateListingParameters(loginState.listingText, loginState.listingPrice,
-            loginState.purchaseCount, loginState.loadoutMode, validationError))
+        || (!auctionBound && !validateListingParameters(loginState.listingText, loginState.listingPrice,
+            loginState.purchaseCount, loginState.loadoutMode, validationError))))
     {
         emit statusChanged(QStringLiteral("上号参数不完整：%1").arg(validationError), ServerStatusTone::Error);
         return false;
@@ -2177,10 +2300,24 @@ void ServerController::startAccountLoginForAllCoins()
     {
         if (!client.connected || client.role != ClientRole::Coin)
             continue;
+        scriptLoginClients_.remove(client.id);
         if (dispatchAccountLogin(client.id))
             ++sent;
     }
     emit statusChanged(QStringLiteral("已向 %1 个币号客户端执行一键上号请求").arg(sent),
+        sent > 0 ? ServerStatusTone::Success : ServerStatusTone::Error);
+}
+
+void ServerController::startScriptAccountLoginForAllCoins()
+{
+    int sent = 0;
+    for (const ClientListItem& client : connectionManager_.clients())
+    {
+        if (!client.connected || client.role != ClientRole::Coin) continue;
+        scriptLoginClients_.insert(client.id);
+        if (dispatchAccountLogin(client.id)) ++sent;
+    }
+    emit statusChanged(QStringLiteral("已向 %1 个币号客户端执行脚本上号请求").arg(sent),
         sent > 0 ? ServerStatusTone::Success : ServerStatusTone::Error);
 }
 
@@ -2269,15 +2406,16 @@ void ServerController::retryWaitingAccountDispatches()
             break;
         QString error;
         const auto config = loginReadyStates_.constFind(clientId);
-        if (config == loginReadyStates_.cend())
+        if (!scriptLoginClients_.contains(clientId) && config == loginReadyStates_.cend())
         {
             logReason(QStringLiteral("缺少上号配置，等待补全参数"));
             continue;
         }
-        if (!validateLoadoutParameters(config->weapon, config->backpack, config->egg,
+        if (!scriptLoginClients_.contains(clientId)
+            && (!validateLoadoutParameters(config->weapon, config->backpack, config->egg,
                 config->bulletName, config->perClick, config->bulletTotal, error)
-            || !validateListingParameters(config->listingText, config->listingPrice,
-                config->purchaseCount, config->loadoutMode, error))
+            || (!client->auctionBound && !validateListingParameters(config->listingText, config->listingPrice,
+                config->purchaseCount, config->loadoutMode, error))))
         {
             logReason(QStringLiteral("参数不完整，暂不补发：%1").arg(error));
             continue;
@@ -2379,6 +2517,11 @@ void ServerController::handleAccountLoginReady(quint64 clientId)
 {
     connectionManager_.forceResetClientAction(clientId);
     clearPendingAccountLoginRequests(clientId);
+    if (scriptLoginClients_.remove(clientId))
+    {
+        emit statusChanged(QStringLiteral("客户端 %1 已识别行前备战，脚本上号成功").arg(clientId), ServerStatusTone::Success);
+        return;
+    }
     emit statusChanged(QStringLiteral("客户端 %1 登录成功，500ms 后开始配装").arg(clientId), ServerStatusTone::Success);
     QTimer::singleShot(500, this, [this, clientId]() {
         QString error;
@@ -2558,6 +2701,20 @@ void ServerController::processAutoExecuteTick()
         autoExecuteTriggered_ = false;
 }
 
+void ServerController::cancelExecutionPreparation()
+{
+    prepareExecutionTimer_.stop();
+    const auto requests = pendingPrepareRequests_;
+    pendingPrepareRequests_.clear();
+    preparingExecution_ = false;
+    autoExecuteTriggered_ = false;
+    for (quint64 clientId : requests)
+    {
+        QString error;
+        connectionManager_.requestForceStopAction(clientId, error);
+    }
+}
+
 void ServerController::handlePrepareResponse(quint64 clientId, int requestId, int status, const QString& text)
 {
     if (!preparingExecution_ || !pendingPrepareRequests_.contains(requestId))
@@ -2570,9 +2727,7 @@ void ServerController::handlePrepareResponse(quint64 clientId, int requestId, in
     pendingPrepareRequests_.remove(requestId);
     if (status < 0)
     {
-        preparingExecution_ = false;
-        pendingPrepareRequests_.clear();
-        autoExecuteTriggered_ = false;
+        cancelExecutionPreparation();
         emit statusChanged(QStringLiteral("老板客户端 %1 准备检查失败：%2").arg(clientId).arg(text), ServerStatusTone::Error);
         return;
     }
@@ -2581,6 +2736,7 @@ void ServerController::handlePrepareResponse(quint64 clientId, int requestId, in
         return;
 
     preparingExecution_ = false;
+    prepareExecutionTimer_.stop();
     dispatchingPreparedExecution_ = true;
     triggerClients(pendingCountdownText_, pendingGroupDelayText_, pendingCoinFirst_,
         pendingCompensationEnabled_, pendingCompensationLeadText_, pendingBossPriceText_,

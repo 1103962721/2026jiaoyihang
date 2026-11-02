@@ -9,6 +9,7 @@
 
 #include "ServerConnectionManager.h"
 #include "ServerModels.h"
+#include "AuctionPurchaseCoordinator.h"
 
 class ServerController : public QObject
 {
@@ -20,6 +21,7 @@ public:
     QString defaultPortText() const;
     QVector<ClientListItem> clients() const;
     bool isListening() const;
+    AuctionPurchaseCoordinator& auctionPurchase() { return auctionPurchase_; }
 
 public slots:
     void startListening(const QString& portText);
@@ -45,6 +47,7 @@ public slots:
     void showSelfThunderPlaceholder(quint64 clientId);
     void setClientNote(quint64 clientId, const QString& note);
     void setClientRole(quint64 clientId, ClientRole role);
+    void setClientManualSuccess(quint64 clientId);
     void startListing(const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, bool loadoutMode);
     void startListingForClient(quint64 clientId, const QString& listingText, const QString& listingPrice,
         bool hasExchange, int purchaseCount, bool loadoutMode);
@@ -62,8 +65,10 @@ public slots:
     bool setAccountLoginConfig(quint64 clientId, const QString& listingText,
         const QString& listingPrice, int purchaseCount);
     void startAccountLogin(quint64 clientId);
+    void startScriptAccountLogin(quint64 clientId);
     void startAccountSwitch(quint64 clientId);
     void startAccountLoginForAllCoins();
+    void startScriptAccountLoginForAllCoins();
     void setAutoExecuteThresholds(int bossCount, int coinCount);
     void setHighPriceStopThreshold(int threshold);
     void setAutoExecuteEnabled(bool enabled);
@@ -143,6 +148,7 @@ private:
     bool markAccountUsed(quint64 clientId, qint64 amount, QString& accountLine);
 
     ServerConnectionManager connectionManager_;
+    AuctionPurchaseCoordinator auctionPurchase_;
     QTimer autoStartTimer_;
     QTimer compensationSyncTimer_;
     QTimer autoExecuteTimer_;
@@ -169,6 +175,7 @@ private:
     QHash<int, LoginReadyState> pendingLoginReadyLoadouts_;
     QHash<int, quint64> pendingLoginReadyListings_;
     QHash<quint64, LoginReadyState> loginReadyStates_;
+    QSet<quint64> scriptLoginClients_;
     QString globalListingText_;
     QString globalListingPrice_;
     int globalListingPurchaseCount_ = 1;
@@ -224,6 +231,9 @@ private:
     quint64 accountQueueGeneration_ = 1;
     bool preparingExecution_ = false;
     bool dispatchingPreparedExecution_ = false;
+    quint64 executionGeneration_ = 0;
+    QTimer prepareExecutionTimer_;
+    void cancelExecutionPreparation();
     QHash<int, quint64> pendingPrepareRequests_;
     QString pendingCountdownText_;
     QString pendingGroupDelayText_;

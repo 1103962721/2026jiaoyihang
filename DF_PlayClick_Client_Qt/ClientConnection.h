@@ -29,6 +29,9 @@ public:
     // 服务端主动踢出后禁止本次连接生命周期的自动重连；手动重新连接会清除该状态。
     void suppressAutoReconnect();
     bool sendReady(bool ready);
+    bool sendAuctionBinding(bool bound);
+    bool sendAuctionCatalog(const QString& catalog);
+    bool sendAuctionConfigResult(int revision, int status, const QString& text);
     bool sendTeamCodeResponse(const QString& payload);
     bool sendTeamReady(int state, int current, int total);
     bool sendPrepareResponse(int requestId, const QString& status, const QString& payload);
@@ -45,6 +48,8 @@ public:
     bool sendForceStopActionAck();
 
 signals:
+    void auctionCatalogRequested();
+    void auctionConfigReceived(int revision, const QString& config);
     void connectedChanged(bool connected);
     void reconnectingChanged(bool reconnecting);
     void statusChanged(const QString& text);
