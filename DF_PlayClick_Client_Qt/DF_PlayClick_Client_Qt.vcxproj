@@ -152,6 +152,9 @@
     <ClCompile Include="OcrNumberParser.cpp" />
     <ClCompile Include="SponsorDialog.cpp" />
     <ClCompile Include="TeamReadyParser.cpp" />
+    <ClCompile Include="UimOcr.cpp">
+      <AdditionalOptions>/Zc:twoPhase- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="UmiOcrRunner.cpp" />
     <ClCompile Include="Win32InputDispatcher.cpp" />
     <ClCompile Include="Win32WindowBinder.cpp" />
@@ -234,6 +237,7 @@
     <ClInclude Include="OcrNumberParser.h" />
     <ClInclude Include="SponsorDialog.h" />
     <ClInclude Include="TeamReadyParser.h" />
+    <ClInclude Include="UimOcr.h" />
     <ClInclude Include="UmiOcrRunner.h" />
     <ClInclude Include="Win32InputDispatcher.h" />
     <ClInclude Include="Win32WindowBinder.h" />

@@ -25,6 +25,7 @@ SOURCES += \
     ClientConfig.cpp \
     SponsorDialog.cpp \
     TeamReadyParser.cpp \
+    UimOcr.cpp \
     UmiOcrRunner.cpp \
     OcrNumberParser.cpp \
     BulletOcrRules.cpp
@@ -43,6 +44,7 @@ HEADERS += \
     ClientConfig.h \
     SponsorDialog.h \
     TeamReadyParser.h \
+    UimOcr.h \
     UmiOcrRunner.h \
     OcrNumberParser.h \
     BulletOcrRules.h

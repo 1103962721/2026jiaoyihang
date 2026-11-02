@@ -73,6 +73,9 @@
     <ClCompile Include="UmiOcrRunner.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UimOcr.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Win32InputDispatcher.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -124,6 +127,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UmiOcrRunner.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UimOcr.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Win32InputDispatcher.h">
