@@ -7,6 +7,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <dwmapi.h>
 #include <QImage>
 #include <QPoint>
 #include <QRect>
@@ -109,5 +110,38 @@ inline QImage capture(HWND hwnd, Geometry& result, QString& error, bool fullDesk
     if (screen) ReleaseDC(nullptr, screen);
     if (image.isNull()) error = QStringLiteral("读取客户区桌面画面失败");
     return image;
+}
+
+// Windows Graphics Capture returns the window frame. Restore client-only pixels.
+inline QImage cropCapturedWindow(HWND hwnd, const QImage& frame, Geometry& result, QString& error)
+{
+    DpiScope dpi;
+    if (!geometry(hwnd, result, error) || frame.isNull()) return {};
+    if (frame.size() == result.size) return frame;
+
+    RECT windowRect{};
+    RECT extendedRect{};
+    const bool hasWindow = GetWindowRect(hwnd, &windowRect) != FALSE;
+    const bool hasExtended = SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
+        &extendedRect, sizeof(extendedRect)));
+    const auto candidate = [&](const RECT& rect) {
+        return QRect(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
+    };
+    const QRect window = hasWindow ? candidate(windowRect) : QRect();
+    const QRect extended = hasExtended ? candidate(extendedRect) : QRect();
+    const auto difference = [&](const QRect& rect) {
+        return qAbs(rect.width() - frame.width()) + qAbs(rect.height() - frame.height());
+    };
+    const QRect first = hasExtended && (!hasWindow || difference(extended) <= difference(window))
+        ? extended : window;
+    const QRect second = first == extended ? window : extended;
+    for (const QRect& bounds : {first, second})
+    {
+        if (bounds.isEmpty()) continue;
+        const QRect clientInFrame(result.screenOrigin - bounds.topLeft(), result.size);
+        if (frame.rect().contains(clientInFrame)) return frame.copy(clientInFrame);
+    }
+    error = QStringLiteral("无遮挡截图的客户区边界不匹配");
+    return {};
 }
 }

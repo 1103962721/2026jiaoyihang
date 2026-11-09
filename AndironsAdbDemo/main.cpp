@@ -20,6 +20,7 @@
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #include <QWidget>
 #include <QFutureWatcher>
 #include <QtConcurrent>
@@ -28,8 +29,11 @@
 
 #include <functional>
 #include <limits>
+#include <cmath>
 
 #include "WindowClientCapture.h"
+#include "WindowGraphicsCapture.h"
+#include "WindowBackgroundInput.h"
 
 namespace
 {
@@ -65,6 +69,10 @@ public:
         if (dragging_ && preserveSelection) return;
         const bool sameSize = image_.size() == image.size();
         image_ = image;
+        if (!sameSize) {
+            zoom_ = 1.0; imageRect_ = {}; viewport_ = {};
+            if (zoomChanged) zoomChanged(100);
+        }
         if (!preserveSelection || !sameSize) clearSelection();
         if (image_.isNull()) { clear(); setText(QStringLiteral("No screenshot")); }
         else refreshPixmap();
@@ -85,9 +93,20 @@ public:
         update();
     }
 
+    void resetZoom()
+    {
+        zoom_ = 1.0;
+        imageRect_ = {};
+        refreshPixmap();
+        if (zoomChanged) zoomChanged(100);
+    }
+
+    double zoom() const { return zoom_; }
+
     std::function<void(QPoint)> clicked;
     std::function<void(QPoint)> moved;
     std::function<void(QRect)> selected;
+    std::function<void(int)> zoomChanged;
 
 protected:
     void resizeEvent(QResizeEvent* event) override
@@ -98,6 +117,15 @@ protected:
 
     void mouseMoveEvent(QMouseEvent* event) override
     {
+        if (panning_)
+        {
+            imageRect_.translate(event->position() - panAnchor_);
+            panAnchor_ = event->position();
+            constrainImageRect();
+            refreshPixmap();
+            event->accept();
+            return;
+        }
         const auto point = imagePoint(event->position().toPoint());
         if (point.x() >= 0 && moved) moved(point);
         if (dragging_) updateSelection(event->position().toPoint());
@@ -106,6 +134,14 @@ protected:
 
     void mousePressEvent(QMouseEvent* event) override
     {
+        if (event->button() == Qt::MiddleButton && !image_.isNull())
+        {
+            panning_ = true;
+            panAnchor_ = event->position();
+            setCursor(Qt::ClosedHandCursor);
+            event->accept();
+            return;
+        }
         if (event->button() == Qt::LeftButton) {
             const auto point = imagePoint(event->position().toPoint());
             if (point.x() >= 0) {
@@ -121,6 +157,13 @@ protected:
 
     void mouseReleaseEvent(QMouseEvent* event) override
     {
+        if (event->button() == Qt::MiddleButton && panning_)
+        {
+            panning_ = false;
+            setCursor(selectionMode_ ? Qt::CrossCursor : Qt::ArrowCursor);
+            event->accept();
+            return;
+        }
         if (event->button() == Qt::LeftButton && dragging_) {
             updateSelection(event->position().toPoint());
             dragging_ = false;
@@ -128,41 +171,59 @@ protected:
         QLabel::mouseReleaseEvent(event);
     }
 
+    void wheelEvent(QWheelEvent* event) override
+    {
+        if (image_.isNull() || event->angleDelta().y() == 0)
+        {
+            QLabel::wheelEvent(event);
+            return;
+        }
+        const double next = qBound(1.0, zoom_ * std::pow(1.25,
+            event->angleDelta().y() / 120.0), 16.0);
+        if (qAbs(next - zoom_) < 0.0001) { event->accept(); return; }
+        const QPointF focus = event->position();
+        const QPointF source((focus.x() - imageRect_.left()) / imageRect_.width(),
+            (focus.y() - imageRect_.top()) / imageRect_.height());
+        const double ratio = next / zoom_;
+        const QSizeF size(imageRect_.width() * ratio, imageRect_.height() * ratio);
+        zoom_ = next;
+        imageRect_ = QRectF(focus.x() - source.x() * size.width(),
+            focus.y() - source.y() * size.height(), size.width(), size.height());
+        constrainImageRect();
+        refreshPixmap();
+        if (zoomChanged) zoomChanged(qRound(zoom_ * 100));
+        event->accept();
+    }
+
     void paintEvent(QPaintEvent* event) override
     {
         QLabel::paintEvent(event);
-        if (selection_.isEmpty() || image_.isNull()) return;
-        const QRect display = displayRect();
-        const double sx = double(display.width()) / image_.width();
-        const double sy = double(display.height()) / image_.height();
-        const QRectF overlay(display.x() + selection_.x() * sx,
-            display.y() + selection_.y() * sy, selection_.width() * sx, selection_.height() * sy);
+        if (image_.isNull()) return;
         QPainter painter(this);
-        painter.setPen(QPen(Qt::red, 2));
-        painter.setBrush(QColor(255, 0, 0, 45));
-        painter.drawRect(overlay);
+        if (!selection_.isEmpty())
+        {
+            painter.setClipRect(contentsRect());
+            const double sx = imageRect_.width() / image_.width();
+            const double sy = imageRect_.height() / image_.height();
+            const QRectF overlay(imageRect_.left() + selection_.x() * sx,
+                imageRect_.top() + selection_.y() * sy, selection_.width() * sx, selection_.height() * sy);
+            painter.setPen(QPen(Qt::red, 2));
+            painter.setBrush(QColor(255, 0, 0, 45));
+            painter.drawRect(overlay);
+        }
     }
 
 private:
-    QRect displayRect() const
-    {
-        const QSize displayed = pixmap().size();
-        const QRect content = contentsRect();
-        return QRect(content.x() + (content.width() - displayed.width()) / 2,
-            content.y() + (content.height() - displayed.height()) / 2,
-            displayed.width(), displayed.height());
-    }
-
     QPoint imagePoint(const QPoint& widgetPoint, bool clamp = false) const
     {
         if (image_.isNull()) return {-1, -1};
-        const QRect display = displayRect();
-        if (display.isEmpty() || (!clamp && !display.contains(widgetPoint))) return {-1, -1};
-        const int localX = qBound(0, widgetPoint.x() - display.x(), display.width() - 1);
-        const int localY = qBound(0, widgetPoint.y() - display.y(), display.height() - 1);
+        if (imageRect_.isEmpty() || (!clamp && (!contentsRect().contains(widgetPoint)
+            || !imageRect_.contains(QPointF(widgetPoint))))) return {-1, -1};
+        const double localX = qBound(0.0, widgetPoint.x() - imageRect_.left(), imageRect_.width() - 1);
+        const double localY = qBound(0.0, widgetPoint.y() - imageRect_.top(), imageRect_.height() - 1);
         // 将预览图两端精确映射到原始截图首末像素，支持完整框选。
-        return QPoint(display.width() > 1 ? qRound(double(localX) * (image_.width() - 1) / (display.width() - 1)) : 0,
-            display.height() > 1 ? qRound(double(localY) * (image_.height() - 1) / (display.height() - 1)) : 0);
+        return QPoint(imageRect_.width() > 1 ? qRound(localX * (image_.width() - 1) / (imageRect_.width() - 1)) : 0,
+            imageRect_.height() > 1 ? qRound(localY * (image_.height() - 1) / (imageRect_.height() - 1)) : 0);
     }
 
     void updateSelection(const QPoint& widgetPoint)
@@ -178,9 +239,44 @@ private:
     void refreshPixmap()
     {
         if (image_.isNull()) return;
-        QImage preview = image_;
-        preview.setDevicePixelRatio(1);
-        setPixmap(QPixmap::fromImage(preview).scaled(contentsRect().size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        const QRect content = contentsRect();
+        if (content.isEmpty()) return;
+        if (imageRect_.isEmpty() || viewport_.size() != content.size())
+        {
+            QPointF center(0.5, 0.5);
+            if (!imageRect_.isEmpty())
+                center = QPointF((viewport_.center().x() - imageRect_.left()) / imageRect_.width(),
+                    (viewport_.center().y() - imageRect_.top()) / imageRect_.height());
+            const QSize fit = image_.size().scaled(content.size(), Qt::KeepAspectRatio);
+            const QSizeF size(fit.width() * zoom_, fit.height() * zoom_);
+            imageRect_ = QRectF(content.x() + content.width() / 2.0 - center.x() * size.width(),
+                content.y() + content.height() / 2.0 - center.y() * size.height(),
+                size.width(), size.height());
+            constrainImageRect();
+        }
+        viewport_ = content;
+        QImage preview(content.size(), QImage::Format_RGB32);
+        preview.fill(QColor(32, 34, 38));
+        QPainter painter(&preview);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, zoom_ < 2.0);
+        painter.drawImage(imageRect_.translated(-content.topLeft()), image_);
+        painter.end();
+        setPixmap(QPixmap::fromImage(preview));
+    }
+
+    void constrainImageRect()
+    {
+        const QRect content = contentsRect();
+        if (imageRect_.width() <= content.width())
+            imageRect_.moveLeft(content.x() + (content.width() - imageRect_.width()) / 2.0);
+        else
+            imageRect_.moveLeft(qBound(double(content.x() + content.width()) - imageRect_.width(),
+                imageRect_.left(), double(content.x())));
+        if (imageRect_.height() <= content.height())
+            imageRect_.moveTop(content.y() + (content.height() - imageRect_.height()) / 2.0);
+        else
+            imageRect_.moveTop(qBound(double(content.y() + content.height()) - imageRect_.height(),
+                imageRect_.top(), double(content.y())));
     }
 
     QImage image_;
@@ -188,6 +284,11 @@ private:
     QPoint anchor_;
     bool selectionMode_ = false;
     bool dragging_ = false;
+    bool panning_ = false;
+    double zoom_ = 1.0;
+    QRectF imageRect_;
+    QRect viewport_;
+    QPointF panAnchor_;
 };
 }
 
@@ -275,6 +376,20 @@ public:
         screenshot_ = new ScreenshotLabel(this);
         screenshot_->setObjectName(QStringLiteral("screenshotPreview"));
         root->addWidget(screenshot_, 1);
+        auto* zoomRow = new QHBoxLayout;
+        auto* zoomLabel = new QLabel(QStringLiteral("100%"), this);
+        zoomLabel->setObjectName(QStringLiteral("previewZoom"));
+        auto* fitPreview = new QPushButton(QStringLiteral("适合窗口"), this);
+        fitPreview->setObjectName(QStringLiteral("fitPreview"));
+        screenshot_->setToolTip(QStringLiteral("滚轮以鼠标位置缩放，中键拖动画面"));
+        zoomRow->addWidget(zoomLabel);
+        zoomRow->addWidget(fitPreview);
+        zoomRow->addStretch();
+        root->addLayout(zoomRow);
+        screenshot_->zoomChanged = [zoomLabel](int percent) {
+            zoomLabel->setText(QStringLiteral("%1%").arg(percent));
+        };
+        connect(fitPreview, &QPushButton::clicked, screenshot_, &ScreenshotLabel::resetZoom);
         coordinate_ = new QLabel(QStringLiteral("Move or click the screenshot to get device coordinates"), this);
         root->addWidget(coordinate_);
         auto* resolution = new QLabel(QStringLiteral("设备截图分辨率：等待截图"), this);
@@ -336,6 +451,11 @@ public:
         pcActions_ = new QWidget(this);
         auto* pcForm = new QFormLayout(pcActions_);
         pcForm->setContentsMargins(0, 0, 0, 0);
+        pcInputMode_ = new QComboBox(this);
+        pcInputMode_->setObjectName(QStringLiteral("pcInputMode"));
+        pcInputMode_->addItems({QStringLiteral("前台 SendInput"),
+            QStringLiteral("后台 PostMessage"), QStringLiteral("后台 SendMessage（限时）")});
+        pcForm->addRow(QStringLiteral("发送方式"), pcInputMode_);
         pcX_ = new QSpinBox(this); pcX_->setRange(0, 32767);
         pcY_ = new QSpinBox(this); pcY_->setRange(0, 32767);
         pcX_->setObjectName(QStringLiteral("pcClientX"));
@@ -410,6 +530,13 @@ public:
         });
         connect(pcClick, &QPushButton::clicked, this, [this]() { clickPcPoint(); });
         connect(pcKeyButton, &QPushButton::clicked, this, [this]() {
+            if (pcInputMode_->currentIndex() != 0) {
+                QString error;
+                const bool ok = WindowBackgroundInput::key(pcHwnd_,
+                    static_cast<WORD>(pcKey_->currentData().toInt()), backgroundMode(), error);
+                status_->setText(ok ? QStringLiteral("后台按键消息已发送；目标是否响应需观察窗口") : error);
+                return;
+            }
             if (!activatePcWindow()) return;
             INPUT events[2]{};
             events[0].type = events[1].type = INPUT_KEYBOARD;
@@ -418,6 +545,12 @@ public:
             status_->setText(SendInput(2, events, sizeof(INPUT)) == 2 ? QStringLiteral("PC 按键已发送") : QStringLiteral("PC 按键发送失败"));
         });
         connect(pcTextButton, &QPushButton::clicked, this, [this]() {
+            if (pcInputMode_->currentIndex() != 0) {
+                QString error;
+                const bool ok = WindowBackgroundInput::text(pcHwnd_, text_->text(), backgroundMode(), error);
+                status_->setText(ok ? QStringLiteral("后台文本消息已发送；目标是否响应需观察窗口") : error);
+                return;
+            }
             if (text_->text().isEmpty() || !activatePcWindow()) return;
             for (QChar character : text_->text()) {
                 INPUT events[2]{};
@@ -457,11 +590,13 @@ public:
         connect(interval_, &QSpinBox::valueChanged, this, [this](int ms) { if (live_->isChecked()) previewTimer_.start(ms); });
         connect(&previewTimer_, &QTimer::timeout, this, [this] { takeScreenshot(); });
         devices_->setEnabled(false);
-        status_->setText(QStringLiteral("内置 ADB 已就绪；选择网络地址或 USB 设备。实时窗口预览需保持目标无遮挡。"));
+        status_->setText(QStringLiteral("内置 ADB 已就绪；Windows 窗口预览优先使用无遮挡捕获。"));
     }
-    ~AdbDemo() override { ++generation_; previewTimer_.stop(); screenshotAdb_.cancel(); commandsAdb_.cancel(); }
+    ~AdbDemo() override { ++generation_; previewTimer_.stop(); graphicsCapture_.stop(); screenshotAdb_.cancel(); commandsAdb_.cancel(); }
 
 private:
+    struct Frame { QImage image; WindowClientCapture::Geometry geometry; QString error; QString method; qint64 elapsed = 0; };
+
     QString pointDescription(QPoint point) const
     {
         if (source_->currentIndex() == 2) point += desktopOrigin_;
@@ -471,6 +606,9 @@ private:
     void stopPreview()
     {
         ++generation_; previewTimer_.stop(); screenshotAdb_.cancel();
+        graphicsCapture_.stop();
+        graphicsCaptureTimer_.invalidate();
+        graphicsCaptureFailed_ = false;
         if (live_) { QSignalBlocker block(live_); live_->setChecked(false); }
     }
     void clearScreenshot()
@@ -541,7 +679,7 @@ private:
         geometryLabel_->setText(QStringLiteral("HWND %1；客户区 %2×%3 像素；客户区屏幕原点 (%4,%5)")
             .arg(WindowClientCapture::handleText(hwnd)).arg(geometry.size.width()).arg(geometry.size.height())
             .arg(geometry.screenOrigin.x()).arg(geometry.screenOrigin.y()));
-        status_->setText(QStringLiteral("窗口已选择，点击 Screenshot 获取客户区；截图时工具会暂时隐藏"));
+        status_->setText(QStringLiteral("窗口已选择，可截图或开启实时预览"));
     }
 
     void takeScreenshot()
@@ -554,13 +692,47 @@ private:
         {
             stopPreview(); clearScreenshot(); status_->setText(error); return;
         }
-        captureInProgress_ = true;
         const bool desktop = source_->currentIndex() == 2;
         const bool live = live_->isChecked();
         const auto version = generation_;
         const HWND target = pcHwnd_;
+        if (!desktop && !graphicsCaptureFailed_)
+        {
+            if (graphicsCapture_.target() != target)
+            {
+                if (!graphicsCapture_.start(target, error)) graphicsCaptureFailed_ = true;
+                else graphicsCaptureTimer_.start();
+            }
+            if (!graphicsCaptureFailed_)
+            {
+                QImage windowFrame;
+                if (graphicsCapture_.latest(windowFrame))
+                {
+                    Frame frame;
+                    frame.image = WindowClientCapture::cropCapturedWindow(target, windowFrame,
+                        frame.geometry, frame.error);
+                    if (!frame.image.isNull())
+                    {
+                        frame.method = QStringLiteral("无遮挡窗口捕获");
+                        displayCapturedFrame(frame, false, live, target);
+                        return;
+                    }
+                    graphicsCaptureFailed_ = true;
+                    graphicsCapture_.stop();
+                }
+                else if (graphicsCaptureTimer_.isValid() && graphicsCaptureTimer_.elapsed() < 1000)
+                {
+                    if (!live) QTimer::singleShot(150, this, [this, version] {
+                        if (version == generation_) takeScreenshot();
+                    });
+                    status_->setText(QStringLiteral("正在等待窗口首帧"));
+                    return;
+                }
+            }
+        }
+        captureInProgress_ = true;
         if (!live) hide();
-        // Single captures hide the tool. Live capture leaves it interactive and uses a worker.
+        // Desktop fallback captures visible pixels, so a single shot hides this tool.
         QTimer::singleShot(live ? 0 : 180, this, [this, desktop, live, version, target]() {
             auto* watcher = new QFutureWatcher<Frame>(this);
             connect(watcher, &QFutureWatcher<Frame>::finished, this, [this, watcher, desktop, live, version, target] {
@@ -569,28 +741,45 @@ private:
                 if (!live) show();
                 if (version != generation_) return;
                 if (frame.image.isNull()) { stopPreview(); clearScreenshot(); status_->setText(frame.error); return; }
-                if (desktopOrigin_ != frame.geometry.screenOrigin && desktop) clearScreenshot();
-                desktopOrigin_ = frame.geometry.screenOrigin;
-                if (lastImage_.size() != frame.image.size()) { hasPickedPoint_ = false; }
-                lastImage_ = frame.image;
-                snapshotDescription_ = desktop
-                    ? QStringLiteral("来源：Windows 整个桌面\n桌面大小：%1×%2\n桌面原点：(%3,%4)\n坐标：Windows 桌面物理像素，可为负数")
-                        .arg(frame.image.width()).arg(frame.image.height()).arg(desktopOrigin_.x()).arg(desktopOrigin_.y())
-                    : QStringLiteral("来源：Windows 客户区（桌面截图）\nHWND：%1\n客户区大小：%2×%3\n客户区屏幕原点：(%4,%5)\n坐标原点：客户区左上角 (0,0)，单位为原始物理像素")
-                        .arg(WindowClientCapture::handleText(target)).arg(frame.image.width()).arg(frame.image.height())
-                        .arg(frame.geometry.screenOrigin.x()).arg(frame.geometry.screenOrigin.y());
-                screenshot_->setImage(frame.image, live);
-                resolution_->setText(QStringLiteral("原始画面：%1×%2；%3像素坐标；取帧 %4ms")
-                    .arg(frame.image.width()).arg(frame.image.height()).arg(desktop ? QStringLiteral("桌面") : QStringLiteral("客户区")).arg(frame.elapsed));
-                if (!desktop) geometryLabel_->setText(snapshotDescription_);
-                status_->setText(live ? QStringLiteral("实时预览中：请保持目标窗口无遮挡；停止预览可冻结画面取坐标") : QStringLiteral("截图完成，可取点或框选"));
+                displayCapturedFrame(frame, desktop, live, target);
             });
             watcher->setFuture(QtConcurrent::run([target, desktop] {
                 Frame frame; QElapsedTimer timer; timer.start();
                 frame.image = WindowClientCapture::capture(target, frame.geometry, frame.error, desktop);
+                frame.method = QStringLiteral("桌面截图");
                 frame.elapsed = timer.elapsed(); return frame;
             }));
         });
+    }
+
+    void displayCapturedFrame(const Frame& frame, bool desktop, bool live, HWND target)
+    {
+        if (desktopOrigin_ != frame.geometry.screenOrigin && desktop) clearScreenshot();
+        desktopOrigin_ = frame.geometry.screenOrigin;
+        if (lastImage_.size() != frame.image.size()) hasPickedPoint_ = false;
+        lastImage_ = frame.image;
+        snapshotDescription_ = desktop
+            ? QStringLiteral("来源：Windows 整个桌面\n桌面大小：%1×%2\n桌面原点：(%3,%4)\n坐标：Windows 桌面物理像素，可为负数")
+                .arg(frame.image.width()).arg(frame.image.height()).arg(desktopOrigin_.x()).arg(desktopOrigin_.y())
+            : QStringLiteral("来源：Windows 客户区（%1）\nHWND：%2\n客户区大小：%3×%4\n客户区屏幕原点：(%5,%6)\n坐标原点：客户区左上角 (0,0)，单位为原始物理像素")
+                .arg(frame.method, WindowClientCapture::handleText(target))
+                .arg(frame.image.width()).arg(frame.image.height())
+                .arg(frame.geometry.screenOrigin.x()).arg(frame.geometry.screenOrigin.y());
+        screenshot_->setImage(frame.image, live);
+        resolution_->setText(QStringLiteral("原始画面：%1×%2；%3像素坐标；%4，取帧 %5ms")
+            .arg(frame.image.width()).arg(frame.image.height())
+            .arg(desktop ? QStringLiteral("桌面") : QStringLiteral("客户区"), frame.method).arg(frame.elapsed));
+        if (!desktop) geometryLabel_->setText(snapshotDescription_);
+        status_->setText(frame.method == QStringLiteral("桌面截图") && !desktop
+            ? QStringLiteral("窗口捕获不可用，已回退桌面截图；请保持目标无遮挡")
+            : live ? QStringLiteral("实时预览中；停止预览可冻结画面取坐标")
+                   : QStringLiteral("截图完成，可取点或框选"));
+    }
+
+    WindowBackgroundInput::Mode backgroundMode() const
+    {
+        return pcInputMode_->currentIndex() == 1
+            ? WindowBackgroundInput::Mode::Post : WindowBackgroundInput::Mode::SendTimeout;
     }
 
     bool activatePcWindow()
@@ -619,6 +808,13 @@ private:
         if (!QRect(QPoint(0, 0), geometry.size).contains(point))
         {
             status_->setText(QStringLiteral("点击坐标超出当前客户区"));
+            return;
+        }
+        if (pcInputMode_->currentIndex() != 0)
+        {
+            const bool ok = WindowBackgroundInput::click(pcHwnd_, point, backgroundMode(), error);
+            status_->setText(ok ? QStringLiteral("后台点击消息已发送：客户区 (%1,%2)；目标是否响应需观察窗口")
+                .arg(point.x()).arg(point.y()) : error);
             return;
         }
         if (!activatePcWindow()) return;
@@ -744,6 +940,7 @@ private:
     QComboBox* source_ = nullptr;
     QComboBox* windowList_ = nullptr;
     QComboBox* pcKey_ = nullptr;
+    QComboBox* pcInputMode_ = nullptr;
     QLineEdit* hwndEdit_ = nullptr;
     QLabel* geometryLabel_ = nullptr;
     QWidget* windowPanel_ = nullptr;
@@ -756,7 +953,9 @@ private:
     QPoint pickedPoint_{-1, -1};
     QRect selectedRegion_;
     bool captureInProgress_ = false;
-    struct Frame { QImage image; WindowClientCapture::Geometry geometry; QString error; qint64 elapsed = 0; };
+    WindowGraphicsCapture graphicsCapture_;
+    QElapsedTimer graphicsCaptureTimer_;
+    bool graphicsCaptureFailed_ = false;
     QComboBox* transport_ = nullptr;
     QComboBox* devices_ = nullptr;
     QCheckBox* live_ = nullptr;

@@ -117,6 +117,31 @@ int main(int argc, char** argv)
     send(QEvent::MouseButtonPress, {101,51});
     send(QEvent::MouseButtonRelease, {200,100});
     check(selected == QRect(100,50,100,50), "Windows client region uses wrong resolution");
+    label.setSelectionMode(false);
+    QPoint beforeZoom, afterZoom, afterPan;
+    label.clicked = [&](QPoint point) { beforeZoom = point; };
+    send(QEvent::MouseButtonPress, {351,216});
+    QWheelEvent zoomEvent(QPointF(351,216), QPointF(351,216), QPoint(), QPoint(0,120),
+        Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(&label, &zoomEvent);
+    check(label.zoom() > 1.0, "wheel did not zoom preview");
+    label.clicked = [&](QPoint point) { afterZoom = point; };
+    send(QEvent::MouseButtonPress, {351,216});
+    check(beforeZoom == afterZoom, "wheel zoom shifted cursor image coordinate");
+    QMouseEvent panDown(QEvent::MouseButtonPress, QPointF(351,216), QPointF(351,216),
+        Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+    QApplication::sendEvent(&label, &panDown);
+    QMouseEvent panMove(QEvent::MouseMove, QPointF(411,216), QPointF(411,216),
+        Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
+    QApplication::sendEvent(&label, &panMove);
+    QMouseEvent panUp(QEvent::MouseButtonRelease, QPointF(411,216), QPointF(411,216),
+        Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&label, &panUp);
+    label.clicked = [&](QPoint point) { afterPan = point; };
+    send(QEvent::MouseButtonPress, {351,216});
+    check(afterPan.x() < afterZoom.x(), "middle drag did not pan zoomed image");
+    label.resetZoom();
+    check(label.zoom() == 1.0, "fit preview did not reset zoom");
     label.setImage({});
     check(label.pixmap().isNull(), "clearing screenshot left stale preview");
 
@@ -143,6 +168,46 @@ int main(int argc, char** argv)
         geometry.screenOrigin.x(), geometry.screenOrigin.y(), capture.pixel(capture.width()/2, capture.height()/2));
     check(capture.pixelColor(capture.width()/2, capture.height()/2) == QColor(20,80,160),
         "capture did not use client-area desktop origin");
+    WindowGraphicsCapture graphics;
+    QString graphicsError;
+    const bool graphicsStarted = graphics.start(hwnd, graphicsError);
+    if (!graphicsStarted) std::fprintf(stderr, "Windows Graphics Capture: %s\n", graphicsError.toUtf8().constData());
+    check(graphicsStarted, "Windows Graphics Capture did not start");
+    QWidget cover;
+    cover.setStyleSheet(QStringLiteral("background: rgb(200,20,40)"));
+    cover.setGeometry(geometry.screenOrigin.x(), geometry.screenOrigin.y(),
+        geometry.size.width(), geometry.size.height());
+    cover.show();
+    cover.raise();
+    SetWindowPos(reinterpret_cast<HWND>(cover.winId()), HWND_TOPMOST, 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    app.processEvents();
+    QThread::msleep(100);
+    const QImage coveredDesktop = WindowClientCapture::capture(hwnd, geometry, graphicsError);
+    check(!coveredDesktop.isNull() && coveredDesktop.pixelColor(coveredDesktop.width()/2,
+        coveredDesktop.height()/2) != QColor(20,80,160), "test cover did not occlude client");
+    QImage windowFrame;
+    check(waitUntil([&] { return graphics.latest(windowFrame); }, 3000),
+        "Windows Graphics Capture produced no frame");
+    const QImage uncovered = WindowClientCapture::cropCapturedWindow(hwnd, windowFrame, geometry, graphicsError);
+    check(!uncovered.isNull() && uncovered.size() == geometry.size
+        && uncovered.pixelColor(uncovered.width()/2, uncovered.height()/2) == QColor(20,80,160),
+        "occluded Windows client preview was not preserved");
+    graphics.stop();
+    cover.hide();
+    QWidget inputTarget;
+    inputTarget.resize(140, 80);
+    inputTarget.show();
+    app.processEvents();
+    QString inputError;
+    const HWND inputHwnd = reinterpret_cast<HWND>(inputTarget.winId());
+    check(WindowBackgroundInput::click(inputHwnd, {20, 20}, WindowBackgroundInput::Mode::Post, inputError),
+        "background PostMessage click failed");
+    check(WindowBackgroundInput::key(inputHwnd, VK_RETURN, WindowBackgroundInput::Mode::SendTimeout, inputError),
+        "background SendMessage key failed");
+    check(WindowBackgroundInput::text(inputHwnd, QStringLiteral("test"), WindowBackgroundInput::Mode::Post, inputError),
+        "background PostMessage text failed");
+    puts("PASS occluded client capture and background message dispatch");
     WindowClientCapture::Geometry invalid;
     check(!WindowClientCapture::geometry(nullptr, invalid, error) && !error.isEmpty(),
         "invalid handle did not report failure");
@@ -158,13 +223,13 @@ int main(int argc, char** argv)
     demo.findChild<QPushButton*>("takeScreenshot")->click();
     QElapsedTimer wait;
     wait.start();
-    while (!demo.isVisible() && wait.elapsed() < 3000)
+    auto* preview = static_cast<ScreenshotLabel*>(demo.findChild<QLabel*>("screenshotPreview"));
+    while ((preview->pixmap().isNull() || !demo.isVisible()) && wait.elapsed() < 3000)
     {
         app.processEvents();
         QThread::msleep(1);
     }
     check(demo.isVisible(), "Windows screenshot did not restore demo window");
-    auto* preview = static_cast<ScreenshotLabel*>(demo.findChild<QLabel*>("screenshotPreview"));
     check(!preview->pixmap().isNull(), "Windows preview capture failed");
     preview->clicked(QPoint(100,50));
     check(demo.findChild<QSpinBox*>("pcClientX")->value() == 100, "PC point was not picked");
