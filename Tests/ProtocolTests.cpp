@@ -31,6 +31,10 @@ int main()
     assert(Protocol::BuildSelfThunderRequestMessage(11) == "SELF_THUNDER_REQUEST 11\n");
     assert(Protocol::BuildSelfThunderResponseMessage(11, true, "完成") == "SELF_THUNDER_RESPONSE 11 OK 完成\n");
     assert(Protocol::BuildSelfThunderResponseMessage(11, false, "line\nbreak") == "SELF_THUNDER_RESPONSE 11 ERROR line break\n");
+    assert(Protocol::BuildSaveLoadoutRequestMessage(15, "weapon", "backpack", "egg", "bullet", 5, 10)
+        == "SAVE_LOADOUT_REQUEST 15 5 10 weapon|backpack|egg|bullet\n");
+    assert(Protocol::BuildSaveLoadoutRequestMessage(15, "weapon", "backpack", "egg", "bullet", 5, 10, true)
+        == "SAVE_LOADOUT_REQUEST 15 5 10 weapon|backpack|egg|bullet|PISTOL\n");
     assert(Protocol::BuildListingRequestMessage(21, true, 5, false, "99.50", "测试 上架 文本") == "LISTING_REQUEST 21 1 5 0 99.50 测试 上架 文本\n");
     assert(Protocol::BuildListingResponseMessage(21, true, "识别到上架") == "LISTING_RESPONSE 21 OK 识别到上架\n");
     assert(Protocol::BuildMailRequestMessage(31) == "MAIL_REQUEST 31\n");
@@ -187,6 +191,15 @@ int main()
     assert(parsed.requestId == 14);
     assert(!parsed.success);
     assert(parsed.payload == "配装失败");
+
+    assert(Protocol::ParseLine("SAVE_LOADOUT_REQUEST 15 5 10 weapon|backpack|egg|bullet", parsed));
+    assert(parsed.type == Protocol::MessageType::SaveLoadoutRequest);
+    assert(!parsed.loadoutPistol);
+    assert(Protocol::ParseLine("SAVE_LOADOUT_REQUEST 16 5 10 weapon|backpack|egg|bullet|PISTOL", parsed));
+    assert(parsed.type == Protocol::MessageType::SaveLoadoutRequest);
+    assert(parsed.loadoutPistol);
+    assert(parsed.loadoutWeapon == "weapon");
+    assert(!Protocol::ParseLine("SAVE_LOADOUT_REQUEST 16 5 10 weapon|backpack|egg|bullet|UNKNOWN", parsed));
 
     assert(Protocol::ParseLine("LISTING_REQUEST 21 1 5 0 99.50 测试 上架 文本", parsed));
     assert(parsed.type == Protocol::MessageType::ListingRequest);

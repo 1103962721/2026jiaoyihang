@@ -78,7 +78,7 @@ MainWindow::MainWindow(QWidget* parent)
 {
     loadPersistentLoadoutSettings();
     controller_.setSavedLoadoutConfig(ClientRole::Coin, loadoutWeapon_, loadoutBackpack_, loadoutEgg_,
-        loadoutBulletName_, loadoutPerClick_.toInt(), loadoutBulletTotal_.toInt());
+        loadoutBulletName_, loadoutPerClick_.toInt(), loadoutBulletTotal_.toInt(), loadoutPistol_);
     controller_.setSavedLoadoutConfig(ClientRole::Boss, bossLoadoutWeapon_, bossLoadoutBackpack_, bossLoadoutEgg_,
         bossLoadoutBulletName_, bossLoadoutPerClick_.toInt(), bossLoadoutBulletTotal_.toInt());
     buildUi();
@@ -881,6 +881,21 @@ void MainWindow::showSettingsDialog()
     addLoadoutField(1, 1, QStringLiteral("子弹名称"), loadoutBulletName_, bulletNameEdit);
     addLoadoutField(2, 0, QStringLiteral("单次数量"), loadoutPerClick_, perClickEdit, true);
     addLoadoutField(2, 1, QStringLiteral("子弹总数"), loadoutBulletTotal_, bulletTotalEdit, true);
+    auto* weaponTypeLabel = new QLabel(QStringLiteral("武器入口"), loadoutParamsBox);
+    auto* normalWeaponRadio = new QRadioButton(QStringLiteral("普通武器"), loadoutParamsBox);
+    auto* pistolRadio = new QRadioButton(QStringLiteral("手枪"), loadoutParamsBox);
+    auto* weaponTypeGroup = new QButtonGroup(loadoutParamsBox);
+    weaponTypeGroup->setExclusive(true);
+    weaponTypeGroup->addButton(normalWeaponRadio);
+    weaponTypeGroup->addButton(pistolRadio);
+    normalWeaponRadio->setChecked(!loadoutPistol_);
+    pistolRadio->setChecked(loadoutPistol_);
+    auto* weaponTypeRow = new QHBoxLayout();
+    weaponTypeRow->addWidget(normalWeaponRadio);
+    weaponTypeRow->addWidget(pistolRadio);
+    weaponTypeRow->addStretch();
+    loadoutParamsLayout->addWidget(weaponTypeLabel, 3, 0);
+    loadoutParamsLayout->addLayout(weaponTypeRow, 3, 1, 1, 3);
     loadoutParamsBox->setVisible(!tradePurchase_);
     connect(loadoutRadio, &QRadioButton::toggled, loadoutParamsBox, &QWidget::setVisible);
     root->addWidget(loadoutParamsBox);
@@ -931,6 +946,7 @@ void MainWindow::showSettingsDialog()
     bruteCaptcha_ = bruteRadio->isChecked();
     tradePurchase_ = marketRadio->isChecked();
     loadoutWeapon_ = weaponEdit->text().trimmed();
+    loadoutPistol_ = pistolRadio->isChecked();
     loadoutBackpack_ = backpackEdit->text().trimmed();
     loadoutEgg_ = eggEdit->text().trimmed();
     loadoutBulletName_ = bulletNameEdit->text().trimmed();
@@ -944,7 +960,7 @@ void MainWindow::showSettingsDialog()
     bossLoadoutBulletTotal_ = bossBulletTotalEdit->text().trimmed();
     savePersistentLoadoutSettings();
     controller_.setSavedLoadoutConfig(ClientRole::Coin, loadoutWeapon_, loadoutBackpack_, loadoutEgg_,
-        loadoutBulletName_, loadoutPerClick_.toInt(), loadoutBulletTotal_.toInt());
+        loadoutBulletName_, loadoutPerClick_.toInt(), loadoutBulletTotal_.toInt(), loadoutPistol_);
     controller_.setSavedLoadoutConfig(ClientRole::Boss, bossLoadoutWeapon_, bossLoadoutBackpack_, bossLoadoutEgg_,
         bossLoadoutBulletName_, bossLoadoutPerClick_.toInt(), bossLoadoutBulletTotal_.toInt());
     controller_.updateAutoExecuteParameters(countdownEdit_->text(), groupDelayEdit_->text(), coinFirst_,
@@ -958,6 +974,7 @@ void MainWindow::loadPersistentLoadoutSettings()
         + QStringLiteral("/DF_PlayClick_Server.ini");
     const QSettings settings(settingsPath, QSettings::IniFormat);
     loadoutWeapon_ = settings.value(QStringLiteral("Loadout/Weapon"), loadoutWeapon_).toString();
+    loadoutPistol_ = settings.value(QStringLiteral("Loadout/Pistol"), false).toBool();
     loadoutBackpack_ = settings.value(QStringLiteral("Loadout/Backpack"), loadoutBackpack_).toString();
     loadoutEgg_ = settings.value(QStringLiteral("Loadout/Egg"), loadoutEgg_).toString();
     loadoutBulletName_ = settings.value(QStringLiteral("Loadout/BulletName"), loadoutBulletName_).toString();
@@ -984,6 +1001,7 @@ void MainWindow::savePersistentLoadoutSettings() const
         + QStringLiteral("/DF_PlayClick_Server.ini");
     QSettings settings(settingsPath, QSettings::IniFormat);
     settings.setValue(QStringLiteral("Loadout/Weapon"), loadoutWeapon_);
+    settings.setValue(QStringLiteral("Loadout/Pistol"), loadoutPistol_);
     settings.setValue(QStringLiteral("Loadout/Backpack"), loadoutBackpack_);
     settings.setValue(QStringLiteral("Loadout/Egg"), loadoutEgg_);
     settings.setValue(QStringLiteral("Loadout/BulletName"), loadoutBulletName_);

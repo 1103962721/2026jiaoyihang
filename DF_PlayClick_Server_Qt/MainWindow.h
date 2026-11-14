@@ -60,6 +60,7 @@ private:
     QLineEdit* bossPriceEdit_ = nullptr;
     QLineEdit* accountSwitchAmountEdit_ = nullptr;
     QString loadoutWeapon_;
+    bool loadoutPistol_ = false;
     QString loadoutBackpack_;
     QString loadoutEgg_;
     QString loadoutBulletName_;

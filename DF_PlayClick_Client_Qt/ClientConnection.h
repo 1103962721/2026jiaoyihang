@@ -69,7 +69,7 @@ signals:
     void selfThunderRequestReceived(int requestId);
     void loadoutRequestReceived(int requestId, const QString& loadoutType);
     void saveLoadoutRequestReceived(int requestId, const QString& weapon, const QString& backpack,
-        const QString& egg, const QString& bulletName, int perClick, int bulletTotal);
+        const QString& egg, const QString& bulletName, int perClick, int bulletTotal, bool pistol);
     void listingRequestReceived(int requestId, bool hasExchange, int purchaseCount, bool loadoutMode, const QString& listingPrice, const QString& listingText);
     void mailRequestReceived(int requestId);
     void accountLoginRequestReceived(int requestId, const QString& username, const QString& password);

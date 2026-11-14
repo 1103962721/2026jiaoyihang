@@ -136,7 +136,7 @@ private:
     void handleSelfThunderRequest(int requestId);
     void handleLoadoutRequest(int requestId, const QString& loadoutType);
     void handleSaveLoadoutRequest(int requestId, const QString& weapon, const QString& backpack,
-        const QString& egg, const QString& bulletName, int perClick, int bulletTotal);
+        const QString& egg, const QString& bulletName, int perClick, int bulletTotal, bool pistol);
     void handleListingRequest(int requestId, bool hasExchange, int purchaseCount, bool loadoutMode, const QString& listingPrice, const QString& listingText);
     void handleMailRequest(int requestId);
     void handleAccountLoginRequest(int requestId, const QString& username, const QString& password);
@@ -152,7 +152,7 @@ private:
     bool executeSelfThunderSequence(QString& errorText);
     bool executeLoadoutSequence(const QString& loadoutType, QString& errorText);
     bool executeSaveLoadoutSequence(const QString& weapon, const QString& backpack, const QString& egg,
-        const QString& bulletName, int perClick, int bulletTotal, QString& errorText);
+        const QString& bulletName, int perClick, int bulletTotal, bool pistol, QString& errorText);
     bool executeListingSequence(bool hasExchange, int purchaseCount, bool loadoutMode, const QString& listingPrice, const QString& listingText,
         QString& ocrText, QString& usageResult, QString& errorText);
     bool executeMailSequence(QString& errorText);

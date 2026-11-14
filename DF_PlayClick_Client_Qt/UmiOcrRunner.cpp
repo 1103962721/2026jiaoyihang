@@ -74,7 +74,9 @@ QString NormalizeOcrMatchText(const QString& value)
             normalized.append(character);
         }
     }
-    return normalized.toCaseFolded();
+    normalized = normalized.toCaseFolded();
+    normalized.replace(QStringLiteral("go1战术弹挂"), QStringLiteral("g01战术弹挂"));
+    return normalized;
 }
 }
 

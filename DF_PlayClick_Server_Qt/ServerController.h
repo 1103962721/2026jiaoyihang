@@ -58,7 +58,7 @@ public slots:
     void clearAccounts();
     void exportAccounts(const QString& filePath);
     void setSavedLoadoutConfig(ClientRole role, const QString& weapon, const QString& backpack,
-        const QString& egg, const QString& bulletName, int perClick, int bulletTotal);
+        const QString& egg, const QString& bulletName, int perClick, int bulletTotal, bool pistol = false);
     bool setAccountLoginConfig(quint64 clientId, const QString& listingText,
         const QString& listingPrice, int purchaseCount);
     void startAccountLogin(quint64 clientId);
@@ -160,6 +160,7 @@ private:
         QString bulletName;
         int perClick = 0;
         int bulletTotal = 0;
+        bool pistol = false;
         QString listingText;
         QString listingPrice;
         int purchaseCount = 1;

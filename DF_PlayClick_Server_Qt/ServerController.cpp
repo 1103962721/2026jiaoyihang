@@ -1156,7 +1156,7 @@ bool ServerController::requestLoadout(quint64 clientId, AutoStartClientState& st
     QString errorText;
     if (!connectionManager_.requestSaveLoadout(clientId, requestId, clientIterator->role,
         config.weapon, config.backpack, config.egg, config.bulletName,
-        config.perClick, config.bulletTotal, errorText))
+        config.perClick, config.bulletTotal, config.pistol, errorText))
     {
         emit statusChanged(errorText, ServerStatusTone::Error);
         return false;
@@ -1641,7 +1641,7 @@ void ServerController::saveLoadoutForRole(ClientRole targetRole)
         QString errorText;
         if (connectionManager_.requestSaveLoadout(client.id, nextSaveLoadoutRequestId_++, targetRole,
             config.weapon, config.backpack, config.egg, config.bulletName,
-            config.perClick, config.bulletTotal, errorText))
+            config.perClick, config.bulletTotal, config.pistol, errorText))
         {
             ++sentCount;
         }
@@ -1675,7 +1675,7 @@ void ServerController::saveLoadoutForClient(quint64 clientId, ClientRole targetR
     QString errorText;
     if (!connectionManager_.requestSaveLoadout(clientId, nextSaveLoadoutRequestId_++, targetRole,
         config.weapon, config.backpack, config.egg, config.bulletName,
-        config.perClick, config.bulletTotal, errorText))
+        config.perClick, config.bulletTotal, config.pistol, errorText))
     {
         emit statusChanged(errorText, ServerStatusTone::Error);
         emit connectionLogAppended(QStringLiteral("%1 保存配装下发失败：%2").arg(clientAddress(clientId)).arg(errorText));
@@ -1910,7 +1910,7 @@ void ServerController::exportAccounts(const QString& filePath)
 }
 
 void ServerController::setSavedLoadoutConfig(ClientRole role, const QString& weapon, const QString& backpack,
-    const QString& egg, const QString& bulletName, int perClick, int bulletTotal)
+    const QString& egg, const QString& bulletName, int perClick, int bulletTotal, bool pistol)
 {
     LoginReadyState state;
     state.weapon = weapon.trimmed();
@@ -1919,6 +1919,7 @@ void ServerController::setSavedLoadoutConfig(ClientRole role, const QString& wea
     state.bulletName = bulletName.trimmed();
     state.perClick = perClick;
     state.bulletTotal = bulletTotal;
+    state.pistol = role == ClientRole::Coin && pistol;
     state.loadoutMode = true;
     savedLoadoutConfigs_.insert(static_cast<int>(role), state);
     if (role == ClientRole::Coin)
@@ -1933,6 +1934,7 @@ void ServerController::setSavedLoadoutConfig(ClientRole role, const QString& wea
             iterator->bulletName = state.bulletName;
             iterator->perClick = state.perClick;
             iterator->bulletTotal = state.bulletTotal;
+            iterator->pistol = state.pistol;
             iterator->loadoutMode = state.loadoutMode;
         }
     }
@@ -2394,7 +2396,7 @@ void ServerController::handleAccountLoginReady(quint64 clientId)
             pendingLoginReadyLoadouts_.insert(requestId, state);
             if (!connectionManager_.requestSaveLoadout(clientId, requestId, ClientRole::Coin,
                 state.weapon, state.backpack, state.egg, state.bulletName,
-                state.perClick, state.bulletTotal, error))
+                state.perClick, state.bulletTotal, state.pistol, error))
             {
                 pendingLoadoutRequests_.remove(requestId);
                 pendingLoginReadyLoadouts_.remove(requestId);

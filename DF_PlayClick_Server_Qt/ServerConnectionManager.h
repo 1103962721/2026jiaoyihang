@@ -48,7 +48,7 @@ public:
     bool requestSelfThunder(quint64 clientId, int requestId, QString& errorText);
     bool requestLoadout(quint64 clientId, int requestId, const QString& loadoutType, QString& errorText);
     bool requestSaveLoadout(quint64 clientId, int requestId, ClientRole targetRole, const QString& weapon, const QString& backpack,
-        const QString& egg, const QString& bulletName, int perClick, int bulletTotal, QString& errorText);
+        const QString& egg, const QString& bulletName, int perClick, int bulletTotal, bool pistol, QString& errorText);
     bool requestListing(quint64 clientId, int requestId, const QString& listingText, const QString& listingPrice, bool hasExchange, int purchaseCount, bool loadoutMode, QString& errorText);
     bool requestMail(quint64 clientId, int requestId, QString& errorText);
     bool requestAccountLogin(quint64 clientId, int requestId, const QString& username, const QString& password, QString& errorText);

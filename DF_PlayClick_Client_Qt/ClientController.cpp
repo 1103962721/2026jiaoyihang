@@ -293,11 +293,12 @@ ClientController::ClientController(QObject* parent)
         accountBanMonitor_.stop();
         accountLoginSuccessMonitor_.stop();
         loginOcrRunning_ = false;
-        accountLoginAutomation_.cancelAndStopProcesses(QStringLiteral("收到服务端中止上号指令"));
+        // The immediate receiver already queued cleanup. Do not enqueue a second
+        // stop here: a newer login may have arrived while the UI was busy.
         automationCancelRequested_ = true;
         automationActionRunning_ = false;
-        connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("ERROR"), QStringLiteral("已中止上号并结束 Steam、df_launcher 和 Delta Force 进程"));
-        setStatus(QStringLiteral("已中止上号，相关进程已结束"));
+        connection_.sendAccountLoginResponse(accountLoginRequestId_, QStringLiteral("ERROR"), QStringLiteral("已中止上号，正在清理 Steam、df_launcher 和 Delta Force 进程"));
+        setStatus(QStringLiteral("已中止上号，正在清理相关进程"));
     });
     connect(&connection_, &ClientConnection::accountLoginStopImmediate, this, [this]() {
         // 接收线程直接取消自动化并结束目标进程；UI 线程随后负责收尾状态和监测线程。
@@ -363,6 +364,8 @@ ClientController::ClientController(QObject* parent)
     });
     connect(&accountLoginSuccessMonitor_, &AccountLoginSuccessMonitor::monitorStatus, this, [this](const QString& text) { setStatus(text); });
     connect(&accountLoginAutomation_, &AccountLoginAutomation::finished, this, [this](bool success, const QString& text) {
+        if (!accountLoginRunning_) return;
+        const quint64 completedGeneration = accountLoginFlowGeneration_;
         bool finalSuccess = success;
         QString resultText = text;
         if (success)
@@ -379,6 +382,7 @@ ClientController::ClientController(QObject* parent)
                     break;
                 }
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                if (!accountLoginRunning_ || completedGeneration != accountLoginFlowGeneration_) return;
                 QThread::msleep(250);
             }
             if (!bound)
@@ -3104,7 +3108,7 @@ void ClientController::handleLoadoutRequest(int requestId, const QString& loadou
 }
 
 void ClientController::handleSaveLoadoutRequest(int requestId, const QString& weapon, const QString& backpack,
-    const QString& egg, const QString& bulletName, int perClick, int bulletTotal)
+    const QString& egg, const QString& bulletName, int perClick, int bulletTotal, bool pistol)
 {
     if (!beginAutomationAction(QStringLiteral("保存配装")))
     {
@@ -3125,7 +3129,7 @@ void ClientController::handleSaveLoadoutRequest(int requestId, const QString& we
     } guard{ this };
 
     QString errorText;
-    if (!executeSaveLoadoutSequence(weapon, backpack, egg, bulletName, perClick, bulletTotal, errorText))
+    if (!executeSaveLoadoutSequence(weapon, backpack, egg, bulletName, perClick, bulletTotal, pistol, errorText))
     {
         connection_.sendSaveLoadoutResponse(requestId, false, errorText);
         setStatus(QStringLiteral("保存配装失败：%1").arg(errorText));
@@ -5095,7 +5099,7 @@ bool ClientController::executeLoadoutSequence(const QString& loadoutType, QStrin
 }
 
 bool ClientController::executeSaveLoadoutSequence(const QString& weapon, const QString& backpack, const QString& egg,
-    const QString& bulletName, int perClick, int bulletTotal, QString& errorText)
+    const QString& bulletName, int perClick, int bulletTotal, bool pistol, QString& errorText)
 {
     if (!boundHwnd_ || !binder_.isValid(boundHwnd_))
     {
@@ -5311,8 +5315,9 @@ bool ClientController::executeSaveLoadoutSequence(const QString& weapon, const Q
         return false;
     }
 
+    const POINT weaponEntry = pistol ? POINT{ 1325, 592 } : POINT{ 1228, 311 };
     const POINT points[] = {
-        { 501, 1400 }, { 199, 563 }, { 1228, 311 }
+        { 501, 1400 }, { 199, 563 }, weaponEntry
     };
     for (const POINT point : points)
     {
@@ -5390,7 +5395,7 @@ bool ClientController::executeSaveLoadoutSequence(const QString& weapon, const Q
         int entryWaitMs = 0;
     };
     const ItemStage itemStages[] = {
-        { weapon, QStringLiteral("save_loadout_weapon"), POINT{ 1228, 311 }, 1000 },
+        { weapon, QStringLiteral("save_loadout_weapon"), weaponEntry, 1000 },
         { backpack, QStringLiteral("save_loadout_backpack"), POINT{ 1281, 1103 }, 1500 },
         { egg, QStringLiteral("save_loadout_egg"), POINT{ 1302, 1232 }, 1500 }
     };

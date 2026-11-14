@@ -88,6 +88,7 @@ namespace Protocol
         std::string loadoutBulletName;
         int loadoutPerClick = 0;
         int loadoutBulletTotal = 0;
+        bool loadoutPistol = false;
     };
 
     inline std::string NormalizeLinePayload(std::string text);
@@ -284,12 +285,12 @@ namespace Protocol
 
     inline std::string BuildSaveLoadoutRequestMessage(int requestId, const std::string& weapon,
         const std::string& backpack, const std::string& egg, const std::string& bulletName,
-        int perClick, int bulletTotal)
+        int perClick, int bulletTotal, bool pistol = false)
     {
         return "SAVE_LOADOUT_REQUEST " + std::to_string(requestId) + " " + std::to_string(perClick)
             + " " + std::to_string(bulletTotal) + " " + NormalizeLinePayload(weapon)
             + "|" + NormalizeLinePayload(backpack) + "|" + NormalizeLinePayload(egg)
-            + "|" + NormalizeLinePayload(bulletName) + "\n";
+            + "|" + NormalizeLinePayload(bulletName) + (pistol ? "|PISTOL\n" : "\n");
     }
 
     inline std::string BuildSaveLoadoutResponseMessage(int requestId, bool success, const std::string& payload)
@@ -746,11 +747,13 @@ namespace Protocol
             {
                 values.push_back(field);
             }
-            if (values.size() != 4 || values[0].empty() || values[1].empty()
+            if ((values.size() != 4 && values.size() != 5) || values[0].empty() || values[1].empty()
                 || values[2].empty() || values[3].empty())
             {
                 return false;
             }
+            if (values.size() == 5 && values[4] != "PISTOL")
+                return false;
 
             message.type = MessageType::SaveLoadoutRequest;
             message.requestId = requestId;
@@ -760,6 +763,7 @@ namespace Protocol
             message.loadoutBackpack = values[1];
             message.loadoutEgg = values[2];
             message.loadoutBulletName = values[3];
+            message.loadoutPistol = values.size() == 5;
             return true;
         }
 

@@ -677,7 +677,7 @@ bool ServerConnectionManager::requestListing(quint64 clientId, int requestId, co
 }
 
 bool ServerConnectionManager::requestSaveLoadout(quint64 clientId, int requestId, ClientRole targetRole, const QString& weapon,
-    const QString& backpack, const QString& egg, const QString& bulletName, int perClick, int bulletTotal,
+    const QString& backpack, const QString& egg, const QString& bulletName, int perClick, int bulletTotal, bool pistol,
     QString& errorText)
 {
     std::shared_ptr<ClientEntry> client;
@@ -705,7 +705,7 @@ bool ServerConnectionManager::requestSaveLoadout(quint64 clientId, int requestId
 
     const std::string message = Protocol::BuildSaveLoadoutRequestMessage(
         requestId, weapon.toUtf8().toStdString(), backpack.toUtf8().toStdString(), egg.toUtf8().toStdString(),
-        bulletName.toUtf8().toStdString(), perClick, bulletTotal);
+        bulletName.toUtf8().toStdString(), perClick, bulletTotal, pistol);
     if (!SocketUtil::SendLine(client->socketHandle, message))
     {
         recordDisconnectReason(client, QStringLiteral("发送 SAVE_LOADOUT_REQUEST 失败，错误码：%1").arg(WSAGetLastError()));

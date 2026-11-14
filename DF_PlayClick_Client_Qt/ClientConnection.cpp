@@ -640,8 +640,8 @@ void ClientConnection::receiveLoop(SOCKET socketHandle, quint64 generation)
                 const QString egg = QString::fromUtf8(message.loadoutEgg.data(), static_cast<int>(message.loadoutEgg.size()));
                 const QString bulletName = QString::fromUtf8(message.loadoutBulletName.data(), static_cast<int>(message.loadoutBulletName.size()));
                 QMetaObject::invokeMethod(this, [this, requestId = message.requestId, weapon, backpack, egg, bulletName,
-                    perClick = message.loadoutPerClick, bulletTotal = message.loadoutBulletTotal]() {
-                    emit saveLoadoutRequestReceived(requestId, weapon, backpack, egg, bulletName, perClick, bulletTotal);
+                    perClick = message.loadoutPerClick, bulletTotal = message.loadoutBulletTotal, pistol = message.loadoutPistol]() {
+                    emit saveLoadoutRequestReceived(requestId, weapon, backpack, egg, bulletName, perClick, bulletTotal, pistol);
                 }, Qt::QueuedConnection);
             }
             else if (message.type == Protocol::MessageType::ListingRequest)
